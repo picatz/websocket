@@ -10,7 +10,7 @@ It supports all standard WebSocket features, including text and binary messages,
 > [!NOTE]
 > You probably want to use the [`github.com/coder/websocket`] package instead of this one,
 > but this package should be fine for many use cases, and can be extended with additional 
-> features, if needed in the future. Pleae feel free to open an issue or a pull request if you
+> features, if needed in the future. Please feel free to open an issue or a pull request if you
 > have any suggestions or improvements.
 
 [`github.com/coder/websocket`]: https://pkg.go.dev/github.com/coder/websocket
@@ -151,7 +151,7 @@ The [`permessage-deflate`] extension compresses WebSocket messages using the [DE
 ```go
 // In your handler, enable permessage-deflate
 conn, err := websocket.Upgrade(w, r, websocket.WithUpgradeExtensions(
-	websocket.NewPerMessageDeflate(
+	websocket.NewPerMessageDeflateExtension(
 		websocket.WithServerNoContextTakeover(),
 		websocket.WithClientNoContextTakeover(),
 	),
@@ -164,7 +164,7 @@ conn, err := websocket.Upgrade(w, r, websocket.WithUpgradeExtensions(
 // When dialing, enable permessage-deflate
 conn, resp, err := websocket.Dial(ctx, "ws://localhost:8080/ws",
 	websocket.WithExtensions(
-		websocket.NewPerMessageDeflate(
+		websocket.NewPerMessageDeflateExtension(
 			websocket.WithServerNoContextTakeover(),
 			websocket.WithClientNoContextTakeover(),
 		),
@@ -182,7 +182,7 @@ but may slightly reduce compression efficiency.
 
 ```go
 // Enable permessage-deflate with context takeover options
-pmd := websocket.NewPerMessageDeflate(
+pmd := websocket.NewPerMessageDeflateExtension(
 	websocket.WithClientNoContextTakeover(),
 	websocket.WithServerNoContextTakeover(),
 )
