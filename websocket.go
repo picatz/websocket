@@ -19,6 +19,9 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
+	"unicode/utf8"
 )
 
 var (
@@ -27,6 +30,7 @@ var (
 	ErrInvalidUpgradeHeader    = errors.New("websocket: invalid Upgrade header")
 	ErrInvalidConnectionHeader = errors.New("websocket: invalid Connection header")
 	ErrMissingSecKey           = errors.New("websocket: missing Sec-WebSocket-Key header")
+	ErrInvalidSecKey           = errors.New("websocket: invalid Sec-WebSocket-Key header")
 	ErrInvalidSecAccept        = errors.New("websocket: invalid Sec-WebSocket-Accept header")
 	ErrNotHijacker             = errors.New("websocket: response does not implement http.Hijacker")
 	ErrInvalidMethod           = errors.New("websocket: invalid request method")
@@ -102,6 +106,7 @@ type Extension interface {
 	// ProcessOutgoingFrame allows the extension to modify outgoing frames.
 	ProcessOutgoingFrame(frame *Frame) error
 	// ProcessIncomingFrame allows the extension to modify incoming frames.
+	// It must clear the reserved bits whose semantics it has consumed.
 	ProcessIncomingFrame(frame *Frame) error
 	// IsEnabled indicates whether the extension is enabled.
 	IsEnabled() bool
@@ -195,7 +200,8 @@ func (pmd *perMessageDeflate) ProcessOutgoingFrame(frame *Frame) error {
 	if _, err := w.Write(frame.Payload); err != nil {
 		return err
 	}
-	if err := w.Close(); err != nil {
+	// RFC 7692 uses a sync-flushed stream, not a final DEFLATE block.
+	if err := w.Flush(); err != nil {
 		return err
 	}
 
@@ -213,23 +219,41 @@ func (pmd *perMessageDeflate) ProcessOutgoingFrame(frame *Frame) error {
 }
 
 func (pmd *perMessageDeflate) ProcessIncomingFrame(frame *Frame) error {
+	return pmd.processIncomingFrame(frame, 0)
+}
+
+func (pmd *perMessageDeflate) processIncomingFrame(frame *Frame, maxBytes int) error {
 	if !pmd.enabled || (frame.Opcode != TextMessage && frame.Opcode != BinaryMessage) {
 		return nil
 	}
 
 	if frame.Rsv1 {
 		// Decompress the payload
-		// Append empty DEFLATE block
-		payload := append(frame.Payload, 0x00, 0x00, 0xff, 0xff)
-		r := pmd.getReader(bytes.NewReader(payload))
+		// Restore the sync-flush suffix and append a final empty block so the
+		// standard library reader can distinguish a complete stream from EOF.
+		r := pmd.getReader(io.MultiReader(bytes.NewReader(frame.Payload),
+			bytes.NewReader([]byte{0x00, 0x00, 0xff, 0xff, 0x01, 0x00, 0x00, 0xff, 0xff})))
 		defer pmd.putReader(r)
+		defer r.Close()
 
-		decompressed, err := io.ReadAll(r)
+		var source io.Reader = r
+		if maxBytes > 0 {
+			// Read at most the configured limit; probe once to detect overflow.
+			source = io.LimitReader(r, int64(maxBytes))
+		}
+		decompressed, err := io.ReadAll(source)
 		if err != nil {
 			return err
 		}
-		if err := r.Close(); err != nil {
-			return err
+		if maxBytes > 0 && len(decompressed) == maxBytes {
+			var extra [1]byte
+			n, err := io.ReadFull(r, extra[:])
+			if n != 0 {
+				return ErrPayloadTooLarge
+			}
+			if err != nil && err != io.EOF {
+				return err
+			}
 		}
 		frame.Payload = decompressed
 		frame.Rsv1 = false
@@ -371,7 +395,8 @@ func NewPerMessageDeflateExtension(options ...PerMessageDeflateOption) Extension
 	return pmd
 }
 
-// Conn represents a WebSocket connection.
+// Conn represents a WebSocket connection. Reads and writes are independently
+// serialized. Close may be called concurrently with reads and writes.
 type Conn struct {
 	conn     net.Conn          // Underlying network connection
 	rw       *bufio.ReadWriter // Buffered reader and writer
@@ -382,10 +407,11 @@ type Conn struct {
 	writeMu sync.Mutex // Protects write operations
 	closeMu sync.Mutex // Protects Close method
 
-	closed   bool  // Indicates if the connection is closed
-	closeErr error // Stores the error from closing the connection
+	closed   atomic.Bool // Indicates if the connection is closed
+	closeErr error       // Stores the error from closing the connection
 
 	// Optional handlers for control frames
+	handlerMu   sync.RWMutex
 	pingHandler func(data string) error // Handler for Ping frames
 	pongHandler func(data string) error // Handler for Pong frames
 
@@ -395,6 +421,9 @@ type Conn struct {
 
 type ConnOption func(*Conn)
 
+// WithMaxBytes sets the incoming frame and reassembled-message limit for NewConn.
+// It also bounds decoded data from the built-in compression extension. A
+// non-positive value is ignored; NewConn starts with no limit.
 func WithMaxBytes(maxBytes int) ConnOption {
 	return func(c *Conn) {
 		if maxBytes > 0 {
@@ -419,8 +448,8 @@ func NewConn(conn net.Conn, isServer bool, extensions []Extension, opts ...ConnO
 	return wsConn
 }
 
-// Endpoints MAY use the following pre-defined status codes
-// when sending a Close frame.
+// WebSocket status codes. StatusNoStatusReceived, StatusAbnormalClosure, and
+// StatusTLSHandshake are local-only indicators and must not appear on the wire.
 //
 // https://datatracker.ietf.org/doc/html/rfc6455#section-7.4.1
 const (
@@ -438,19 +467,30 @@ const (
 	StatusTLSHandshake            = 1015
 )
 
-// Close gracefully closes the WebSocket connection.
+// Close closes the transport, making a best-effort normal close notification
+// with a one-second write deadline when no other writer is active. It does not
+// wait for the peer's closing handshake. Repeated calls return ErrAlreadyClosed.
 func (c *Conn) Close() error {
-	c.closeMu.Lock()
-	defer c.closeMu.Unlock()
-	if c.closed {
-		return ErrAlreadyClosed
-	}
-	c.closed = true
-
-	// Send a close frame to the peer (best effort)
 	closePayload := make([]byte, 2)
 	binary.BigEndian.PutUint16(closePayload, StatusNormalClosure)
-	_ = c.WriteControlFrame(CloseMessage, closePayload)
+	return c.closeWithPayload(closePayload)
+}
+
+func (c *Conn) closeWithPayload(payload []byte) error {
+	c.closeMu.Lock()
+	defer c.closeMu.Unlock()
+	if c.closed.Swap(true) {
+		return ErrAlreadyClosed
+	}
+
+	// Do not wait behind a stalled writer: closing the transport must be able
+	// to interrupt it. Bypass the public closed-state guard for this final frame.
+	if c.writeMu.TryLock() {
+		if err := c.conn.SetWriteDeadline(time.Now().Add(time.Second)); err == nil {
+			_ = c.writeFrame(&Frame{Final: true, Opcode: CloseMessage, Payload: payload, Masked: !c.isServer})
+		}
+		c.writeMu.Unlock()
+	}
 
 	// Close the underlying connection
 	c.closeErr = c.conn.Close()
@@ -459,22 +499,29 @@ func (c *Conn) Close() error {
 
 // SetPingHandler sets the handler function for Ping frames.
 func (c *Conn) SetPingHandler(handler func(appData string) error) {
+	c.handlerMu.Lock()
+	defer c.handlerMu.Unlock()
 	c.pingHandler = handler
 }
 
 // SetPongHandler sets the handler function for Pong frames.
 func (c *Conn) SetPongHandler(handler func(appData string) error) {
+	c.handlerMu.Lock()
+	defer c.handlerMu.Unlock()
 	c.pongHandler = handler
 }
 
 // ReadMessage reads the next complete WebSocket message.
 func (c *Conn) ReadMessage() (messageType Opcode, data []byte, err error) {
-	if c.closed {
+	if c.closed.Load() {
 		return 0, nil, io.ErrClosedPipe
 	}
 
 	c.readMu.Lock()
 	defer c.readMu.Unlock()
+	if c.closed.Load() {
+		return 0, nil, io.ErrClosedPipe
+	}
 
 	var message []byte
 	var messageTypeSet bool
@@ -486,36 +533,52 @@ func (c *Conn) ReadMessage() (messageType Opcode, data []byte, err error) {
 
 		switch frame.Opcode {
 		case TextMessage, BinaryMessage:
-			if !messageTypeSet {
-				messageType = frame.Opcode
-				messageTypeSet = true
+			if messageTypeSet {
+				return 0, nil, ErrUnexpectedFrame
 			}
+			messageType = frame.Opcode
+			messageTypeSet = true
 
-			if c.maxBytes > 0 && len(message)+len(frame.Payload) > c.maxBytes {
-				return 0, nil, fmt.Errorf("%w: message too large: %d", ErrPayloadTooLarge, len(message)+len(frame.Payload))
+			if c.maxBytes > 0 && len(frame.Payload) > c.maxBytes-len(message) {
+				return 0, nil, ErrPayloadTooLarge
 			}
 
 			message = append(message, frame.Payload...)
 			if frame.Final {
+				if messageType == TextMessage && !utf8.Valid(message) {
+					return 0, nil, ErrInvalidFrame
+				}
 				return messageType, message, nil
 			}
 
 		case ContinuationFrame:
+			if !messageTypeSet {
+				return 0, nil, ErrUnexpectedContinuation
+			}
+			if c.maxBytes > 0 && len(frame.Payload) > c.maxBytes-len(message) {
+				return 0, nil, ErrPayloadTooLarge
+			}
 			message = append(message, frame.Payload...)
 			if frame.Final {
+				if messageType == TextMessage && !utf8.Valid(message) {
+					return 0, nil, ErrInvalidFrame
+				}
 				return messageType, message, nil
 			}
 
 		case CloseMessage:
-			// Respond with a close frame if not already sent
-			closePayload := make([]byte, 2)
-			binary.BigEndian.PutUint16(closePayload, StatusNormalClosure)
-			_ = c.WriteControlFrame(CloseMessage, closePayload)
+			if err := validateClosePayload(frame.Payload); err != nil {
+				return 0, nil, err
+			}
+			_ = c.closeWithPayload(frame.Payload)
 			return 0, nil, io.EOF
 
 		case PingMessage:
-			if c.pingHandler != nil {
-				if err := c.pingHandler(string(frame.Payload)); err != nil {
+			c.handlerMu.RLock()
+			handler := c.pingHandler
+			c.handlerMu.RUnlock()
+			if handler != nil {
+				if err := handler(string(frame.Payload)); err != nil {
 					return 0, nil, err
 				}
 			} else {
@@ -526,8 +589,11 @@ func (c *Conn) ReadMessage() (messageType Opcode, data []byte, err error) {
 			}
 
 		case PongMessage:
-			if c.pongHandler != nil {
-				if err := c.pongHandler(string(frame.Payload)); err != nil {
+			c.handlerMu.RLock()
+			handler := c.pongHandler
+			c.handlerMu.RUnlock()
+			if handler != nil {
+				if err := handler(string(frame.Payload)); err != nil {
 					return 0, nil, err
 				}
 			}
@@ -541,11 +607,20 @@ func (c *Conn) ReadMessage() (messageType Opcode, data []byte, err error) {
 
 // WriteMessage writes a WebSocket message.
 func (c *Conn) WriteMessage(messageType Opcode, data []byte) error {
-	if c.closed {
+	if messageType != TextMessage && messageType != BinaryMessage {
+		return ErrInvalidOpcode
+	}
+	if messageType == TextMessage && !utf8.Valid(data) {
+		return ErrInvalidFrame
+	}
+	if c.closed.Load() {
 		return io.ErrClosedPipe
 	}
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
+	if c.closed.Load() {
+		return io.ErrClosedPipe
+	}
 
 	frame := &Frame{
 		Final:   true,
@@ -558,14 +633,25 @@ func (c *Conn) WriteMessage(messageType Opcode, data []byte) error {
 
 // WriteControlFrame writes a control frame to the connection.
 func (c *Conn) WriteControlFrame(opcode Opcode, data []byte) error {
+	if opcode != CloseMessage && opcode != PingMessage && opcode != PongMessage {
+		return ErrInvalidOpcode
+	}
+	if opcode == CloseMessage {
+		if err := validateClosePayload(data); err != nil {
+			return err
+		}
+	}
 	if len(data) > 125 {
 		return fmt.Errorf("%w: control frame payload too large: %d", ErrPayloadTooLarge, len(data))
 	}
-	if c.closed {
+	if c.closed.Load() {
 		return io.ErrClosedPipe
 	}
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
+	if c.closed.Load() {
+		return io.ErrClosedPipe
+	}
 
 	frame := &Frame{
 		Final:   true,
@@ -599,7 +685,19 @@ func (c *Conn) readFrame() (*Frame, error) {
 		Rsv2:   (b0 & 0x20) != 0,
 		Rsv3:   (b0 & 0x10) != 0,
 	}
-	payloadLen := int(b1 & 0x7F)
+	payloadLen := uint64(b1 & 0x7F)
+
+	switch frame.Opcode {
+	case ContinuationFrame, TextMessage, BinaryMessage, CloseMessage, PingMessage, PongMessage:
+	default:
+		return nil, ErrInvalidOpcode
+	}
+	if frame.Masked && !c.isServer {
+		return nil, ErrMaskedFrame
+	}
+	if !frame.Masked && c.isServer {
+		return nil, ErrUnmaskedFrame
+	}
 
 	// Control frames must not be fragmented
 	if !frame.Final && frame.Opcode >= 0x8 {
@@ -621,7 +719,10 @@ func (c *Conn) readFrame() (*Frame, error) {
 			}
 			return nil, fmt.Errorf("failed to read extended payload length: %w", err)
 		}
-		payloadLen = int(extLen)
+		if extLen < 126 {
+			return nil, ErrInvalidFrame
+		}
+		payloadLen = uint64(extLen)
 	case 127:
 		var extLen uint64
 		if err := binary.Read(c.rw, binary.BigEndian, &extLen); err != nil {
@@ -630,10 +731,15 @@ func (c *Conn) readFrame() (*Frame, error) {
 			}
 			return nil, fmt.Errorf("failed to read extended payload length: %w", err)
 		}
-		if extLen > (1 << 63) {
-			return nil, ErrPayloadTooLarge
+		if extLen >= (1<<63) || extLen < 65536 {
+			return nil, ErrInvalidFrame
 		}
-		payloadLen = int(extLen)
+		payloadLen = extLen
+	}
+	// Validate lengths before converting to int or allocating payload storage.
+	if payloadLen > uint64(^uint(0)>>1) ||
+		(c.maxBytes > 0 && frame.Opcode < CloseMessage && payloadLen > uint64(c.maxBytes)) {
+		return nil, ErrPayloadTooLarge
 	}
 
 	// Read masking key if necessary
@@ -644,19 +750,19 @@ func (c *Conn) readFrame() (*Frame, error) {
 			}
 			return nil, fmt.Errorf("failed to read masking key: %w", err)
 		}
-	} else if c.isServer {
-		// Servers must receive masked frames from clients
-		return nil, ErrUnmaskedFrame
 	}
 
 	// Read payload data
 	if payloadLen > 0 {
-		frame.Payload = make([]byte, payloadLen)
-		if _, err := io.ReadFull(c.rw, frame.Payload); err != nil {
-			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-				return nil, io.EOF
-			}
+		// Grow with bytes actually received, never with an untrusted length
+		// declaration alone, including when no application limit was set.
+		var err error
+		frame.Payload, err = io.ReadAll(io.LimitReader(c.rw, int64(payloadLen)))
+		if err != nil {
 			return nil, fmt.Errorf("failed to read payload data: %w", err)
+		}
+		if uint64(len(frame.Payload)) != payloadLen {
+			return nil, io.ErrUnexpectedEOF
 		}
 
 		// Unmask payload if necessary
@@ -668,13 +774,37 @@ func (c *Conn) readFrame() (*Frame, error) {
 	// Process incoming frame through extensions
 	for _, ext := range c.extensions {
 		if ext.IsEnabled() {
-			if err := ext.ProcessIncomingFrame(frame); err != nil {
+			var err error
+			if pmd, ok := ext.(*perMessageDeflate); ok {
+				err = pmd.processIncomingFrame(frame, c.maxBytes)
+			} else {
+				err = ext.ProcessIncomingFrame(frame)
+			}
+			if err != nil {
 				return nil, fmt.Errorf("extension %s failed to process incoming frame: %w", ext.Name(), err)
 			}
 		}
 	}
+	// Extensions consume the reserved bits whose semantics they implement.
+	if frame.Rsv1 || frame.Rsv2 || frame.Rsv3 {
+		return nil, ErrUnsupportedExtensions
+	}
 
 	return frame, nil
+}
+
+func validateClosePayload(payload []byte) error {
+	if len(payload) == 0 {
+		return nil
+	}
+	if len(payload) == 1 || !utf8.Valid(payload[2:]) {
+		return ErrInvalidFrame
+	}
+	code := binary.BigEndian.Uint16(payload)
+	if code < 1000 || code >= 5000 || code == 1004 || code == 1005 || code == 1006 || (code >= 1015 && code < 3000) {
+		return ErrInvalidFrame
+	}
+	return nil
 }
 
 // writeFrame writes a WebSocket frame to the connection.
@@ -745,8 +875,10 @@ func (c *Conn) writeFrame(frame *Frame) error {
 
 	// Mask payload if necessary
 	if frame.Masked && len(frame.Payload) > 0 {
+		// Never mutate the caller's slice, even temporarily. It may be shared
+		// with another connection or being inspected by the application.
+		frame.Payload = bytes.Clone(frame.Payload)
 		xor(frame.MaskKey[:], frame.Payload)
-		defer xor(frame.MaskKey[:], frame.Payload) // Unmask after sending
 	}
 
 	// Write payload
@@ -805,7 +937,9 @@ func WithTLSConfig(config *tls.Config) DialOption {
 	}
 }
 
-// WithMaxMessageSize sets the maximum message size in bytes.
+// WithMaxMessageSize sets the maximum frame and reassembled message size in bytes.
+// For the built-in compression extension, this also bounds decompressed data.
+// A non-positive value leaves the size unlimited.
 func WithMaxMessageSize(maxBytes int) DialOption {
 	return func(opts *dialOptions) {
 		opts.maxBytes = maxBytes
@@ -813,7 +947,8 @@ func WithMaxMessageSize(maxBytes int) DialOption {
 }
 
 // Dial establishes a WebSocket client connection to the given URL.
-func Dial(ctx context.Context, urlStr string, options ...DialOption) (*Conn, *http.Response, error) {
+// ctx covers TCP, TLS, and the HTTP upgrade handshake, but not subsequent I/O.
+func Dial(ctx context.Context, urlStr string, options ...DialOption) (ws *Conn, response *http.Response, err error) {
 	opts := &dialOptions{}
 	opts.apply(options)
 
@@ -821,31 +956,59 @@ func Dial(ctx context.Context, urlStr string, options ...DialOption) (*Conn, *ht
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: invalid URL: %v", ErrBadHandshake, err)
 	}
-	host := u.Host
-	if !strings.Contains(host, ":") {
+	if (u.Scheme != "ws" && u.Scheme != "wss") || u.Hostname() == "" || u.User != nil || u.Fragment != "" {
+		return nil, nil, fmt.Errorf("%w: URL must use ws or wss, with a host and no user info or fragment", ErrBadHandshake)
+	}
+	port := u.Port()
+	if port == "" {
 		if u.Scheme == "wss" {
-			host += ":443"
+			port = "443"
 		} else {
-			host += ":80"
+			port = "80"
 		}
 	}
+	host := net.JoinHostPort(u.Hostname(), port)
 
 	// Establish the network connection
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "tcp", host)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w: failed to dial: %v", ErrBadHandshake, err)
+		return nil, nil, fmt.Errorf("%w: failed to dial: %w", ErrBadHandshake, err)
 	}
+	// Closing the raw transport interrupts blocked HTTP reads/writes as well
+	// as TLS. Join the callback before returning so it cannot close a live
+	// connection after a successful handshake has been handed to the caller.
+	rawConn := conn
+	canceled := make(chan struct{})
+	stopCancel := context.AfterFunc(ctx, func() {
+		rawConn.Close()
+		close(canceled)
+	})
+	defer func() {
+		if !stopCancel() {
+			<-canceled
+		}
+		if ctx.Err() != nil {
+			rawConn.Close()
+			ws = nil
+			err = fmt.Errorf("%w: %w", ErrBadHandshake, ctx.Err())
+		}
+	}()
 
 	// If using TLS, perform the handshake
 	if u.Scheme == "wss" {
-		tlsConn := tls.Client(conn, &tls.Config{
-			ServerName: u.Hostname(),
-			NextProtos: []string{"http/1.1"},
-		})
-		if err := tlsConn.Handshake(); err != nil {
+		config := &tls.Config{}
+		if opts.tlsConfig != nil {
+			config = opts.tlsConfig.Clone()
+		}
+		if config.ServerName == "" {
+			config.ServerName = u.Hostname()
+		}
+		config.NextProtos = []string{"http/1.1"}
+		tlsConn := tls.Client(conn, config)
+		if err := tlsConn.HandshakeContext(ctx); err != nil {
 			conn.Close()
-			return nil, nil, fmt.Errorf("%w: failed to perform TLS handshake: %v", ErrBadHandshake, err)
+			return nil, nil, fmt.Errorf("%w: failed to perform TLS handshake: %w", ErrBadHandshake, err)
 		}
 		conn = tlsConn
 	}
@@ -934,7 +1097,9 @@ func Dial(ctx context.Context, urlStr string, options ...DialOption) (*Conn, *ht
 		}
 	}
 
-	return NewConn(conn, false, opts.extensions, WithMaxBytes(opts.maxBytes)), resp, nil
+	ws = NewConn(conn, false, opts.extensions, WithMaxBytes(opts.maxBytes))
+	ws.rw.Reader = br
+	return ws, resp, nil
 }
 
 // UpgradeOption represents an option for the Upgrade function.
@@ -944,6 +1109,7 @@ type UpgradeOption func(*upgradeOptions)
 type upgradeOptions struct {
 	extensions     []Extension
 	responseHeader http.Header
+	maxBytes       int
 }
 
 // apply applies the options to the upgradeOptions.
@@ -969,6 +1135,14 @@ func WithResponseHeader(header http.Header) UpgradeOption {
 	}
 }
 
+// WithUpgradeMaxMessageSize sets the maximum incoming frame and reassembled
+// message size, including built-in decompression. Non-positive means unlimited.
+func WithUpgradeMaxMessageSize(maxBytes int) UpgradeOption {
+	return func(opts *upgradeOptions) {
+		opts.maxBytes = maxBytes
+	}
+}
+
 // Upgrade upgrades the HTTP server connection to a WebSocket connection.
 func Upgrade(w http.ResponseWriter, r *http.Request, options ...UpgradeOption) (*Conn, error) {
 	opts := &upgradeOptions{}
@@ -983,12 +1157,19 @@ func Upgrade(w http.ResponseWriter, r *http.Request, options ...UpgradeOption) (
 	if r.Method != http.MethodGet {
 		return nil, ErrInvalidMethod
 	}
+	if !r.ProtoAtLeast(1, 1) {
+		return nil, ErrBadHandshake
+	}
 	if r.Header.Get("Sec-WebSocket-Version") != "13" {
 		return nil, ErrUnsupportedVersion
 	}
 	key := r.Header.Get("Sec-WebSocket-Key")
 	if key == "" {
 		return nil, ErrMissingSecKey
+	}
+	decodedKey, err := base64.StdEncoding.DecodeString(key)
+	if err != nil || len(decodedKey) != 16 || len(r.Header.Values("Sec-WebSocket-Key")) != 1 {
+		return nil, ErrInvalidSecKey
 	}
 	acceptKey := computeAcceptKey(key)
 
@@ -1056,7 +1237,9 @@ func Upgrade(w http.ResponseWriter, r *http.Request, options ...UpgradeOption) (
 		return nil, fmt.Errorf("%w: failed to flush handshake response: %v", ErrHandshakeFailed, err)
 	}
 
-	return NewConn(conn, true, opts.extensions), nil
+	ws := NewConn(conn, true, opts.extensions, WithMaxBytes(opts.maxBytes))
+	ws.rw = bufrw
+	return ws, nil
 }
 
 // computeAcceptKey computes the Sec-WebSocket-Accept value.

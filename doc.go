@@ -1,92 +1,43 @@
-// Package websocket implements the [WebSocket] protocol as specified in [RFC 6455].
+// Package websocket provides a small WebSocket client and server implementation.
+// It supports text and binary messages, uncompressed fragmentation, and control
+// frames. It requires Go 1.27 or later and has no third-party dependencies.
 //
-// The WebSocket protocol enables two-way communication between a client and a server
-// over a single, long-lived connection. This package provides both client and server
-// implementations, allowing for the creation of WebSocket connections, sending and
-// receiving messages, and handling control frames (ping, pong).
+// # Connections
 //
-// Key Features:
-// - Full support for WebSocket protocol as per [RFC 6455].
-// - Client and server implementations.
-// - Support for text and binary messages.
-// - Handling of control frames (ping, pong).
-// - Extension support, including permessage-deflate for message compression.
+// Use Dial to connect to a ws or wss URL, and Upgrade to take over an HTTP/1.1
+// request on a server. The caller must authenticate requests and validate Origin
+// before Upgrade; the package does not impose an origin policy.
 //
-// # Getting Started
+// The Dial context covers TCP, TLS, and the HTTP upgrade handshake. Once Dial
+// succeeds, canceling that context does not cancel message I/O. Call Conn.Close
+// to interrupt reads and writes. Close sends a best-effort notification with a
+// bounded write deadline and closes the transport without waiting for the peer.
 //
-// To create a WebSocket server, use the Upgrade function to upgrade an HTTP connection
-// to a WebSocket connection:
+// # Message limits and concurrency
 //
-//	http.HandleFunc("/echo", func(w http.ResponseWriter, r *http.Request) {
-//	    conn, err := websocket.Upgrade(w, r)
-//	    if err != nil {
-//	        http.Error(w, "Failed to upgrade to WebSocket", http.StatusInternalServerError)
-//	        return
-//	    }
-//	    defer conn.Close()
+// Incoming messages are unlimited by default. Use WithMaxMessageSize with Dial,
+// WithUpgradeMaxMessageSize with Upgrade, or WithMaxBytes with NewConn to impose
+// an incoming frame and reassembled-message limit. The built-in compression
+// extension also limits decoded output when a connection limit is configured.
+// Custom extensions must bound their own intermediate allocations.
 //
-//	    for {
-//	        messageType, message, err := conn.ReadMessage()
-//	        if err != nil {
-//	            break
-//	        }
-//	        err = conn.WriteMessage(messageType, message)
-//	        if err != nil {
-//	            break
-//	        }
-//	    }
-//	})
+// Reads and writes are independently serialized. Close may be called concurrently
+// with either. WriteMessage does not modify the caller's payload. Ping and pong
+// handlers run synchronously from ReadMessage and must not call it recursively.
+// An extension instance must not be shared between connections.
 //
-// To create a WebSocket client, use the Dial function:
+// # Limitations
 //
-//	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
-//	defer cancel()
+// The optional permessage-deflate extension is experimental. Compressed message
+// fragmentation, context takeover, and DEFLATE window-size negotiation are not
+// fully implemented. Leave it disabled for production interoperability needs.
+// Subprotocol and extension handshake validation is incomplete. Custom headers
+// are serialized verbatim and must be trusted and validated. After a read or
+// protocol error, the caller should close the connection rather than resume
+// reading. Focused regression tests do not establish full RFC conformance.
 //
-//	conn, resp, err := websocket.Dial(ctx, "ws://localhost:8080/echo")
-//	if err != nil {
-//	    log.Fatal("Dial failed:", err)
-//	}
-//	defer conn.Close()
+// See the executable examples for local client/server usage.
 //
-//	err = conn.WriteMessage(websocket.TextMessage, []byte("Hello, WebSocket!"))
-//	if err != nil {
-//	    log.Fatal("WriteMessage failed:", err)
-//	}
-//
-//	messageType, message, err := conn.ReadMessage()
-//	if err != nil {
-//	    log.Fatal("ReadMessage failed:", err)
-//	}
-//	fmt.Printf("Received message: %s\n", message)
-//
-// # Extensions
-//
-// This package supports WebSocket extensions, including permessage-deflate for
-// message compression. Extensions can be enabled during the handshake process:
-//
-//	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-//	    conn, err := websocket.Upgrade(w, r, websocket.WithUpgradeExtensions(websocket.NewPerMessageDeflateExtension()))
-//	    if err != nil {
-//	        http.Error(w, "Failed to upgrade to WebSocket", http.StatusInternalServerError)
-//	        return
-//	    }
-//	    defer conn.Close()
-//	    // Handle WebSocket connection
-//	}))
-//	defer server.Close()
-//
-//	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
-//	defer cancel()
-//
-//	conn, resp, err := websocket.Dial(ctx, "ws://localhost:8080/echo", websocket.WithExtensions(websocket.NewPerMessageDeflateExtension()))
-//	if err != nil {
-//	    log.Fatal("Dial failed:", err)
-//	}
-//	defer conn.Close()
-//
-// For more details on the WebSocket protocol, refer to the RFC 6455 specification:
-// https://tools.ietf.org/html/rfc6455
-//
-// [WebSocket]: https://en.wikipedia.org/wiki/WebSocket
-// [RFC 6455]: https://tools.ietf.org/html/rfc6455
+// [RFC 6455]: https://www.rfc-editor.org/rfc/rfc6455.html
+// [RFC 7692]: https://www.rfc-editor.org/rfc/rfc7692.html
 package websocket

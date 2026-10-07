@@ -1,7 +1,8 @@
 # websocket
  
-This package provides a [WebSocket] client and server implementation, adhering to the [RFC 6455] WebSocket protocol specification. 
-It supports all standard WebSocket features, including text and binary messages, control frames (ping, pong, close), and message fragmentation. Additionally, it supports the `permessage-deflate` extension for message compression defined in [RFC 7692].
+This package provides a small, standard-library-only [WebSocket] client and server implementation for Go 1.27 and later.
+It supports text and binary messages, ping/pong/close frames, and uncompressed message fragmentation.
+The optional `permessage-deflate` implementation is experimental; see the limitations below.
 
 [WebSocket]: https://en.wikipedia.org/wiki/WebSocket
 [RFC 6455]: https://tools.ietf.org/html/rfc6455
@@ -9,9 +10,8 @@ It supports all standard WebSocket features, including text and binary messages,
 
 > [!NOTE]
 > You probably want to use the [`github.com/coder/websocket`] package instead of this one,
-> but this package should be fine for many use cases, and can be extended with additional 
-> features, if needed in the future. Please feel free to open an issue or a pull request if you
-> have any suggestions or improvements.
+> especially when you need comprehensive protocol compliance or production compression.
+> This package is intentionally small and is not a claim of full RFC conformance.
 
 [`github.com/coder/websocket`]: https://pkg.go.dev/github.com/coder/websocket
 
@@ -42,7 +42,7 @@ import (
 
 func echoHandler(w http.ResponseWriter, r *http.Request) {
 	// Upgrade the HTTP connection to a WebSocket connection
-	conn, err := websocket.Upgrade(w, r)
+	conn, err := websocket.Upgrade(w, r, websocket.WithUpgradeMaxMessageSize(1<<20))
 	if err != nil {
 		log.Printf("Upgrade failed: %v", err)
 		return
@@ -90,14 +90,16 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/picatz/websocket"
 )
 
 func main() {
 	// Dial the WebSocket server
-	ctx := context.Background()
-	conn, resp, err := websocket.Dial(ctx, "ws://localhost:8080/ws")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, resp, err := websocket.Dial(ctx, "ws://localhost:8080/ws", websocket.WithMaxMessageSize(1<<20))
 	if err != nil {
 		log.Fatalf("Dial failed: %v", err)
 	}
@@ -111,7 +113,7 @@ func main() {
 	}
 
 	// Read the server's response
-	messageType, data, err := conn.ReadMessage()
+	_, data, err := conn.ReadMessage()
 	if err != nil {
 		log.Fatalf("ReadMessage failed: %v", err)
 	}
@@ -137,62 +139,49 @@ conn.SetPongHandler(func(appData string) error {
 })
 ```
 
-## Using Extensions
+## Limits and connection lifetime
 
-### `permessage-deflate` Extension
+Set `WithMaxMessageSize(n)` for a client, `WithUpgradeMaxMessageSize(n)` for a server,
+or `WithMaxBytes(n)` with `NewConn`. Limits apply to incoming frame payloads,
+reassembled messages, and decoded data from the built-in compression extension.
+The default is unlimited; set an application-appropriate positive limit before
+accepting untrusted peers. Custom extensions are responsible for bounding their
+own intermediate allocations.
 
-The [`permessage-deflate`] extension compresses WebSocket messages using the [DEFLATE] algorithm, reducing bandwidth usage.
+`Dial`'s context covers TCP connection establishment, TLS, and the HTTP upgrade.
+It is detached after a successful handshake. It does not cancel later reads or
+writes. Call `Close` to interrupt connection I/O.
 
-[`permessage-deflate`]: https://datatracker.ietf.org/doc/html/rfc7692#section-7
-[DEFLATE]: https://en.wikipedia.org/wiki/DEFLATE
+Reads and writes are independently serialized. `Close` can run concurrently with
+either. The library does not mutate the byte slice passed to `WriteMessage`.
+Ping and pong handlers run from `ReadMessage`; a handler must not call
+`ReadMessage` recursively. Extension instances are connection-specific and must
+not be reused across connections.
 
-#### Server Side
+`Close` makes a best-effort normal close notification, limited to one second when
+no other writer is active, then closes the transport. It does not wait for the
+peer's closing handshake. A second call returns `ErrAlreadyClosed`.
 
-```go
-// In your handler, enable permessage-deflate
-conn, err := websocket.Upgrade(w, r, websocket.WithUpgradeExtensions(
-	websocket.NewPerMessageDeflateExtension(
-		websocket.WithServerNoContextTakeover(),
-		websocket.WithClientNoContextTakeover(),
-	),
-))
-```
+## Protocol limitations
 
-#### Client Side
+- Authenticate requests and validate their `Origin` in your HTTP handler before
+  calling `Upgrade`. This package does not enforce an origin policy
+- Subprotocol and extension negotiation is not comprehensively validated
+- Custom request/response headers are serialized verbatim. Only pass trusted,
+  validated header names and values; reject CR/LF and do not supply reserved
+  WebSocket handshake headers through these options
+- `permessage-deflate` is experimental. Independent unfragmented messages are
+  covered by tests, including a published RFC 7692 vector. Incoming compressed
+  fragmentation and context takeover are not implemented correctly, and window
+  bit options do not impose DEFLATE window sizes. Leave compression disabled
+  when interoperability or untrusted inputs matter
+- Close the connection after any read/protocol error. Invalid frames are reported
+  as errors; the library does not implement a complete protocol-error closing
+  state machine
+- The tests are focused regressions and local round trips, not a full RFC 6455 or
+  RFC 7692 compliance certification
 
-```go
-// When dialing, enable permessage-deflate
-conn, resp, err := websocket.Dial(ctx, "ws://localhost:8080/ws",
-	websocket.WithExtensions(
-		websocket.NewPerMessageDeflateExtension(
-			websocket.WithServerNoContextTakeover(),
-			websocket.WithClientNoContextTakeover(),
-		),
-	),
-)
-```
-
-#### Context Takeover Options
-
-- `client_no_context_takeover`: The client doesn't use a shared compression object pool between messages.
-- `server_no_context_takeover`:  The server doesn't use a shared compression object pool between messages.
-
-Disabling context takeover can reduce memory usage and theoretically mitigate certain security risks,
-but may slightly reduce compression efficiency.
-
-```go
-// Enable permessage-deflate with context takeover options
-pmd := websocket.NewPerMessageDeflateExtension(
-	websocket.WithClientNoContextTakeover(),
-	websocket.WithServerNoContextTakeover(),
-)
-
-// Server side
-conn, err := websocket.Upgrade(w, r, websocket.WithUpgradeExtensions(pmd))
-
-// Client side
-conn, resp, err := websocket.Dial(ctx, "ws://localhost:8080/ws", websocket.WithExtensions(pmd))
-```
+See [RFC 6455] for framing and [RFC 7692] for compression semantics.
 
 ## Error Handling
 
@@ -209,3 +198,21 @@ if err != nil {
 	}
 }
 ```
+
+## Development
+
+All tests and executable examples use in-memory connections or local loopback
+servers. They do not depend on public echo services or external credentials.
+
+```console
+go test ./...
+go test -race ./...
+go vet ./...
+GOARCH=386 CGO_ENABLED=0 go test ./...
+go test . -run '^$' -fuzz '^FuzzReadMessage$' -fuzztime=30s
+```
+
+The regression suite covers malformed lengths, frame masking and reserved bits,
+fragmentation and message limits, text/close payload validation, bounded
+DEFLATE output, buffered handshake data, TLS options, handshake cancellation,
+and concurrent connection shutdown.
