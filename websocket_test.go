@@ -79,53 +79,36 @@ func ExampleUpgrade() {
 }
 
 func ExampleDial() {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-	defer cancel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Upgrade(w, r)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		defer conn.Close()
+		messageType, data, err := conn.ReadMessage()
+		if err == nil {
+			_ = conn.WriteMessage(messageType, data)
+		}
+	}))
+	defer server.Close()
 
-	conn, resp, err := websocket.Dial(ctx, "wss://echo.websocket.org")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, _, err := websocket.Dial(ctx, "ws"+server.URL[len("http"):])
 	if err != nil {
 		panic(err)
-	}
-	if resp.StatusCode != http.StatusSwitchingProtocols {
-		panic(fmt.Errorf("expected status code %d, got %d", http.StatusSwitchingProtocols, resp.StatusCode))
 	}
 	defer conn.Close()
-
-	testMessage := "Hello, WebSocket!"
-	err = conn.WriteMessage(websocket.TextMessage, []byte(testMessage))
+	if err := conn.WriteMessage(websocket.TextMessage, []byte("Hello, WebSocket!")); err != nil {
+		panic(err)
+	}
+	_, data, err := conn.ReadMessage()
 	if err != nil {
 		panic(err)
 	}
-
-	// Read the first message, which in this case is a message that contains
-	// which server instance is being used. We discard the message.
-	msgType, msgData, err := conn.ReadMessage()
-	if err != nil {
-		panic(err)
-	}
-
-	if msgType != websocket.TextMessage {
-		panic(fmt.Errorf("expected message type %d, got %d", websocket.TextMessage, msgType))
-	}
-
-	msgType, msgData, err = conn.ReadMessage()
-	if err != nil {
-		panic(err)
-	}
-
-	// Next, read the echoed message from the server, and check if it matches
-	// the message we sent, then print it.
-	if msgType != websocket.TextMessage {
-		panic(fmt.Errorf("expected message type %d, got %d", websocket.TextMessage, msgType))
-	}
-
-	if string(msgData) != testMessage {
-		panic(fmt.Errorf("expected message '%s', got '%s'", testMessage, string(msgData)))
-	}
-
-	fmt.Printf("Received message: %s\n", string(msgData))
-	// Output:
-	// Received message: Hello, WebSocket!
+	fmt.Printf("Received message: %s\n", data)
+	// Output: Received message: Hello, WebSocket!
 }
 
 // testEchoHandler is a simple WebSocket handler that echoes received messages back to the client.
@@ -415,50 +398,4 @@ func TestWebSocketPerMessageDeflateNoContextTakeover(t *testing.T) {
 			t.Fatalf("Expected message '%s', got '%s'", testMessage, string(message))
 		}
 	}
-}
-
-func TestWebSockt_Public_Endpoint(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-	defer cancel()
-
-	conn, resp, err := websocket.Dial(ctx, "wss://echo.websocket.org")
-	if err != nil {
-		t.Fatalf("Dial failed: %v", err)
-	}
-	if resp.StatusCode != http.StatusSwitchingProtocols {
-		t.Fatalf("Expected status code %d, got %s", http.StatusSwitchingProtocols, resp.Status)
-	}
-	defer conn.Close()
-
-	testMessage := "Hello, WebSocket!"
-	err = conn.WriteMessage(websocket.TextMessage, []byte(testMessage))
-	if err != nil {
-		t.Fatalf("WriteMessage failed: %v", err)
-	}
-
-	msgType, msgData, err := conn.ReadMessage()
-	if err != nil {
-		t.Fatalf("ReadMessage failed: %v", err)
-	}
-
-	if msgType != websocket.TextMessage {
-		t.Fatalf("Expected message type %d, got %d", websocket.TextMessage, msgType)
-	}
-
-	t.Logf("Received message: %s", string(msgData))
-
-	msgType, msgData, err = conn.ReadMessage()
-	if err != nil {
-		t.Fatalf("ReadMessage failed: %v", err)
-	}
-
-	if msgType != websocket.TextMessage {
-		t.Fatalf("Expected message type %d, got %d", websocket.CloseMessage, msgType)
-	}
-
-	if string(msgData) != testMessage {
-		t.Fatalf("Expected message '%s', got '%s'", testMessage, string(msgData))
-	}
-
-	t.Logf("Received message: %s", string(msgData))
 }
