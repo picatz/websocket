@@ -511,7 +511,9 @@ func (c *Conn) SetPongHandler(handler func(appData string) error) {
 	c.pongHandler = handler
 }
 
-// ReadMessage reads the next complete WebSocket message.
+// ReadMessage reads the next complete WebSocket message. EOF before a message
+// begins is reported as io.EOF; a truncated frame or fragmented message returns
+// an error matching io.ErrUnexpectedEOF. A peer close frame also returns io.EOF.
 func (c *Conn) ReadMessage() (messageType Opcode, data []byte, err error) {
 	if c.closed.Load() {
 		return 0, nil, io.ErrClosedPipe
@@ -528,6 +530,9 @@ func (c *Conn) ReadMessage() (messageType Opcode, data []byte, err error) {
 	for {
 		frame, err := c.readFrame()
 		if err != nil {
+			if messageTypeSet && err == io.EOF {
+				return 0, nil, io.ErrUnexpectedEOF
+			}
 			return 0, nil, err
 		}
 
@@ -605,7 +610,9 @@ func (c *Conn) ReadMessage() (messageType Opcode, data []byte, err error) {
 	}
 }
 
-// WriteMessage writes a WebSocket message.
+// WriteMessage writes a WebSocket message. Transport errors match ErrWriteFailed
+// and wrap the underlying error for errors.Is and errors.As. Close the connection
+// after a transport error; a partially written message cannot be retried safely.
 func (c *Conn) WriteMessage(messageType Opcode, data []byte) error {
 	if messageType != TextMessage && messageType != BinaryMessage {
 		return ErrInvalidOpcode
@@ -668,7 +675,7 @@ func (c *Conn) readFrame() (*Frame, error) {
 	// contains the FIN, RSV1, RSV2, RSV3, opcode, and mask bit.
 	var header [2]byte
 	if _, err := io.ReadFull(c.rw, header[:]); err != nil {
-		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		if errors.Is(err, io.EOF) {
 			return nil, io.EOF
 		}
 		return nil, fmt.Errorf("failed to read frame header: %w", err)
@@ -715,7 +722,7 @@ func (c *Conn) readFrame() (*Frame, error) {
 		var extLen uint16
 		if err := binary.Read(c.rw, binary.BigEndian, &extLen); err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-				return nil, io.EOF
+				return nil, io.ErrUnexpectedEOF
 			}
 			return nil, fmt.Errorf("failed to read extended payload length: %w", err)
 		}
@@ -727,7 +734,7 @@ func (c *Conn) readFrame() (*Frame, error) {
 		var extLen uint64
 		if err := binary.Read(c.rw, binary.BigEndian, &extLen); err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-				return nil, io.EOF
+				return nil, io.ErrUnexpectedEOF
 			}
 			return nil, fmt.Errorf("failed to read extended payload length: %w", err)
 		}
@@ -746,7 +753,7 @@ func (c *Conn) readFrame() (*Frame, error) {
 	if frame.Masked {
 		if _, err := io.ReadFull(c.rw, frame.MaskKey[:]); err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-				return nil, io.EOF
+				return nil, io.ErrUnexpectedEOF
 			}
 			return nil, fmt.Errorf("failed to read masking key: %w", err)
 		}
@@ -870,7 +877,7 @@ func (c *Conn) writeFrame(frame *Frame) error {
 
 	// Write header
 	if _, err := c.rw.Write(header[:headerPos]); err != nil {
-		return fmt.Errorf("%w: failed to write frame header: %v", ErrWriteFailed, err)
+		return fmt.Errorf("%w: failed to write frame header: %w", ErrWriteFailed, err)
 	}
 
 	// Mask payload if necessary
@@ -884,13 +891,13 @@ func (c *Conn) writeFrame(frame *Frame) error {
 	// Write payload
 	if len(frame.Payload) > 0 {
 		if _, err := c.rw.Write(frame.Payload); err != nil {
-			return fmt.Errorf("%w: failed to write frame payload: %v", ErrWriteFailed, err)
+			return fmt.Errorf("%w: failed to write frame payload: %w", ErrWriteFailed, err)
 		}
 	}
 
 	// Flush the buffer to ensure the data is sent
 	if err := c.rw.Flush(); err != nil {
-		return fmt.Errorf("%w: failed to flush data: %v", ErrWriteFailed, err)
+		return fmt.Errorf("%w: failed to flush data: %w", ErrWriteFailed, err)
 	}
 
 	return nil
