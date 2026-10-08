@@ -166,13 +166,18 @@ peer's closing handshake. A second call returns `ErrAlreadyClosed`.
 
 - Authenticate requests and validate their `Origin` in your HTTP handler before
   calling `Upgrade`. This package does not enforce an origin policy
-- Subprotocol and extension negotiation is not comprehensively validated
+- Extension negotiation is not comprehensively validated
+- Subprotocol offers must contain unique, case-sensitive HTTP tokens. `Dial`
+  rejects unsolicited, unoffered, malformed, or multiple server selections.
+  `Upgrade` validates offers and any caller-provided selection before hijacking.
+  A server may select one offered token or omit selection; the application
+  remains responsible for choosing a protocol and implementing it
 - Custom request/response headers reject invalid HTTP field names and values
   (including CR/LF, NUL, and other forbidden control bytes) before dialing or
   hijacking. Generated handshake fields and HTTP body-framing fields are reserved
   case-insensitively; see `WithHeader` and `WithResponseHeader` for the lists.
   Ordinary repeated fields (including `Set-Cookie`) are preserved. Callers still
-  own field-specific semantics, including subprotocol selection
+  own ordinary field-specific semantics
 - `permessage-deflate` is experimental. Independent unfragmented messages are
   covered by tests, including a published RFC 7692 vector. Incoming compressed
   fragmentation and context takeover are not implemented correctly, and window

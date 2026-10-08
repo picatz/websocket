@@ -25,6 +25,7 @@ import (
 )
 
 var (
+	ErrInvalidSubprotocol      = errors.New("websocket: invalid subprotocol negotiation")
 	ErrBadHandshake            = errors.New("websocket: bad handshake")
 	ErrUnsupportedVersion      = errors.New("websocket: unsupported WebSocket version")
 	ErrInvalidHandshakeHeader  = errors.New("websocket: invalid custom handshake header")
@@ -936,7 +937,9 @@ func WithExtensions(extensions ...Extension) DialOption {
 // handshake: Host, Upgrade, Connection, Sec-WebSocket-Key, Sec-WebSocket-Version,
 // and Sec-WebSocket-Extensions. Content-Length and Transfer-Encoding are also
 // forbidden because the handshake has no HTTP body. Names are case-insensitive.
-// Repeated ordinary fields are preserved; the caller owns their semantics.
+// Sec-WebSocket-Protocol offers must be unique HTTP tokens. A server may select
+// one offered token (case-sensitive) or omit selection. Repeated ordinary fields
+// are preserved; the caller owns their semantics.
 func WithHeader(header http.Header) DialOption {
 	return func(opts *dialOptions) {
 		opts.header = header
@@ -967,6 +970,11 @@ func Dial(ctx context.Context, urlStr string, options ...DialOption) (ws *Conn, 
 
 	if err := validateHandshakeHeaders(opts.header, false); err != nil {
 		return nil, nil, err
+	}
+
+	offered, err := parseSubprotocolOffers(opts.header)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: %w", ErrInvalidHandshakeHeader, err)
 	}
 
 	u, err := url.Parse(urlStr)
@@ -1105,6 +1113,11 @@ func Dial(ctx context.Context, urlStr string, options ...DialOption) (ws *Conn, 
 		return nil, resp, ErrInvalidSecAccept
 	}
 
+	if err := validateSubprotocolSelection(resp.Header, offered); err != nil {
+		conn.Close()
+		return nil, resp, err
+	}
+
 	// Negotiate extensions
 	extHeader := resp.Header.Get("Sec-WebSocket-Extensions")
 	for _, ext := range opts.extensions {
@@ -1151,6 +1164,8 @@ func WithUpgradeExtensions(extensions ...Extension) UpgradeOption {
 // Sec-WebSocket-Extensions. Content-Length and Transfer-Encoding are also
 // forbidden in a 101 response. Names are case-insensitive. Repeated ordinary
 // fields, such as Set-Cookie, are preserved; the caller owns their semantics.
+// Sec-WebSocket-Protocol may select exactly one token offered by the client,
+// using a single field value, or be omitted to select no subprotocol.
 func WithResponseHeader(header http.Header) UpgradeOption {
 	return func(opts *upgradeOptions) {
 		opts.responseHeader = header
@@ -1196,6 +1211,13 @@ func Upgrade(w http.ResponseWriter, r *http.Request, options ...UpgradeOption) (
 	decodedKey, err := base64.StdEncoding.DecodeString(key)
 	if err != nil || len(decodedKey) != 16 || len(r.Header.Values("Sec-WebSocket-Key")) != 1 {
 		return nil, ErrInvalidSecKey
+	}
+	offered, err := parseSubprotocolOffers(r.Header)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateSubprotocolSelection(opts.responseHeader, offered); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalidHandshakeHeader, err)
 	}
 	acceptKey := computeAcceptKey(key)
 
@@ -1274,15 +1296,8 @@ func Upgrade(w http.ResponseWriter, r *http.Request, options ...UpgradeOption) (
 // Do not include field values in errors: they may contain credentials or cookies.
 func validateHandshakeHeaders(header http.Header, response bool) error {
 	for name, values := range header {
-		if name == "" {
-			return fmt.Errorf("%w: empty field name", ErrInvalidHandshakeHeader)
-		}
-		for i := 0; i < len(name); i++ {
-			c := name[i]
-			if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-				(c >= '0' && c <= '9') || strings.ContainsRune("!#$%&'*+-.^_`|~", rune(c))) {
-				return fmt.Errorf("%w: invalid field name %q", ErrInvalidHandshakeHeader, name)
-			}
+		if !isHTTPToken(name) {
+			return fmt.Errorf("%w: invalid field name %q", ErrInvalidHandshakeHeader, name)
 		}
 		reserved := false
 		switch strings.ToLower(name) {
@@ -1304,6 +1319,79 @@ func validateHandshakeHeaders(header http.Header, response bool) error {
 				}
 			}
 		}
+	}
+	return nil
+}
+
+// subprotocolValues includes noncanonical map keys in caller-provided headers.
+// A nil/empty slice emits no field and is equivalent to an absent header.
+func subprotocolValues(header http.Header) []string {
+	var values []string
+	for name, fields := range header {
+		if strings.EqualFold(name, "Sec-WebSocket-Protocol") {
+			values = append(values, fields...)
+		}
+	}
+	return values
+}
+
+func isHTTPToken(value string) bool {
+	if value == "" {
+		return false
+	}
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+			(c >= '0' && c <= '9') || strings.ContainsRune("!#$%&'*+-.^_`|~", rune(c))) {
+			return false
+		}
+	}
+	return true
+}
+
+// RFC 6455 sections 4.1 and 4.3 require unique, case-sensitive token offers.
+// The HTTP 1#token list rule permits empty list elements, but at least one
+// nonempty token is required when the header is present.
+func parseSubprotocolOffers(header http.Header) (map[string]struct{}, error) {
+	values := subprotocolValues(header)
+	offered := make(map[string]struct{})
+	for _, value := range values {
+		for _, item := range strings.Split(value, ",") {
+			token := strings.Trim(item, " \t")
+			if token == "" {
+				continue
+			}
+			if !isHTTPToken(token) {
+				return nil, ErrInvalidSubprotocol
+			}
+			if _, duplicate := offered[token]; duplicate {
+				return nil, ErrInvalidSubprotocol
+			}
+			offered[token] = struct{}{}
+		}
+	}
+	if len(values) != 0 && len(offered) == 0 {
+		return nil, ErrInvalidSubprotocol
+	}
+	return offered, nil
+}
+
+// A response may omit selection, or contain exactly one field with one offered
+// token. In particular, repeated response fields and comma lists are forbidden.
+func validateSubprotocolSelection(header http.Header, offered map[string]struct{}) error {
+	values := subprotocolValues(header)
+	if len(values) == 0 {
+		return nil
+	}
+	if len(values) != 1 {
+		return ErrInvalidSubprotocol
+	}
+	selected := strings.Trim(values[0], " \t")
+	if !isHTTPToken(selected) {
+		return ErrInvalidSubprotocol
+	}
+	if _, ok := offered[selected]; !ok {
+		return ErrInvalidSubprotocol
 	}
 	return nil
 }
