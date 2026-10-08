@@ -247,6 +247,32 @@ func TestDialRejectsInvalidExtensionOfferBeforeConnect(t *testing.T) {
 	}
 }
 
+func TestUpgradeExtensionFieldNames(t *testing.T) {
+	for _, configure := range []bool{false, true} {
+		r := upgradeRequest()
+		r.Header["Sec-WebSocket-Extensions"] = []string{"unknown; flag"}
+		r.Header["sec-websocket-extensions"] = []string{"permessage-deflate"}
+		before := r.Header.Clone()
+		raw := &memoryConn{Reader: bytes.NewReader(nil)}
+		w := &hijackResponse{httptest.NewRecorder(), raw, bufio.NewReadWriter(bufio.NewReader(raw), bufio.NewWriter(raw))}
+		var options []UpgradeOption
+		want := ""
+		if configure {
+			options = append(options, WithUpgradeExtensions(NewPerMessageDeflateExtension()))
+			want = "permessage-deflate"
+		}
+		conn, err := Upgrade(w, r, options...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		conn.conn.Close()
+		resp, err := http.ReadResponse(bufio.NewReader(strings.NewReader(raw.written.String())), nil)
+		if err != nil || resp.Header.Get("Sec-WebSocket-Extensions") != want || !reflect.DeepEqual(r.Header, before) {
+			t.Fatalf("configured = %v: response = %v, error = %v", configure, resp, err)
+		}
+	}
+}
+
 type extensionHijacker struct {
 	*hijackResponse
 	calls int
