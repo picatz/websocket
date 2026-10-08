@@ -142,7 +142,10 @@ type perMessageDeflate struct {
 	offerSet   bool
 	negotiated pmdParameters
 
-	flateReaderPool sync.Pool
+	receiveMu       sync.Mutex // Receive serialization; never acquired by Close or send.
+	receiveLife     sync.Mutex // Short state lifetime guard; never held during I/O.
+	receive         *deflateReceiveState
+	receiveClosed   bool
 	flateWriterPool sync.Pool
 }
 
@@ -151,7 +154,13 @@ func (pmd *perMessageDeflate) IsEnabled() bool {
 }
 
 func (pmd *perMessageDeflate) ProcessOutgoingFrame(frame *Frame) error {
-	if !pmd.enabled || (frame.Opcode != TextMessage && frame.Opcode != BinaryMessage) {
+	if !pmd.enabled {
+		return nil
+	}
+	if frame.Opcode == ContinuationFrame || ((frame.Opcode == TextMessage || frame.Opcode == BinaryMessage) && !frame.Final) {
+		return ErrFragmentedCompression
+	}
+	if frame.Opcode != TextMessage && frame.Opcode != BinaryMessage {
 		return nil
 	}
 
@@ -189,45 +198,6 @@ func (pmd *perMessageDeflate) ProcessIncomingFrame(frame *Frame) error {
 	return pmd.processIncomingFrame(frame, 0)
 }
 
-func (pmd *perMessageDeflate) processIncomingFrame(frame *Frame, maxBytes int) error {
-	if !pmd.enabled || (frame.Opcode != TextMessage && frame.Opcode != BinaryMessage) {
-		return nil
-	}
-
-	if frame.Rsv1 {
-		// Decompress the payload
-		// Restore the sync-flush suffix and append a final empty block so the
-		// standard library reader can distinguish a complete stream from EOF.
-		r := pmd.getReader(io.MultiReader(bytes.NewReader(frame.Payload),
-			bytes.NewReader([]byte{0x00, 0x00, 0xff, 0xff, 0x01, 0x00, 0x00, 0xff, 0xff})))
-		defer pmd.putReader(r)
-		defer r.Close()
-
-		var source io.Reader = r
-		if maxBytes > 0 {
-			// Read at most the configured limit; probe once to detect overflow.
-			source = io.LimitReader(r, int64(maxBytes))
-		}
-		decompressed, err := io.ReadAll(source)
-		if err != nil {
-			return err
-		}
-		if maxBytes > 0 && len(decompressed) == maxBytes {
-			var extra [1]byte
-			n, err := io.ReadFull(r, extra[:])
-			if n != 0 {
-				return ErrPayloadTooLarge
-			}
-			if err != nil && err != io.EOF {
-				return err
-			}
-		}
-		frame.Payload = decompressed
-		frame.Rsv1 = false
-	}
-	return nil
-}
-
 // getWriter retrieves or creates a flate.Writer, resetting it if necessary.
 func (pmd *perMessageDeflate) getWriter(buf *bytes.Buffer) *flate.Writer {
 	var w *flate.Writer
@@ -249,31 +219,6 @@ func (pmd *perMessageDeflate) getWriter(buf *bytes.Buffer) *flate.Writer {
 func (pmd *perMessageDeflate) putWriter(w *flate.Writer) {
 	if !pmd.localNoContextTakeover() {
 		pmd.flateWriterPool.Put(w)
-	}
-}
-
-// getReader retrieves or creates a flate.Reader, resetting it if necessary.
-func (pmd *perMessageDeflate) getReader(r io.Reader) io.ReadCloser {
-	var fr io.ReadCloser
-	if pmd.peerNoContextTakeover() {
-		fr = flate.NewReader(r)
-	} else {
-		if v := pmd.flateReaderPool.Get(); v != nil {
-			fr = v.(io.ReadCloser)
-			resetter := fr.(flate.Resetter)
-			resetter.Reset(r, nil)
-		} else {
-			fr = flate.NewReader(r)
-		}
-	}
-	return fr
-}
-
-// putReader reuses allocations when peer no-context mode is not selected.
-// Reset still discards history; incoming context takeover remains incomplete.
-func (pmd *perMessageDeflate) putReader(r io.ReadCloser) {
-	if !pmd.peerNoContextTakeover() {
-		pmd.flateReaderPool.Put(r)
 	}
 }
 
@@ -318,15 +263,13 @@ func WithServerMaxWindowBits(bits int) PerMessageDeflateOption {
 }
 
 // NewPerMessageDeflateExtension creates an opt-in, experimental compression extension.
-// Incoming compressed fragmentation and context takeover remain incomplete.
-// Create a separate instance for each connection.
+// Receive fragmentation and context takeover are supported by Conn. Direct
+// callbacks require complete messages; do not mix them concurrently with Conn
+// I/O. Enabled PMD cannot be combined with another enabled extension. Create a
+// separate instance for each connection. Configuration/negotiation must finish
+// before I/O; concurrent reconfiguration is not supported.
 func NewPerMessageDeflateExtension(options ...PerMessageDeflateOption) Extension {
 	pmd := &perMessageDeflate{
-		flateReaderPool: sync.Pool{
-			New: func() any {
-				return flate.NewReaderDict(nil, nil)
-			},
-		},
 		flateWriterPool: sync.Pool{
 			New: func() any {
 				w, _ := flate.NewWriter(nil, flate.DefaultCompression)
@@ -390,7 +333,9 @@ func WithMaxBytes(maxBytes int) ConnOption {
 // For a manual server handshake with the built-in compression extension, call
 // NewConn before Extension.Negotiate to establish the server role. Then negotiate
 // the client's offer and, only if Extension.IsEnabled reports true, include
-// Extension.Offer in the response before starting I/O.
+// Extension.Offer in the response before starting I/O. Do not advertise enabled
+// built-in PMD together with another enabled extension: operations reject that
+// unsupported composition, and this constructor cannot undo a manual handshake.
 func NewConn(conn net.Conn, isServer bool, extensions []Extension, opts ...ConnOption) *Conn {
 	wsConn := &Conn{
 		conn:       conn,
@@ -484,7 +429,11 @@ func (c *Conn) Close() error {
 }
 
 func (c *Conn) closeWithPayload(payload []byte) error {
+	if _, err := messageCompression(c.extensions); err != nil {
+		return c.failRead(err)
+	}
 	c.closeMu.Lock()
+	c.closeCompression()
 	if c.closed.Swap(true) {
 		failed := c.failed
 		c.closeMu.Unlock()
@@ -526,6 +475,7 @@ func (e *readFailure) Unwrap() error { return e.cause }
 func failWith(code uint16, cause error) error { return &readFailure{cause: cause, code: code} }
 
 func (c *Conn) abort() {
+	c.closeCompression()
 	c.abortOnce.Do(func() { _ = c.abortConn.Close() })
 }
 
@@ -537,6 +487,7 @@ func (c *Conn) failRead(err error) error {
 		code, err = failure.code, failure.cause
 	}
 	c.closeMu.Lock()
+	c.closeCompression()
 	alreadyClosed := c.closed.Swap(true)
 	c.failed = true
 	c.closeMu.Unlock()
@@ -602,8 +553,11 @@ func (c *Conn) SetPongHandler(handler func(appData string) error) {
 // A header that already proves a protocol or size violation is rejected without
 // waiting for its payload, even when that payload is absent or truncated.
 // Without registered extensions, invalid text is rejected as its payload arrives.
-// With extensions, text is checked after each decoded fragment. An incomplete
-// rune may span network reads, fragments, and controls.
+// With custom extensions, text is checked after each decoded fragment. Built-in
+// PMD validates decoded chunks, but Go's inflater may buffer up to 32 KiB before
+// exposing output, so invalid text or a small decoded overflow can remain hidden
+// while waiting for compressed input. An incomplete rune may span reads, frames,
+// controls, and DEFLATE streams. Size limits do not bound CPU time.
 // Any error makes the connection terminal: later reads and writes fail. Known
 // protocol and size violations send an appropriate best-effort Close when safe,
 // then abort the transport. Notification uses at most one second without changing
@@ -620,6 +574,10 @@ func (c *Conn) ReadMessage() (messageType Opcode, data []byte, err error) {
 		return 0, nil, io.ErrClosedPipe
 	}
 
+	pmd, compositionErr := messageCompression(c.extensions)
+	if compositionErr != nil {
+		return 0, nil, c.failRead(compositionErr)
+	}
 	peerClosed := false
 	defer func() {
 		if err != nil && !peerClosed {
@@ -634,6 +592,20 @@ func (c *Conn) ReadMessage() (messageType Opcode, data []byte, err error) {
 		frame, payloadLen, err := c.readFrameHeader()
 		if err == nil {
 			err = c.validateMessageHeader(frame, payloadLen, messageTypeSet, len(message))
+		}
+		if err == nil && pmd != nil && frame.Rsv1 && (frame.Opcode == TextMessage || frame.Opcode == BinaryMessage) {
+			source := &deflateFrameReader{c: c, peerClosed: &peerClosed}
+			if err = source.start(frame, payloadLen); err != nil {
+				return 0, nil, err
+			}
+			data, err = pmd.decodeMessage(&deflateMessageInput{source: source, peerClosed: &peerClosed}, c.maxBytes, frame.Opcode == TextMessage)
+			if peerClosed {
+				return 0, nil, io.EOF
+			}
+			if err != nil {
+				return 0, nil, err
+			}
+			return frame.Opcode, data, nil
 		}
 		var checkedText bool
 		var pending int
@@ -712,39 +684,14 @@ func (c *Conn) ReadMessage() (messageType Opcode, data []byte, err error) {
 				return messageType, message, nil
 			}
 
-		case CloseMessage:
-			if err := validateIncomingClosePayload(frame.Payload); err != nil {
+		case CloseMessage, PingMessage, PongMessage:
+			peerClosed, err = c.handleControl(frame)
+			if err != nil {
 				return 0, nil, err
 			}
-			peerClosed = true
-			_ = c.closeWithPayload(frame.Payload)
-			return 0, nil, io.EOF
-
-		case PingMessage:
-			c.handlerMu.RLock()
-			handler := c.pingHandler
-			c.handlerMu.RUnlock()
-			if handler != nil {
-				if err := handler(string(frame.Payload)); err != nil {
-					return 0, nil, err
-				}
-			} else {
-				// Default behavior: send Pong frame with same payload
-				if err := c.WriteControlFrame(PongMessage, frame.Payload); err != nil {
-					return 0, nil, err
-				}
+			if peerClosed {
+				return 0, nil, io.EOF
 			}
-
-		case PongMessage:
-			c.handlerMu.RLock()
-			handler := c.pongHandler
-			c.handlerMu.RUnlock()
-			if handler != nil {
-				if err := handler(string(frame.Payload)); err != nil {
-					return 0, nil, err
-				}
-			}
-			// Default behavior: ignore Pong frames
 
 		default:
 			return 0, nil, failWith(StatusProtocolError, fmt.Errorf("%w: %d", ErrInvalidOpcode, frame.Opcode))
@@ -782,6 +729,11 @@ func validUTF8Prefix(p []byte) (int, bool) {
 // unless argument validation or a closed connection takes precedence. Argument
 // validation and extension rejection before transport I/O do not poison writes.
 func (c *Conn) WriteMessage(messageType Opcode, data []byte) error {
+	if !c.closed.Load() {
+		if _, err := messageCompression(c.extensions); err != nil {
+			return c.failRead(err)
+		}
+	}
 	if messageType != TextMessage && messageType != BinaryMessage {
 		return ErrInvalidOpcode
 	}
@@ -820,6 +772,11 @@ func (c *Conn) WriteMessage(messageType Opcode, data []byte) error {
 // takes precedence. Argument validation and extension rejection before transport
 // I/O do not poison writes.
 func (c *Conn) WriteControlFrame(opcode Opcode, data []byte) error {
+	if !c.closed.Load() {
+		if _, err := messageCompression(c.extensions); err != nil {
+			return c.failRead(err)
+		}
+	}
 	if opcode != CloseMessage && opcode != PingMessage && opcode != PongMessage {
 		return ErrInvalidOpcode
 	}
@@ -1060,7 +1017,9 @@ func (c *Conn) readFramePayloadText(frame *Frame, payloadLen uint64, checkText b
 		if ext.IsEnabled() {
 			var err error
 			if pmd, ok := ext.(*perMessageDeflate); ok {
-				err = pmd.processIncomingFrame(frame, c.maxBytes)
+				if frame.Rsv1 {
+					err = pmd.processIncomingFrame(frame, c.maxBytes)
+				}
 			} else {
 				err = ext.ProcessIncomingFrame(frame)
 			}
@@ -1526,6 +1485,11 @@ func Dial(ctx context.Context, urlStr string, options ...DialOption) (ws *Conn, 
 		}
 	}
 
+	if _, err := messageCompression(opts.extensions); err != nil {
+		conn.Close()
+		return nil, resp, fmt.Errorf("%w: %w", ErrInvalidExtension, err)
+	}
+
 	ws = NewConn(conn, false, opts.extensions, WithMaxBytes(opts.maxBytes))
 	ws.abortConn = rawConn
 	ws.rw.Reader = br
@@ -1693,6 +1657,9 @@ func Upgrade(w http.ResponseWriter, r *http.Request, options ...UpgradeOption) (
 		if ext.IsEnabled() {
 			acceptedExtensions = append(acceptedExtensions, ext)
 		}
+	}
+	if _, err := messageCompression(opts.extensions); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalidExtension, err)
 	}
 	selection, selectedExtensions, err := extensionOffers(acceptedExtensions)
 	if err == nil {
