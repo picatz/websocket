@@ -409,8 +409,9 @@ type Conn struct {
 	writeMu sync.Mutex // Protects write operations
 	closeMu sync.Mutex // Protects Close method
 
-	closed   atomic.Bool // Indicates if the connection is closed
-	closeErr error       // Stores the error from closing the connection
+	closed    atomic.Bool // Indicates if the connection is closed
+	closeErr  error       // Stores the error from closing the connection
+	closeSent bool        // Protected by writeMu; forbids later data frames
 
 	// Optional handlers for control frames
 	handlerMu   sync.RWMutex
@@ -488,8 +489,11 @@ func (c *Conn) closeWithPayload(payload []byte) error {
 	// Do not wait behind a stalled writer: closing the transport must be able
 	// to interrupt it. Bypass the public closed-state guard for this final frame.
 	if c.writeMu.TryLock() {
-		if err := c.conn.SetWriteDeadline(time.Now().Add(time.Second)); err == nil {
-			_ = c.writeFrame(&Frame{Final: true, Opcode: CloseMessage, Payload: payload, Masked: !c.isServer})
+		if !c.closeSent {
+			if err := c.conn.SetWriteDeadline(time.Now().Add(time.Second)); err == nil {
+				_ = c.writeFrame(&Frame{Final: true, Opcode: CloseMessage, Payload: payload, Masked: !c.isServer})
+			}
+			c.closeSent = true
 		}
 		c.writeMu.Unlock()
 	}
@@ -627,7 +631,7 @@ func (c *Conn) WriteMessage(messageType Opcode, data []byte) error {
 	}
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	if c.closed.Load() {
+	if c.closed.Load() || c.closeSent {
 		return io.ErrClosedPipe
 	}
 
@@ -640,7 +644,11 @@ func (c *Conn) WriteMessage(messageType Opcode, data []byte) error {
 	return c.writeFrame(frame)
 }
 
-// WriteControlFrame writes a control frame to the connection.
+// WriteControlFrame writes a control frame to the connection. A successful Close
+// frame starts the closing handshake: subsequent data and Close frames return
+// io.ErrClosedPipe. Reads and ping/pong frames remain available until the peer
+// closes or Close is called. Call Close to release the transport if the peer
+// does not respond; this method does not impose a handshake timeout.
 func (c *Conn) WriteControlFrame(opcode Opcode, data []byte) error {
 	if opcode != CloseMessage && opcode != PingMessage && opcode != PongMessage {
 		return ErrInvalidOpcode
@@ -658,7 +666,7 @@ func (c *Conn) WriteControlFrame(opcode Opcode, data []byte) error {
 	}
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	if c.closed.Load() {
+	if c.closed.Load() || (opcode == CloseMessage && c.closeSent) {
 		return io.ErrClosedPipe
 	}
 
@@ -668,7 +676,13 @@ func (c *Conn) WriteControlFrame(opcode Opcode, data []byte) error {
 		Payload: data,
 		Masked:  !c.isServer,
 	}
-	return c.writeFrame(frame)
+	if err := c.writeFrame(frame); err != nil {
+		return err
+	}
+	if opcode == CloseMessage {
+		c.closeSent = true
+	}
+	return nil
 }
 
 // readFrame reads a single WebSocket frame from the connection.
