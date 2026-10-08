@@ -31,7 +31,10 @@
 // The optional permessage-deflate extension is experimental. Compressed message
 // fragmentation, context takeover, and DEFLATE window-size negotiation are not
 // fully implemented. Leave it disabled for production interoperability needs.
-// Subprotocol and extension handshake validation is incomplete. Custom headers
+// Extension handshake validation is incomplete. Subprotocol offers are unique
+// HTTP tokens; any selected protocol must be exactly one case-sensitive offered
+// token. Omitting selection is allowed. Applications choose and implement their
+// subprotocols. Custom headers
 // reject invalid HTTP syntax and reserved fields before dialing or hijacking;
 // callers still own field-specific semantics. After a read or
 // protocol error, the caller should close the connection rather than resume
