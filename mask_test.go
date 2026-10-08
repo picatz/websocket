@@ -7,7 +7,7 @@ import (
 )
 
 func TestMaskMatchesScalar(t *testing.T) {
-	sizes := []int{4095, 4096, 4097, 65535, 65536, 65537}
+	sizes := []int{1023, 1024, 1025, 2047, 2048, 2049, 4095, 4096, 4097, 65535, 65536, 65537}
 	for n := 0; n <= 257; n++ {
 		sizes = append(sizes, n)
 	}
@@ -23,7 +23,7 @@ func TestMaskMatchesScalar(t *testing.T) {
 					name string
 					mask func([]byte, []byte)
 				}{
-					{"production", xor}, {"word", maskWordCandidate},
+					{"production", xor}, {"word", maskWordCandidate}, {"stdlib", maskStandardLibraryCandidate},
 				} {
 					storage := bytes.Repeat([]byte{0xa5}, size+offset+16)
 					data := storage[offset : offset+size]
@@ -56,7 +56,7 @@ func TestMaskMatchesScalar(t *testing.T) {
 }
 
 func FuzzMask(f *testing.F) {
-	for _, size := range []int{0, 1, 7, 8, 9, 15, 16, 17, 125, 126, 4096} {
+	for _, size := range []int{0, 1, 7, 8, 9, 15, 16, 17, 125, 126, 1023, 1024, 1025, 4095, 4096, 4097} {
 		f.Add(benchmarkPayload(size), uint32(0x12345678), uint8(size&15))
 	}
 	f.Fuzz(func(t *testing.T, original []byte, value uint32, alignment uint8) {
@@ -65,29 +65,34 @@ func FuzzMask(f *testing.F) {
 		want := bytes.Clone(original)
 		maskScalarReference(key[:], want)
 		offset := int(alignment & 15)
-		storage := bytes.Repeat([]byte{0xa5}, len(original)+offset+16)
-		data := storage[offset : offset+len(original)]
-		copy(data, original)
-		xor(key[:], data)
-		if !bytes.Equal(data, want) {
-			t.Fatal("mask differs from scalar reference")
-		}
-		if !bytes.Equal(storage[:offset], bytes.Repeat([]byte{0xa5}, offset)) || !bytes.Equal(storage[offset+len(data):], bytes.Repeat([]byte{0xa5}, 16)) {
-			t.Fatal("first mask changed guard bytes")
-		}
-		if binary.LittleEndian.Uint32(key[:]) != value {
-			t.Fatal("first mask mutated key")
-		}
+		for _, impl := range []struct {
+			name string
+			mask func([]byte, []byte)
+		}{{"production", xor}, {"word", maskWordCandidate}, {"stdlib", maskStandardLibraryCandidate}} {
+			storage := bytes.Repeat([]byte{0xa5}, len(original)+offset+16)
+			data := storage[offset : offset+len(original)]
+			copy(data, original)
+			impl.mask(key[:], data)
+			if !bytes.Equal(data, want) {
+				t.Fatalf("%s: mask differs from scalar reference", impl.name)
+			}
+			if !bytes.Equal(storage[:offset], bytes.Repeat([]byte{0xa5}, offset)) || !bytes.Equal(storage[offset+len(data):], bytes.Repeat([]byte{0xa5}, 16)) {
+				t.Fatalf("%s: first mask changed guard bytes", impl.name)
+			}
+			if binary.LittleEndian.Uint32(key[:]) != value {
+				t.Fatalf("%s: first mask mutated key", impl.name)
+			}
 
-		xor(key[:], data)
-		if !bytes.Equal(data, original) {
-			t.Fatal("masking twice did not restore data")
-		}
-		if !bytes.Equal(storage[:offset], bytes.Repeat([]byte{0xa5}, offset)) || !bytes.Equal(storage[offset+len(data):], bytes.Repeat([]byte{0xa5}, 16)) {
-			t.Fatal("guard bytes changed")
-		}
-		if binary.LittleEndian.Uint32(key[:]) != value {
-			t.Fatal("mask key mutated")
+			impl.mask(key[:], data)
+			if !bytes.Equal(data, original) {
+				t.Fatalf("%s: masking twice did not restore data", impl.name)
+			}
+			if !bytes.Equal(storage[:offset], bytes.Repeat([]byte{0xa5}, offset)) || !bytes.Equal(storage[offset+len(data):], bytes.Repeat([]byte{0xa5}, 16)) {
+				t.Fatalf("%s: guard bytes changed", impl.name)
+			}
+			if binary.LittleEndian.Uint32(key[:]) != value {
+				t.Fatalf("%s: mask key mutated", impl.name)
+			}
 		}
 	})
 }
@@ -98,7 +103,7 @@ func TestMaskRFC6455Vector(t *testing.T) {
 	for _, impl := range []struct {
 		name string
 		mask func([]byte, []byte)
-	}{{"production", xor}, {"word", maskWordCandidate}} {
+	}{{"production", xor}, {"word", maskWordCandidate}, {"stdlib", maskStandardLibraryCandidate}} {
 		data := []byte("Hello")
 		impl.mask(key, data)
 		if !bytes.Equal(data, []byte{0x7f, 0x9f, 0x4d, 0x51, 0x58}) {

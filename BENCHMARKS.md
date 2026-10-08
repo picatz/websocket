@@ -50,6 +50,10 @@ go tool pprof -alloc_space -top mem.out
   masking routine; it does not predict whole-message throughput. The scalar
   reference directly applies RFC 6455's four-byte cycle. The test-only word
   candidate uses portable `encoding/binary` operations and no assembly/unsafe.
+  The `stdlib` candidate expands the key into 1 KiB of stack scratch and calls
+  `crypto/subtle.XORBytes`, which uses architecture-optimized code on supported
+  platforms. Expansion cost is measured on every call; smaller inputs use the
+  word candidate. This is one bounded experiment, not an exhaustive SIMD search.
 - `ReadFrame`: one parsed frame from a reset in-memory reader, including its
   payload allocation and optional unmasking. The reader-reset overhead is part
   of each iteration.
@@ -82,7 +86,9 @@ win. Keep small-payload regressions visible rather than quoting only the largest
 buffer. Architecture-specific SIMD would need independent end-to-end evidence,
 CPU-feature dispatch, a portable fallback, and validation on each supported
 architecture. A faster isolated loop alone does not justify that maintenance
-cost. No SIMD implementation is part of this benchmark harness.
+cost. No custom assembly is part of this benchmark harness. The test-only `stdlib`
+candidate reuses the standard library's optimized implementation. Zero heap
+allocations do not mean zero stack cost.
 
 References: [Go testing](https://pkg.go.dev/testing),
 [Go profiling](https://go.dev/blog/pprof), and

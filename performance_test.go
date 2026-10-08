@@ -3,6 +3,7 @@ package websocket
 import (
 	"bufio"
 	"bytes"
+	"crypto/subtle"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -33,14 +34,35 @@ func maskWordCandidate(key, data []byte) {
 	}
 }
 
+// Explore the standard library's architecture-optimized XORBytes, including
+// the cost of expanding a four-byte key into 1 KiB of stack scratch. This is one
+// bounded design point, not an exhaustive search for the best SIMD algorithm.
+func maskStandardLibraryCandidate(key, data []byte) {
+	if len(data) < 1024 {
+		maskWordCandidate(key, data)
+		return
+	}
+	var expanded [1024]byte
+	k := uint64(binary.LittleEndian.Uint32(key))
+	k |= k << 32
+	for i := 0; i < len(expanded); i += 8 {
+		binary.LittleEndian.PutUint64(expanded[i:], k)
+	}
+	for len(data) >= len(expanded) {
+		subtle.XORBytes(data[:len(expanded)], data[:len(expanded)], expanded[:])
+		data = data[len(expanded):]
+	}
+	maskWordCandidate(key, data)
+}
+
 func BenchmarkMask(b *testing.B) {
-	for _, size := range []int{0, 1, 7, 8, 16, 125, 126, 1024, 4096, 65536, 1 << 20} {
+	for _, size := range []int{0, 1, 7, 8, 16, 125, 126, 1023, 1024, 1025, 4095, 4096, 4097, 65536, 1 << 20} {
 		for _, offset := range []int{0, 1} {
 			b.Run(fmt.Sprintf("bytes=%d/offset=%d", size, offset), func(b *testing.B) {
 				for _, impl := range []struct {
 					name string
 					mask func([]byte, []byte)
-				}{{"production", xor}, {"scalar", maskScalarReference}, {"word", maskWordCandidate}} {
+				}{{"production", xor}, {"scalar", maskScalarReference}, {"word", maskWordCandidate}, {"stdlib", maskStandardLibraryCandidate}} {
 					b.Run(impl.name, func(b *testing.B) {
 						data := make([]byte, size+offset)[offset:]
 						key := []byte{0x12, 0x34, 0x56, 0x78}
