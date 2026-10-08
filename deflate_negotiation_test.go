@@ -228,6 +228,33 @@ func TestPMDClientHintIsNotResponseBound(t *testing.T) {
 	}
 }
 
+func TestPMDClientSelectedWindowCapability(t *testing.T) {
+	for bits := 8; bits <= 15; bits++ {
+		p := NewPerMessageDeflateExtension(WithClientMaxWindowBits(15))
+		err := p.Negotiate(fmt.Sprintf("permessage-deflate; client_max_window_bits=%d", bits))
+		if (err == nil) != (bits == 15) || p.IsEnabled() != (bits == 15) {
+			t.Fatalf("selected local window %d: enabled %t, error %v", bits, p.IsEnabled(), err)
+		}
+	}
+}
+
+func TestPMDMalformedParametersInBothRoles(t *testing.T) {
+	for _, name := range []string{"client_max_window_bits", "server_max_window_bits"} {
+		for _, value := range []string{"0", "7", "16", "09", "+9", "9.0", "99999999999999999999999999"} {
+			header := "permessage-deflate; " + name + "=" + value
+			p := NewPerMessageDeflateExtension(WithClientMaxWindowBits(15))
+			if err := p.Negotiate(header); !errors.Is(err, ErrInvalidExtension) || p.IsEnabled() {
+				t.Fatalf("invalid client selection %q: %v", header, err)
+			}
+			checkPMDUpgrade(t, header, "")
+			checkPMDUpgrade(t, header+", permessage-deflate", "permessage-deflate")
+		}
+		duplicate := "permessage-deflate; " + name + "=15; " + name + "=15"
+		checkPMDUpgrade(t, duplicate, "")
+		checkPMDUpgrade(t, duplicate+", permessage-deflate", "permessage-deflate")
+	}
+}
+
 func TestPMDNoContextDirections(t *testing.T) {
 	for _, server := range []bool{false, true} {
 		for flags := 0; flags < 4; flags++ {
@@ -297,6 +324,46 @@ func TestPMDDirectConnLocalWindowGuard(t *testing.T) {
 	}
 }
 
+func TestPMDDirectServerNegotiation(t *testing.T) {
+	p := NewPerMessageDeflateExtension(WithClientMaxWindowBits(9), WithClientNoContextTakeover())
+	raw := &memoryConn{Reader: bytes.NewReader(nil)}
+	c := NewConn(raw, true, []Extension{p})
+	defer c.conn.Close()
+	if err := p.Negotiate("permessage-deflate; client_max_window_bits"); err != nil || !p.IsEnabled() {
+		t.Fatalf("direct server peer-window negotiation = %v, enabled %t", err, p.IsEnabled())
+	}
+	if got := p.Offer(); got != "permessage-deflate; client_no_context_takeover; client_max_window_bits=9" {
+		t.Fatalf("direct server selected %q", got)
+	}
+	pmd := p.(*perMessageDeflate)
+	if !pmd.server || pmd.localNoContextTakeover() || !pmd.peerNoContextTakeover() {
+		t.Fatal("Negotiate lost the bound server role")
+	}
+	if err := c.WriteMessage(BinaryMessage, []byte("hello")); err != nil || raw.written.Len() == 0 {
+		t.Fatalf("direct server write = %v", err)
+	}
+}
+
+func TestPMDDirectServerUnsupportedParameters(t *testing.T) {
+	for _, local := range []bool{false, true} {
+		option := WithClientMaxWindowBits(9)
+		if local {
+			option = WithServerMaxWindowBits(9)
+		}
+		p := NewPerMessageDeflateExtension(option)
+		raw := &memoryConn{Reader: bytes.NewReader(nil)}
+		c := NewConn(raw, true, []Extension{p})
+		err := p.Negotiate("permessage-deflate")
+		c.conn.Close()
+		if (err != nil) != local || p.IsEnabled() || raw.written.Len() != 0 {
+			t.Fatalf("direct server local=%t: %v, enabled %t, wire %x", local, err, p.IsEnabled(), raw.written.Bytes())
+		}
+		if local && !errors.Is(err, ErrInvalidExtension) {
+			t.Fatalf("unsupported local window cause = %v", err)
+		}
+	}
+}
+
 func TestPMDIndependentZlibWindow(t *testing.T) {
 	python, err := exec.LookPath("python3")
 	if err != nil {
@@ -329,8 +396,11 @@ func TestPMDIndependentZlibWindow(t *testing.T) {
 					}
 				}
 				p := NewPerMessageDeflateExtension(options...).(*perMessageDeflate)
-				extensions, _ := parseExtensions([]string{params.String()})
-				if err := p.negotiate(extensions, server); err != nil || !p.IsEnabled() {
+				if server {
+					c := NewConn(&memoryConn{Reader: bytes.NewReader(nil)}, true, []Extension{p})
+					defer c.conn.Close()
+				}
+				if err := p.Negotiate(params.String()); err != nil || !p.IsEnabled() {
 					t.Fatal(err)
 				}
 				for repeat := 0; repeat < 2; repeat++ {

@@ -370,6 +370,10 @@ func WithMaxBytes(maxBytes int) ConnOption {
 }
 
 // NewConn creates a new WebSocket connection.
+// For a manual server handshake with the built-in compression extension, call
+// NewConn before Extension.Negotiate to establish the server role. Then negotiate
+// the client's offer and, only if Extension.IsEnabled reports true, include
+// Extension.Offer in the response before starting I/O.
 func NewConn(conn net.Conn, isServer bool, extensions []Extension, opts ...ConnOption) *Conn {
 	wsConn := &Conn{
 		conn:       conn,

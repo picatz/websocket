@@ -72,8 +72,8 @@ func (pmd *perMessageDeflate) Offer() string {
 	return pmd.offered.String()
 }
 
-// Negotiate interprets a server response, as required by direct client use.
-// Upgrade uses the offer-side path below instead.
+// Negotiate uses the role established by NewConn. Before attachment it defaults
+// to the client response path; manual servers must bind their role first.
 func (pmd *perMessageDeflate) Negotiate(response string) error {
 	var values []string
 	if response != "" {
@@ -84,7 +84,7 @@ func (pmd *perMessageDeflate) Negotiate(response string) error {
 		pmd.enabled, pmd.negotiated = false, pmdParameters{}
 		return err
 	}
-	return pmd.negotiate(extensions, false)
+	return pmd.negotiate(extensions, pmd.server)
 }
 
 func (pmd *perMessageDeflate) negotiate(extensions []extensionOffer, server bool) error {
