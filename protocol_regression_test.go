@@ -131,6 +131,10 @@ func FuzzReadMessage(f *testing.F) {
 		f.Add(wire, false)
 	}
 	f.Add([]byte{0x82, 0x80, 0, 0, 0, 0}, true)
+	f.Add([]byte{0xc2, 125}, false)
+	f.Add([]byte{0x02, 0, 0x82, 125}, false)
+	atLimit := append([]byte{0x02, 126, 4, 0}, bytes.Repeat([]byte{'a'}, 1024)...)
+	f.Add(append(atLimit, 0x8a, 0, 0x80, 1), false)
 	f.Fuzz(func(t *testing.T, wire []byte, server bool) {
 		c := frameConn(wire, server, 1024)
 		_, data, err := c.ReadMessage()

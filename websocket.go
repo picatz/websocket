@@ -558,6 +558,8 @@ func (c *Conn) SetPongHandler(handler func(appData string) error) {
 // ReadMessage reads the next complete WebSocket message. EOF before a message
 // begins is reported as io.EOF; a truncated frame or fragmented message returns
 // an error matching io.ErrUnexpectedEOF. A peer close frame also returns io.EOF.
+// A header that already proves a protocol or size violation is rejected without
+// waiting for its payload, even when that payload is absent or truncated.
 func (c *Conn) ReadMessage() (messageType Opcode, data []byte, err error) {
 	if c.closed.Load() {
 		return 0, nil, io.ErrClosedPipe
@@ -572,7 +574,13 @@ func (c *Conn) ReadMessage() (messageType Opcode, data []byte, err error) {
 	var message []byte
 	var messageTypeSet bool
 	for {
-		frame, err := c.readFrame()
+		frame, payloadLen, err := c.readFrameHeader()
+		if err == nil {
+			err = c.validateMessageHeader(frame, payloadLen, messageTypeSet, len(message))
+		}
+		if err == nil {
+			err = c.readFramePayload(frame, payloadLen)
+		}
 		if err != nil {
 			if messageTypeSet && err == io.EOF {
 				return 0, nil, io.ErrUnexpectedEOF
@@ -723,16 +731,16 @@ func (c *Conn) WriteControlFrame(opcode Opcode, data []byte) error {
 	return nil
 }
 
-// readFrame reads a single WebSocket frame from the connection.
-func (c *Conn) readFrame() (*Frame, error) {
+// readFrameHeader validates lengths and frame structure before reading a body.
+func (c *Conn) readFrameHeader() (*Frame, uint64, error) {
 	// Read the first two bytes of the frame header, which
 	// contains the FIN, RSV1, RSV2, RSV3, opcode, and mask bit.
 	var header [2]byte
 	if _, err := io.ReadFull(c.rw, header[:]); err != nil {
 		if errors.Is(err, io.EOF) {
-			return nil, io.EOF
+			return nil, 0, io.EOF
 		}
-		return nil, fmt.Errorf("failed to read frame header: %w", err)
+		return nil, 0, fmt.Errorf("failed to read frame header: %w", err)
 	}
 
 	b0 := header[0]
@@ -751,23 +759,43 @@ func (c *Conn) readFrame() (*Frame, error) {
 	switch frame.Opcode {
 	case ContinuationFrame, TextMessage, BinaryMessage, CloseMessage, PingMessage, PongMessage:
 	default:
-		return nil, ErrInvalidOpcode
+		return nil, 0, ErrInvalidOpcode
 	}
 	if frame.Masked && !c.isServer {
-		return nil, ErrMaskedFrame
+		return nil, 0, ErrMaskedFrame
 	}
 	if !frame.Masked && c.isServer {
-		return nil, ErrUnmaskedFrame
+		return nil, 0, ErrUnmaskedFrame
 	}
 
 	// Control frames must not be fragmented
 	if !frame.Final && frame.Opcode >= 0x8 {
-		return nil, ErrControlFrameFragment
+		return nil, 0, ErrControlFrameFragment
 	}
 
 	// Control frames must have payload length <= 125
 	if frame.Opcode >= 0x8 && payloadLen > 125 {
-		return nil, fmt.Errorf("%w: control frame payload too large: %d", ErrPayloadTooLarge, payloadLen)
+		return nil, 0, fmt.Errorf("%w: control frame payload too large: %d", ErrPayloadTooLarge, payloadLen)
+	}
+
+	// Built-in compression can consume RSV1 only on data message frames.
+	// An enabled custom extension owns its reserved-bit semantics, so leave
+	// those checks to the post-extension validation below.
+	if frame.Rsv1 || frame.Rsv2 || frame.Rsv3 {
+		var consumable bool
+		for _, ext := range c.extensions {
+			if !ext.IsEnabled() {
+				continue
+			}
+			if _, ok := ext.(*perMessageDeflate); !ok ||
+				(!frame.Rsv2 && !frame.Rsv3 && (frame.Opcode == TextMessage || frame.Opcode == BinaryMessage)) {
+				consumable = true
+				break
+			}
+		}
+		if !consumable {
+			return nil, 0, ErrUnsupportedExtensions
+		}
 	}
 
 	// Read extended payload length if necessary
@@ -776,40 +804,90 @@ func (c *Conn) readFrame() (*Frame, error) {
 		var extLen uint16
 		if err := binary.Read(c.rw, binary.BigEndian, &extLen); err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-				return nil, io.ErrUnexpectedEOF
+				return nil, 0, io.ErrUnexpectedEOF
 			}
-			return nil, fmt.Errorf("failed to read extended payload length: %w", err)
+			return nil, 0, fmt.Errorf("failed to read extended payload length: %w", err)
 		}
 		if extLen < 126 {
-			return nil, ErrInvalidFrame
+			return nil, 0, ErrInvalidFrame
 		}
 		payloadLen = uint64(extLen)
 	case 127:
 		var extLen uint64
 		if err := binary.Read(c.rw, binary.BigEndian, &extLen); err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-				return nil, io.ErrUnexpectedEOF
+				return nil, 0, io.ErrUnexpectedEOF
 			}
-			return nil, fmt.Errorf("failed to read extended payload length: %w", err)
+			return nil, 0, fmt.Errorf("failed to read extended payload length: %w", err)
 		}
 		if extLen >= (1<<63) || extLen < 65536 {
-			return nil, ErrInvalidFrame
+			return nil, 0, ErrInvalidFrame
 		}
 		payloadLen = extLen
 	}
 	// Validate lengths before converting to int or allocating payload storage.
 	if payloadLen > uint64(^uint(0)>>1) ||
 		(c.maxBytes > 0 && frame.Opcode < CloseMessage && payloadLen > uint64(c.maxBytes)) {
-		return nil, ErrPayloadTooLarge
+		return nil, 0, ErrPayloadTooLarge
 	}
 
+	return frame, payloadLen, nil
+}
+
+// validateMessageHeader rejects a frame before its payload is read whenever
+// its wire header determines the message state and decoded size. Custom
+// extensions may transform both, so their results are still checked by
+// ReadMessage after processing.
+func (c *Conn) validateMessageHeader(frame *Frame, payloadLen uint64, started bool, messageBytes int) error {
+	for _, ext := range c.extensions {
+		if _, builtin := ext.(*perMessageDeflate); !builtin && ext.IsEnabled() {
+			return nil
+		}
+	}
+	switch frame.Opcode {
+	case TextMessage, BinaryMessage:
+		if started {
+			return ErrUnexpectedFrame
+		}
+	case ContinuationFrame:
+		if !started {
+			return ErrUnexpectedContinuation
+		}
+	case CloseMessage:
+		if payloadLen == 1 {
+			return ErrInvalidFrame
+		}
+	}
+	// Compressed data may shrink after decoding. Continuations are not
+	// transformed by the built-in extension. Controls have their own limit
+	// and neither consume nor reset a fragmented message's remaining budget.
+	if c.maxBytes > 0 && frame.Opcode < CloseMessage && !frame.Rsv1 &&
+		payloadLen > uint64(c.maxBytes-messageBytes) {
+		return ErrPayloadTooLarge
+	}
+	return nil
+}
+
+// readFrame reads a single frame without reassembled-message state.
+func (c *Conn) readFrame() (*Frame, error) {
+	frame, payloadLen, err := c.readFrameHeader()
+	if err != nil {
+		return nil, err
+	}
+	if err := c.readFramePayload(frame, payloadLen); err != nil {
+		return nil, err
+	}
+	return frame, nil
+}
+
+func (c *Conn) readFramePayload(frame *Frame, payloadLen uint64) error {
 	// Read masking key if necessary
 	if frame.Masked {
 		if _, err := io.ReadFull(c.rw, frame.MaskKey[:]); err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-				return nil, io.ErrUnexpectedEOF
+				return io.ErrUnexpectedEOF
 			}
-			return nil, fmt.Errorf("failed to read masking key: %w", err)
+			return fmt.Errorf("failed to read masking key: %w", err)
 		}
 	}
 
@@ -820,10 +898,10 @@ func (c *Conn) readFrame() (*Frame, error) {
 		var err error
 		frame.Payload, err = io.ReadAll(io.LimitReader(c.rw, int64(payloadLen)))
 		if err != nil {
-			return nil, fmt.Errorf("failed to read payload data: %w", err)
+			return fmt.Errorf("failed to read payload data: %w", err)
 		}
 		if uint64(len(frame.Payload)) != payloadLen {
-			return nil, io.ErrUnexpectedEOF
+			return io.ErrUnexpectedEOF
 		}
 
 		// Unmask payload if necessary
@@ -842,16 +920,16 @@ func (c *Conn) readFrame() (*Frame, error) {
 				err = ext.ProcessIncomingFrame(frame)
 			}
 			if err != nil {
-				return nil, fmt.Errorf("extension %s failed to process incoming frame: %w", ext.Name(), err)
+				return fmt.Errorf("extension %s failed to process incoming frame: %w", ext.Name(), err)
 			}
 		}
 	}
 	// Extensions consume the reserved bits whose semantics they implement.
 	if frame.Rsv1 || frame.Rsv2 || frame.Rsv3 {
-		return nil, ErrUnsupportedExtensions
+		return ErrUnsupportedExtensions
 	}
 
-	return frame, nil
+	return nil
 }
 
 func validateClosePayload(payload []byte) error {
