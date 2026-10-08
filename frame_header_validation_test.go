@@ -238,7 +238,8 @@ func TestReadMessageBuiltinReservedBits(t *testing.T) {
 	for _, b0 := range []byte{0xa2, 0x92, 0xe2, 0xf2, 0xc0, 0xc8, 0xc9, 0xca} {
 		requireHeaderRejection(t, []byte{b0, 125}, false, 0, []Extension{pmd}, ErrUnsupportedExtensions)
 	}
-	// A custom extension may consume RSV2 before or after built-in processing.
+	// Enabled PMD and a legacy custom transform have no composition contract,
+	// regardless of order. Reject before either transform or body processing.
 	for _, first := range []bool{false, true} {
 		custom := &headerTransformExtension{enabled: true, process: func(f *Frame) error { f.Rsv2 = false; return nil }}
 		extensions := []Extension{pmd, custom}
@@ -247,11 +248,11 @@ func TestReadMessageBuiltinReservedBits(t *testing.T) {
 		}
 		c := frameConn([]byte{0xa2, 1, 'x'}, false, 1)
 		c.extensions = extensions
-		if _, data, err := c.ReadMessage(); err != nil || string(data) != "x" {
+		if _, data, err := c.ReadMessage(); !errors.Is(err, ErrUnsupportedExtensionComposition) || data != nil {
 			t.Fatalf("custom first %v: %q, %v", first, data, err)
 		}
 	}
-	// Enabled built-in compression does not transform continuation frames.
+	// Uncompressed continuations still consume the aggregate message budget.
 	requireHeaderRejection(t, []byte{0x02, 2, 'a', 'b', 0x80, 1}, false, 2, []Extension{pmd}, ErrPayloadTooLarge)
 }
 

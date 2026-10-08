@@ -39,8 +39,14 @@
 // # Limitations
 //
 // The optional permessage-deflate extension is experimental. Compressed message
-// fragmentation, context takeover, and DEFLATE window-size negotiation are not
-// fully implemented. Leave it disabled for production interoperability needs.
+// receive fragmentation, incoming context takeover, and consecutive finalized
+// DEFLATE streams are supported. Go's inflater may buffer up to 32 KiB of decoded
+// output before exposing it, delaying UTF-8/size rejection while input is withheld.
+// Decoded limits do not bound CPU time; use transport deadlines. Outgoing history
+// reuse is not optimized. Enabled PMD cannot be combined with enabled custom
+// extensions or another PMD instance (ErrUnsupportedExtensionComposition).
+// Direct built-in frame callbacks require complete messages; use Conn for wire
+// fragmentation. Do not run those callbacks concurrently with Conn I/O.
 // Full compression parameter compatibility remains experimental. Subprotocol offers are unique
 // HTTP tokens; any selected protocol must be exactly one case-sensitive offered
 // token. Omitting selection is allowed. Applications choose and implement their

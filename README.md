@@ -185,10 +185,24 @@ no automatic handshake timeout. Close the connection after any write error.
   case-insensitively; see `WithHeader` and `WithResponseHeader` for the lists.
   Ordinary repeated fields (including `Set-Cookie`) are preserved. Callers still
   own ordinary field-specific semantics
-- `permessage-deflate` is experimental. Independent unfragmented messages are
-  covered by tests, including a published RFC 7692 vector. Incoming compressed
-  fragmentation and context takeover are not implemented correctly. Leave
-  compression disabled when interoperability or untrusted inputs matter
+- `permessage-deflate` is experimental. The receive path streams fragmented
+  messages, supports incoming context takeover and consecutive finalized DEFLATE
+  streams, and bounds decoded output with the configured limit. It uses Go's
+  inflater, which can retain up to a 32 KiB output window before exposing data;
+  invalid UTF-8 or an exceeded small decoded limit may therefore remain hidden
+  while waiting for more compressed input. A size limit is not a CPU/time limit;
+  use transport deadlines for untrusted peers. Outgoing compression still resets
+  its history for each message and is not optimized for takeover
+- This experimental slice rejects actually enabled built-in compression combined
+  with another enabled extension, including multiple built-in instances, with
+  `ErrUnsupportedExtensionComposition`. Disabled registrations and custom-only
+  chains remain supported. General composition needs an explicit future contract
+  for message/frame transforms, ordering, and reserved-bit ownership
+- Direct built-in `ProcessIncomingFrame` and `ProcessOutgoingFrame` callbacks
+  accept complete Text/Binary messages only; nonfinal data and Continuation
+  callbacks return `ErrFragmentedCompression`. Controls and disabled callbacks
+  remain no-ops. Use `Conn` for fragmented wire messages. Do not use direct
+  callbacks concurrently with Conn I/O or share an instance between connections
 - The experimental compressor supports only a 15-bit (32 KiB) send window.
   `Dial` rejects `WithClientMaxWindowBits(8..14)` before connecting; `Upgrade`
   rejects `WithServerMaxWindowBits(8..14)` before hijacking. A server declines
