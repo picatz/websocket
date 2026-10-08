@@ -771,8 +771,9 @@ func (c *Conn) ReadMessage() (messageType Opcode, data []byte, err error) {
 
 // validUTF8Prefix validates p, allowing only a potentially valid incomplete rune
 // at its end. It returns the number of complete bytes. ReadMessage keeps those
-// trailing bytes in its existing message buffer, so each fragment is scanned
-// once, with at most three bytes carried into the next fragment and no copying.
+// trailing bytes in its existing message buffer. Each complete prefix is
+// validated once, with at most three pending bytes reconsidered per fragment
+// and no additional copying.
 func validUTF8Prefix(p []byte) (int, bool) {
 	n := len(p)
 	if n > 0 {
