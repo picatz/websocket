@@ -162,6 +162,13 @@ not be reused across connections.
 no other writer is active, then closes the transport. It does not wait for the
 peer's closing handshake. A second call returns `ErrAlreadyClosed`.
 
+`WriteControlFrame(CloseMessage, payload)` starts a closing handshake without
+closing the transport. After a successful close frame, data writes and duplicate
+close frames return `io.ErrClosedPipe`; reads and ping/pong remain available.
+Receiving the peer's close or calling `Close` closes the transport without
+sending another close frame. Call `Close` if the peer does not respond; there is
+no automatic handshake timeout. Close the connection after any write error.
+
 ## Protocol limitations
 
 - Authenticate requests and validate their `Origin` in your HTTP handler before
