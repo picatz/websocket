@@ -50,7 +50,7 @@ func TestPerMessageDeflateExactSelection(t *testing.T) {
 			if (err != nil) != tc.invalid || pmd.enabled != tc.enabled || err != nil && !errors.Is(err, ErrInvalidExtension) {
 				t.Fatalf("Negotiate(%q) = %v, enabled = %v", tc.header, err, pmd.enabled)
 			}
-			if tc.header == "other; server_max_window_bits=8, permessage-deflate" && pmd.serverMaxWindowBits != 0 {
+			if tc.header == "other; server_max_window_bits=8, permessage-deflate" && pmd.negotiated.serverMaxWindowBits != 0 {
 				t.Fatal("imported another extension's parameters")
 			}
 			if err := pmd.Negotiate(""); err != nil || pmd.enabled {

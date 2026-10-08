@@ -187,9 +187,16 @@ no automatic handshake timeout. Close the connection after any write error.
   own ordinary field-specific semantics
 - `permessage-deflate` is experimental. Independent unfragmented messages are
   covered by tests, including a published RFC 7692 vector. Incoming compressed
-  fragmentation and context takeover are not implemented correctly, and window
-  bit options do not impose DEFLATE window sizes. Leave compression disabled
-  when interoperability or untrusted inputs matter
+  fragmentation and context takeover are not implemented correctly. Leave
+  compression disabled when interoperability or untrusted inputs matter
+- The experimental compressor supports only a 15-bit (32 KiB) send window.
+  `Dial` rejects `WithClientMaxWindowBits(8..14)` before connecting; `Upgrade`
+  rejects `WithServerMaxWindowBits(8..14)` before hijacking. A server declines
+  individual offers requiring a smaller server send window and may select a
+  supported alternative. A client rejects unsupported selected send windows.
+  Peer send windows of 8–15 are accepted, but do not reduce decoder allocation.
+  Window size is independent of compression level. Values outside 8–15 retain
+  the legacy option behavior of being ignored
 - Any `ReadMessage` error terminates the connection. The detecting call preserves
   its original error; later reads and valid writes fail with `io.ErrClosedPipe`.
   Known protocol, invalid UTF-8, and configured size violations make a single
@@ -227,8 +234,12 @@ if err != nil {
 
 ## Development
 
-All tests and executable examples use in-memory connections or local loopback
+Tests and executable examples use in-memory connections or local loopback
 servers. They do not depend on public echo services or external credentials.
+`TestPMDIndependentZlibWindow` additionally uses Python 3's standard-library
+`zlib` module as an independent window oracle, and reports a skip if Python 3
+is absent. The Go library has no additional runtime dependency. This check
+covers independent unfragmented messages, not complete PMD conformance.
 
 ```console
 go test ./...
