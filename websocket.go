@@ -25,6 +25,7 @@ import (
 )
 
 var (
+	ErrInvalidExtension        = errors.New("websocket: invalid extension negotiation")
 	ErrInvalidSubprotocol      = errors.New("websocket: invalid subprotocol negotiation")
 	ErrBadHandshake            = errors.New("websocket: bad handshake")
 	ErrUnsupportedVersion      = errors.New("websocket: unsupported WebSocket version")
@@ -101,9 +102,14 @@ type Frame struct {
 type Extension interface {
 	// Name returns the extension name.
 	Name() string
-	// Offer returns the extension offer string for the handshake.
+	// Offer returns the extension offer string for Dial, or the selected
+	// response after successful negotiation in Upgrade. Offers may contain
+	// comma-separated alternatives. Both paths validate the returned syntax.
 	Offer() string
-	// Negotiate negotiates the extension parameters based on the response from the peer.
+	// Negotiate receives the peer's complete, comma-joined extension header,
+	// or an empty string if it is absent. Dial and Upgrade validate its syntax
+	// and reject unoffered selections. The extension must validate its own
+	// parameters and repetition semantics, and disable itself if not negotiated.
 	Negotiate(response string) error
 	// ProcessOutgoingFrame allows the extension to modify outgoing frames.
 	ProcessOutgoingFrame(frame *Frame) error
@@ -151,37 +157,90 @@ func (pmd *perMessageDeflate) Offer() string {
 }
 
 func (pmd *perMessageDeflate) Negotiate(response string) error {
-	if strings.Contains(response, "permessage-deflate") {
+	var values []string
+	if response != "" {
+		values = []string{response}
+	}
+	extensions, err := parseExtensions(values)
+	if err != nil {
+		pmd.enabled = false
+		return err
+	}
+	return pmd.negotiate(extensions, false)
+}
+
+// A client response selects one configuration; a server may choose one of
+// several independent offers (RFC 7692 section 7.1.3).
+func (pmd *perMessageDeflate) negotiate(extensions []extensionOffer, server bool) error {
+	pmd.enabled = false
+	var selected bool
+	for _, ext := range extensions {
+		if ext.name != pmd.Name() {
+			continue
+		}
+		if selected && !server {
+			return fmt.Errorf("%w: repeated permessage-deflate selection", ErrInvalidExtension)
+		}
+		selected = true
+	}
+	// Repeated names above are only invalid in a response, not an offer.
+	// Server offers are considered independently below.
+	for _, ext := range extensions {
+		if ext.name != pmd.Name() {
+			continue
+		}
+		if err := pmd.negotiateParameters(ext.params, server); err != nil {
+			if server {
+				continue
+			}
+			return err
+		}
 		pmd.enabled = true
-		// Parse parameters
-		params := parseExtensionParams(response)
-		if _, ok := params["client_no_context_takeover"]; ok {
-			pmd.clientNoContextTakeover = true
+		return nil
+	}
+	return nil
+}
+
+func (pmd *perMessageDeflate) negotiateParameters(params []extensionParameter, server bool) error {
+	clientNoContext, serverNoContext := pmd.clientNoContextTakeover, pmd.serverNoContextTakeover
+	clientWindow, serverWindow := pmd.clientMaxWindowBits, pmd.serverMaxWindowBits
+	seen := make(map[string]bool, len(params))
+	for _, param := range params {
+		if seen[param.name] {
+			return fmt.Errorf("%w: repeated permessage-deflate parameter %q", ErrInvalidExtension, param.name)
 		}
-		if _, ok := params["server_no_context_takeover"]; ok {
-			pmd.serverNoContextTakeover = true
-		}
-		if val, ok := params["client_max_window_bits"]; ok {
-			if val == "" {
-				// The server is asking the client to choose the window size
-				// We'll use the default of 15
-				pmd.clientMaxWindowBits = 15
+		seen[param.name] = true
+		switch param.name {
+		case "client_no_context_takeover", "server_no_context_takeover":
+			if param.hasValue {
+				return fmt.Errorf("%w: permessage-deflate flag %q has a value", ErrInvalidExtension, param.name)
+			}
+			if param.name == "client_no_context_takeover" {
+				clientNoContext = true
 			} else {
-				bits, err := strconv.Atoi(val)
-				if err != nil || bits < 8 || bits > 15 {
-					return fmt.Errorf("invalid client_max_window_bits: %v", val)
+				serverNoContext = true
+			}
+		case "client_max_window_bits", "server_max_window_bits":
+			bits := 15
+			if !(server && param.name == "client_max_window_bits" && !param.hasValue) {
+				var err error
+				bits, err = strconv.Atoi(param.value)
+				if err != nil || bits < 8 || bits > 15 || strconv.Itoa(bits) != param.value {
+					return fmt.Errorf("%w: invalid permessage-deflate parameter %q", ErrInvalidExtension, param.name)
 				}
-				pmd.clientMaxWindowBits = bits
 			}
-		}
-		if val, ok := params["server_max_window_bits"]; ok {
-			bits, err := strconv.Atoi(val)
-			if err != nil || bits < 8 || bits > 15 {
-				return fmt.Errorf("invalid server_max_window_bits: %v", val)
+			if param.name == "client_max_window_bits" {
+				clientWindow = bits
+			} else {
+				serverWindow = bits
 			}
-			pmd.serverMaxWindowBits = bits
+		default:
+			return fmt.Errorf("%w: unknown permessage-deflate parameter %q", ErrInvalidExtension, param.name)
 		}
 	}
+	// Commit only a complete configuration, never parts of a rejected offer.
+	pmd.clientNoContextTakeover, pmd.serverNoContextTakeover = clientNoContext, serverNoContext
+	pmd.clientMaxWindowBits, pmd.serverMaxWindowBits = clientWindow, serverWindow
 	return nil
 }
 
@@ -318,27 +377,6 @@ func (pmd *perMessageDeflate) serverMaxWindowBitsToLevel() int {
 		return (pmd.serverMaxWindowBits - 7) // windowBits 8 maps to level 1
 	}
 	return flate.DefaultCompression
-}
-
-// parseExtensionParams parses the extension parameters from the header value.
-func parseExtensionParams(s string) map[string]string {
-	params := make(map[string]string)
-	parts := strings.Split(s, ";")
-	for _, part := range parts[1:] { // Skip the extension name
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		if strings.Contains(part, "=") {
-			kv := strings.SplitN(part, "=", 2)
-			key := strings.TrimSpace(kv[0])
-			value := strings.TrimSpace(kv[1])
-			params[key] = value
-		} else {
-			params[part] = ""
-		}
-	}
-	return params
 }
 
 // PerMessageDeflateOption represents an option for permessage-deflate extension.
@@ -991,6 +1029,11 @@ func Dial(ctx context.Context, urlStr string, options ...DialOption) (ws *Conn, 
 		return nil, nil, fmt.Errorf("%w: %w", ErrInvalidHandshakeHeader, err)
 	}
 
+	extOffer, offeredExtensions, err := extensionOffers(opts.extensions)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: %w", ErrInvalidHandshakeHeader, err)
+	}
+
 	u, err := url.Parse(urlStr)
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: invalid URL: %v", ErrBadHandshake, err)
@@ -1068,13 +1111,9 @@ func Dial(ctx context.Context, urlStr string, options ...DialOption) (ws *Conn, 
 	reqBuilder.WriteString("Sec-WebSocket-Key: " + key + "\r\n")
 	reqBuilder.WriteString("Sec-WebSocket-Version: 13\r\n")
 
-	// Handle extensions
-	if len(opts.extensions) > 0 {
-		var offers []string
-		for _, ext := range opts.extensions {
-			offers = append(offers, ext.Offer())
-		}
-		reqBuilder.WriteString("Sec-WebSocket-Extensions: " + strings.Join(offers, ", ") + "\r\n")
+	// Offers were validated before connecting, including extension-produced values.
+	if extOffer != "" {
+		reqBuilder.WriteString("Sec-WebSocket-Extensions: " + extOffer + "\r\n")
 	}
 
 	// Custom headers
@@ -1132,12 +1171,22 @@ func Dial(ctx context.Context, urlStr string, options ...DialOption) (ws *Conn, 
 		return nil, resp, err
 	}
 
-	// Negotiate extensions
-	extHeader := resp.Header.Get("Sec-WebSocket-Extensions")
+	// Validate the complete selection before calling any extension. In
+	// particular, no configured extensions means no selections are allowed.
+	extValues := extensionValues(resp.Header)
+	selectedExtensions, err := parseExtensions(extValues)
+	if err == nil {
+		err = validateExtensionSelection(selectedExtensions, offeredExtensions)
+	}
+	if err != nil {
+		conn.Close()
+		return nil, resp, err
+	}
+	extHeader := strings.Join(extValues, ", ")
 	for _, ext := range opts.extensions {
 		if err := ext.Negotiate(extHeader); err != nil {
 			conn.Close()
-			return nil, resp, fmt.Errorf("failed to negotiate extension %s: %v", ext.Name(), err)
+			return nil, resp, fmt.Errorf("%w: extension %s: %w", ErrInvalidExtension, ext.Name(), err)
 		}
 	}
 
@@ -1243,20 +1292,39 @@ func Upgrade(w http.ResponseWriter, r *http.Request, options ...UpgradeOption) (
 		responseHeader = make(http.Header)
 	}
 
-	var acceptedExtensions []string
-	if len(opts.extensions) > 0 {
-		extHeader := r.Header.Get("Sec-WebSocket-Extensions")
-		for _, ext := range opts.extensions {
-			if err := ext.Negotiate(extHeader); err != nil {
-				return nil, fmt.Errorf("failed to negotiate extension %s: %v", ext.Name(), err)
-			}
-			if ext.IsEnabled() {
-				acceptedExtensions = append(acceptedExtensions, ext.Offer())
-			}
+	extValues := extensionValues(r.Header)
+	offeredExtensions, err := parseExtensions(extValues)
+	if err != nil {
+		return nil, err
+	}
+	extHeader := strings.Join(extValues, ", ")
+	var acceptedExtensions []Extension
+	for _, ext := range opts.extensions {
+		if ext == nil {
+			return nil, fmt.Errorf("%w: nil extension", ErrInvalidExtension)
 		}
-		if len(acceptedExtensions) > 0 {
-			responseHeader.Add("Sec-WebSocket-Extensions", strings.Join(acceptedExtensions, ", "))
+		var err error
+		if pmd, ok := ext.(*perMessageDeflate); ok {
+			err = pmd.negotiate(offeredExtensions, true)
+		} else {
+			err = ext.Negotiate(extHeader)
 		}
+		if err != nil {
+			return nil, fmt.Errorf("%w: extension %s: %w", ErrInvalidExtension, ext.Name(), err)
+		}
+		if ext.IsEnabled() {
+			acceptedExtensions = append(acceptedExtensions, ext)
+		}
+	}
+	selection, selectedExtensions, err := extensionOffers(acceptedExtensions)
+	if err == nil {
+		err = validateExtensionSelection(selectedExtensions, offeredExtensions)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalidHandshakeHeader, err)
+	}
+	if selection != "" {
+		responseHeader.Set("Sec-WebSocket-Extensions", selection)
 	}
 
 	// Hijack the connection
