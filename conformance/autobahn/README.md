@@ -1,0 +1,176 @@
+# Autobahn conformance evidence
+
+This is a repeatable **informational baseline**, not a claim of complete RFC
+6455 compliance. The driver exercises this module's public `Dial`, `Upgrade`,
+`ReadMessage`, `WriteMessage`, and `Close` entry points. It does not repair
+frames, supply protocol-error close codes, or bypass production validation.
+An application closes after a read/write error, as currently documented by the
+library. Any remaining protocol failures belong in separate, focused fixes.
+
+## Reproduce
+
+Requirements: Go matching `go.mod`, Python 3 (standard library only), and Docker
+on a Linux-capable host. The image is pinned for linux/amd64. Docker Desktop can
+use its Linux VM; other architectures require working amd64 emulation. No
+Docker daemon is installed or configured by these scripts.
+
+From the repository root, use a **new, empty** output directory each time:
+
+```sh
+python3 -m unittest discover -s conformance/autobahn -p 'test_*.py'
+go test -race ./conformance/autobahn/cmd/...
+python3 conformance/autobahn/run.py --role server --profile core --output /tmp/ws-server-core
+python3 conformance/autobahn/run.py --role client --profile core --output /tmp/ws-client-core
+```
+
+Repeat both roles with `--profile limits` and `--profile compression`, each
+with its own output directory, for all three disjoint selections. Use
+`--shard-size 1` for server compression, as the hosted workflow does:
+
+```sh
+python3 conformance/autobahn/run.py --role server --profile compression --shard-size 1 --output /tmp/ws-server-compression
+python3 conformance/autobahn/run.py --role client --profile compression --output /tmp/ws-client-compression
+```
+
+A role names
+the Go implementation being tested: `server` runs Autobahn's `fuzzingclient`,
+and `client` runs its `fuzzingserver`.
+
+The `Autobahn baseline` workflow runs all six combinations for pull requests and
+pushes to `main` that change this harness, the protocol implementation, or
+`go.mod`, and through
+**Actions → Autobahn baseline → Run workflow** after the workflow is on the
+default branch. PR jobs check out the exact PR head commit. Unrelated
+documentation and library-test-only changes do not automatically run this
+expensive baseline.
+The existing test workflow remains the ordinary correctness gate.
+
+## Selections and limits
+
+| Profile | Selected | Explicit exclusions | Compression |
+| --- | --- | --- | --- |
+| core | `*` | `9.*`, `12.*`, `13.*` | Disabled, the library default |
+| limits | `9.*` | None within that selection | Disabled |
+| compression | `12.*`, `13.*` | None within that selection | Explicitly enabled, experimental |
+
+Each artifact contains the exact spec and the authoritative runtime inventory
+from the pinned suite's `CaseSet.parseSpecCases`. The excluded inventory lists
+all cases outside that run's selection. No agent-specific exclusions or
+known-failure exclusions are allowed. Compression being `UNIMPLEMENTED` is a
+skip, not a passing test. Compression results cannot establish default-mode
+conformance, and default-mode results cannot establish RFC 7692 support.
+
+Server compression partitions the authoritative selected inventory into
+deterministic single-case shards. Both peers restart in a fresh isolated
+container per shard, sequentially within one job. The binary and pinned image
+are prepared once. The aggregate deadline remains 20 minutes, not 20 minutes
+per shard. Every shard keeps its config, resource diagnostics, logs, and raw
+reports. Aggregation must account for exactly the full selected inventory with
+no duplicate, missing, or unexpected IDs; protocol failures are kept as results.
+An infrastructure failure stops the remaining shards and makes the aggregate
+incomplete, with the stopping cause and missing cases preserved. Core, limits,
+and client-compression selections remain unsharded.
+
+In the aggregate, `reported` counts observed raw rows and `classified` counts
+fully validated evidence. Invalid detail files or resource-failed shards retain
+their original observations but cannot contribute an OK/FAILED verdict or case
+link; `unvalidated_case_ids` identifies them explicitly. After the execution
+deadline, cleanup alone may use three bounded 10-second Docker calls to kill,
+inspect, and remove the last container. No new shard receives more time.
+
+For an explicitly partial diagnosis, `--case 12.1.9 --profile compression`
+selects exactly that case and records it separately. It cannot be combined with
+sharding and must never be presented as full-profile evidence.
+
+All profiles deliberately set a **test-only 64 MiB message cap** and a 20-minute
+whole-run deadline. The per-connection watchdog is 60 seconds for core and 600
+seconds for limits/compression, which contain upstream 480-second cases. These values allow
+the suite's large messages while bounding this disposable test infrastructure.
+They do not test the library's unlimited default or prove resource-policy
+defaults safe. Watchdog expirations are logged and can influence close results;
+inspect them before attributing failures to protocol handling. Limits timings
+are diagnostics, not controlled performance benchmarks.
+
+## Isolation and provenance
+
+Both peers run inside the same container with Docker `--network none`. Only its
+loopback interface is used; no host ports are published. The Go driver rejects
+DNS names and non-loopback addresses. The container has a read-only root,
+dropped capabilities, no-new-privileges, a non-root host UID, a 128-process cap,
+two CPUs, 1 GiB memory with no additional swap, and a bounded temporary mount.
+Only the test binary, this harness, and generated config are mounted read-only;
+only the report directory is writable. No Docker socket, credentials, checkout,
+or external targets are passed into the container. Pulling the official image
+occurs on the host before this network-disabled run.
+
+The legacy suite runs with `PYPY_GC_MAX=512MB` (512 MiB in PyPy's parser),
+recorded in `metadata.json`. This starts more frequent collection near that
+GC-managed heap limit and can raise `MemoryError` or terminate if exhausted.
+It does not cap total RSS, change the Go testee's runtime, raise the shared
+1 GiB container cap, or suppress OOM failures. This is baseline-generation
+infrastructure, not a production tuning recommendation or performance result.
+See [official PyPy GC configuration](https://doc.pypy.org/gc_info.html#environment-variables)
+and the [pinned runtime implementation](https://github.com/pypy/pypy/blob/release-pypy2.7-v7.3.20/rpython/memory/gc/incminimark.py).
+
+The unconfigured diagnostic run at
+[`6671ff9`](https://github.com/picatz/websocket/actions/runs/37842946446)
+reached server-compression case `12.1.8`, then exhausted the 1 GiB container:
+Docker recorded `OOMKilled=true`, cgroup `oom_kill=1`, and a peak of
+1,073,741,824 bytes. No compression report was produced. That run remains
+incomplete evidence, not 216 protocol failures; its original artifact is kept
+separately from subsequent configured runs. A completed run must still pass
+all inventory/detail completeness checks below.
+
+The [configured unsharded run](https://github.com/picatz/websocket/actions/runs/37843864438)
+also exhausted the container, at case `12.1.9`. The
+[isolated case diagnostic](https://github.com/picatz/websocket/actions/runs/37844611572)
+then completed that single case with both outcomes OK, zero OOM kills, and a
+387,620,864-byte cgroup peak. That justified testing bounded shards; it did not
+establish a full compression result or prove a specific allocation root cause.
+
+Pinned suite:
+
+- Image: `crossbario/autobahn-testsuite:25.10.1@sha256:519915fb568b04c9383f70a1c405ae3ff44ab9e35835b085239c258b6fac3074`
+- [Official Docker Hub manifest and build metadata](https://hub.docker.com/layers/crossbario/autobahn-testsuite/25.10.1/images/sha256-519915fb568b04c9383f70a1c405ae3ff44ab9e35835b085239c258b6fac3074)
+- [Upstream release revision](https://github.com/crossbario/autobahn-testsuite/tree/6ed6f439dc7ed0d7432fe2cf7481b110905ecc5c), tag `v25.10.1`
+- [Official usage and legacy-runtime explanation](https://github.com/crossbario/autobahn-testsuite/blob/v25.10.1/README.md)
+- [Result/control protocol source](https://github.com/crossbario/autobahn-testsuite/blob/v25.10.1/autobahntestsuite/autobahntestsuite/fuzzing.py)
+- [Case selection source](https://github.com/crossbario/autobahn-testsuite/blob/v25.10.1/autobahntestsuite/autobahntestsuite/caseset.py)
+
+Upstream intentionally preserves a Python 2-era reference environment. The
+runner verifies version/revision image labels, saves Docker inspection data,
+and records actual suite/Python versions rather than trusting runtime versions
+mentioned in prose. Update the digest and revision together only after checking
+the official image and reviewing any changes to cases/result semantics.
+
+## Reading a baseline
+
+Artifacts include `metadata.json` (testee commit, dirty-tree status, Go version,
+image/revision, options, exit status), `command.json`, image/container inspection,
+available cgroup memory/OOM counters, unbuffered suite output, config,
+selected/excluded case IDs, raw HTML/JSON reports, suite/testee logs, and
+`reports/summary.json` plus a short Markdown summary. GitHub retains them for
+30 days. Download and preserve an artifact if it must remain release evidence.
+
+The summary records `behavior` and `behaviorClose` **independently**, including
+every non-OK row. `FAILED` and `UNCLEAN` are failures; `UNIMPLEMENTED` is skipped.
+`NON-STRICT`, `WRONG CODE`, `FAILED BY CLIENT`, and `INFORMATIONAL` stay visible
+as their own categories. Treating every non-OK value as a protocol failure would
+misrepresent upstream's classifications. A green informational job means the
+run/report was complete; it does **not** mean every selected case passed.
+
+Missing, unexpected, empty, malformed, or unknown-status reports fail the job,
+as do container failures, timeouts, and Docker/cgroup OOM-kill evidence even if
+the container otherwise exits zero. A PyPy `MemoryError` is a resource failure;
+inspect the raw logs when classifying a new baseline. Known protocol failures are
+reported without failing all of main. There is no badge or allowed-failure
+list. Establish a reviewed baseline before proposing a stricter regression
+gate. The summarizer has independent synthetic tests for both result dimensions,
+missing/unexpected cases, warnings, skips, and unknown outcomes.
+
+Autobahn is one source of evidence. Its opening-handshake coverage is incomplete;
+keep the repository's targeted handshake/security tests. This run is not a real
+Chrome/Firefox/WebKit interoperability test, an RFC certification, a security
+audit, or a statement about licensing/provenance. Known upstream limitations
+must remain visible in interpretation, including [case 7.7.8's server close-code
+1010 question](https://github.com/crossbario/autobahn-testsuite/issues/123).
