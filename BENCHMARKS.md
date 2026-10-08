@@ -93,3 +93,80 @@ allocations do not mean zero stack cost.
 References: [Go testing](https://pkg.go.dev/testing),
 [Go profiling](https://go.dev/blog/pprof), and
 [RFC 6455 masking](https://www.rfc-editor.org/rfc/rfc6455.html#section-5.3).
+
+## Diagnostic snapshot: 2026-10-08
+
+This snapshot compares production `cfa54a56ea737b0dc9af2d44a0b02894fcd19931`
+with a local prototype that changes only `xor` to the portable word candidate.
+The benchmark harness is `98ac0afb64abaa9b701e17dde95cacffaad9c87b`.
+It does not describe later changes to message reading or establish deployment
+capacity. Re-measure the complete paths when those implementations change.
+
+Environment: Go 1.27.1, linux/amd64, GOAMD64=v1, Intel Xeon Platinum 8573C on
+shared cloud hardware. Known competing local jobs were stopped. Mask/read/write
+runs used CPU affinity 4 and GOMAXPROCS=1; transport used CPUs 4–5 and
+GOMAXPROCS=2. There were ten samples per case: 150 ms for memory-source/framing
+benchmarks and 200 ms for transport. Before/after order alternated between
+pairs. Mask variants were interleaved across ten complete sweeps. An initial
+unpinned sweep showed severe drift and was excluded from these comparisons.
+
+Representative observed median times (microseconds per operation):
+
+| Workload | Scalar baseline | Word prototype | Interpretation |
+| --- | ---: | ---: | --- |
+| 4 KiB masked ReadMessage, one frame | 12.31 | 7.87 | Lower in-memory processing time |
+| 64 KiB masked ReadMessage, four frames | 185.47 | 139.69 | Lower in-memory processing time |
+| 4 KiB client WriteMessage to discard | 6.82 | 2.90 | Lower framing/masking time |
+| 64 KiB client WriteMessage to discard | 108.37 | 32.07 | Lower framing/masking time |
+| 16-byte client WriteMessage to discard | 0.275 | 0.288 | No demonstrated improvement |
+| 64 KiB unmasked ReadMessage, one frame | 68.55 | 89.14 | Unchanged-code control; noisy |
+| 64 KiB client-to-server loopback TCP | 366.14 | 427.20 | No demonstrated improvement |
+
+These are workload-specific observations, not guaranteed speedups. Transport
+measurements and some unchanged-code controls were noisy even after pinning.
+All six TCP medians worsened (roughly 5–25%), and the 16-byte masked
+net.Pipe median worsened by 22%. Transport results are inconclusive; regressions
+cannot be ruled out, so this does not establish a general latency improvement. For example, the distribution-free
+median interval for the 64 KiB TCP case was 303.91–509.10 µs before versus
+247.91–1383.55 µs after. For the 64 KiB discard write it was 89.35–126.35 µs
+before versus 24.11–49.15 µs after. Ten samples give these order-statistic
+intervals 97.85% nominal coverage under independent sampling; shared-host drift
+and temporal dependence can weaken that interpretation. Exploratory rank-test p-values in the raw summary
+are unadjusted for multiple comparisons; do not interpret them as a release
+performance guarantee.
+
+Heap allocation did not improve: a 64 KiB single-frame ReadMessage still
+allocated 203,736 B in 21 allocations; four fragments used 300,848 B in 71
+allocations. Reading the same single frame without assembling a message used
+138,200 B in 20 allocations. The extra complete-message copy accounts for
+exactly one payload-sized allocation. The 1 MiB message case used 3,276,632 B
+in 29 allocations. These are cumulative allocation totals, not retained memory.
+
+Separate five-second profiles support the identified hotspot: in the 64 KiB
+client discard-write workload, masking accounted for approximately 69% of flat
+CPU samples before and 28% after. In the masked read workload, masking fell
+from approximately 43% to 9% of flat CPU samples. In the latter allocation
+profile, io.ReadAll accounted for roughly 68% of allocated bytes and complete
+message assembly for 32%. Allocation/copying is a separate next optimization
+problem; any change must retain bounded reads for untrusted declared lengths.
+
+### SIMD decision
+
+For an aligned (offset 0), cache-hot 64 KiB buffer, median isolated mask times were
+80.44 µs (scalar production), 9.73 µs (portable word), and 4.42 µs (stdlib
+XORBytes candidate). At 1 MiB they were 1305.26, 166.47, and 81.82 µs.
+For offset 1, scalar versus word masking was 80.99 versus 10.56 µs at 64 KiB.
+The stdlib experiment therefore shows potential additional large-buffer gains.
+At 1025 bytes, however, the word candidate took 0.169 µs versus 0.192 µs for
+the stdlib candidate. The portable word loop also adds about 1–2 ns at tiny
+0–7-byte sizes in this indirect-call harness; that tradeoff is not hidden.
+
+All mask variants allocated zero heap bytes. Compiler inspection showed that
+the stdlib experiment reserves a 1,120-byte stack frame on amd64, including
+its small-input fallback, versus no local scratch buffer for the word loop.
+No full-path stdlib-candidate improvement was measured, and no ARM64 runtime
+measurements were made. The simpler portable word loop is the candidate for further validation, but
+transport regression uncertainty must be resolved before shipping it. A
+production SIMD path needs its own complete-message proof and architecture/stack
+cost assessment; this snapshot does not justify custom assembly or an
+application-visible SIMD option.
