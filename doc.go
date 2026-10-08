@@ -32,7 +32,8 @@
 // fragmentation, context takeover, and DEFLATE window-size negotiation are not
 // fully implemented. Leave it disabled for production interoperability needs.
 // Subprotocol and extension handshake validation is incomplete. Custom headers
-// are serialized verbatim and must be trusted and validated. After a read or
+// reject invalid HTTP syntax and reserved fields before dialing or hijacking;
+// callers still own field-specific semantics. After a read or
 // protocol error, the caller should close the connection rather than resume
 // reading. Focused regression tests do not establish full RFC conformance.
 //
