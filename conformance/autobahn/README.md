@@ -1,5 +1,10 @@
 # Autobahn conformance evidence
 
+> Temporary diagnostic checkpoint, not ready to merge: the hosted workflow
+> currently runs only server-compression case `12.1.9` to distinguish per-case
+> memory demand from accumulation. This is explicitly partial coverage. Restore
+> the complete matrix with reconciled bounded shards before accepting this PR.
+
 This is a repeatable **informational baseline**, not a claim of complete RFC
 6455 compliance. The driver exercises this module's public `Dial`, `Upgrade`,
 `ReadMessage`, `WriteMessage`, and `Close` entry points. It does not repair
@@ -121,7 +126,9 @@ misrepresent upstream's classifications. A green informational job means the
 run/report was complete; it does **not** mean every selected case passed.
 
 Missing, unexpected, empty, malformed, or unknown-status reports fail the job,
-as do container failures and timeouts. Known baseline protocol failures are
+as do container failures, timeouts, and Docker/cgroup OOM-kill evidence even if
+the container otherwise exits zero. A PyPy `MemoryError` is a resource failure;
+inspect the raw logs when classifying a new baseline. Known protocol failures are
 reported without failing all of main. There is no badge or allowed-failure
 list. Establish a reviewed baseline before proposing a stricter regression
 gate. The summarizer has independent synthetic tests for both result dimensions,

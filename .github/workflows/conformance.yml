@@ -1,4 +1,4 @@
-name: Autobahn baseline
+name: Autobahn single-case memory probe
 
 on:
   workflow_dispatch:
@@ -15,14 +15,16 @@ permissions:
 
 jobs:
   baseline:
-    name: ${{ matrix.role }} / ${{ matrix.profile }} (informational)
+    name: ${{ matrix.role }} / ${{ matrix.profile }} / case ${{ matrix.case }} (partial diagnostic)
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
-        role: [server, client]
-        profile: [core, compression, limits]
+        include:
+          - role: server
+            profile: compression
+            case: '12.1.9'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -38,7 +40,7 @@ jobs:
           go test -race ./conformance/autobahn/cmd/...
           python3 -m unittest discover -s conformance/autobahn -p 'test_*.py'
       - name: Run isolated baseline
-        run: python3 conformance/autobahn/run.py --role '${{ matrix.role }}' --profile '${{ matrix.profile }}' --output '${{ runner.temp }}/autobahn'
+        run: python3 conformance/autobahn/run.py --role '${{ matrix.role }}' --profile '${{ matrix.profile }}' --case '${{ matrix.case }}' --output '${{ runner.temp }}/autobahn'
       - name: Summarize outcomes
         if: always()
         run: |
@@ -51,7 +53,7 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
-          name: autobahn-${{ matrix.role }}-${{ matrix.profile }}-${{ github.event.pull_request.head.sha || github.sha }}
+          name: autobahn-${{ matrix.role }}-${{ matrix.profile }}-case-${{ matrix.case }}-${{ github.event.pull_request.head.sha || github.sha }}
           path: ${{ runner.temp }}/autobahn
           if-no-files-found: error
           retention-days: 30

@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Build and run one isolated Autobahn role/profile on a Docker-capable host."""
 import argparse
+from fnmatch import fnmatchcase
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 
@@ -25,10 +27,47 @@ def run(*args, **kwargs):
     return subprocess.run(args, check=True, text=True, **kwargs)
 
 
+def selection(profile, case):
+    spec = dict(PROFILES[profile])
+    if case:
+        if (not re.fullmatch(r"[0-9]+(?:\.[0-9]+)+", case)
+                or not any(fnmatchcase(case, pattern) for pattern in spec["cases"])
+                or any(fnmatchcase(case, pattern) for pattern in spec["exclude-cases"])):
+            raise ValueError("diagnostic case must be one exact ID within the selected profile")
+        spec["cases"] = [case]
+    return spec
+
+
+def resource_diagnostics(output):
+    """An OOM is an infrastructure failure even if a shell later exits zero."""
+    inspection = json.loads((output / "container-inspect.json").read_text())
+    if len(inspection) != 1 or not isinstance(inspection[0].get("State", {}).get("OOMKilled"), bool):
+        raise ValueError("missing or malformed container OOM state")
+    result = {"container_oom_killed": inspection[0]["State"]["OOMKilled"]}
+    events = output / "reports" / "memory.events"
+    if events.is_file():
+        counters = {}
+        for line in events.read_text().splitlines():
+            name, count = line.split()
+            counters[name] = int(count)
+            if counters[name] < 0:
+                raise ValueError("negative cgroup memory counter")
+        if "oom_kill" not in counters:
+            raise ValueError("cgroup memory events omit oom_kill")
+        result["cgroup_memory_events"] = counters
+    peak = output / "reports" / "memory.peak"
+    if peak.is_file():
+        result["cgroup_memory_peak_bytes"] = int(peak.read_text())
+    result["oom_failure"] = (result["container_oom_killed"]
+                             or result.get("cgroup_memory_events", {}).get("oom_kill", 0) > 0)
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--role", choices=["server", "client"], required=True)
     parser.add_argument("--profile", choices=PROFILES, required=True)
+    parser.add_argument("--case", default="", help="one exact case ID for an explicitly partial diagnostic")
     parser.add_argument("--output", type=Path, required=True,
                         help="new/empty directory; prior reports are never reused")
     args = parser.parse_args()
@@ -43,9 +82,11 @@ def main():
     config.mkdir()
     reports.mkdir()
     agent = "picatz-websocket-" + args.role + "-" + args.profile
+    if args.case:
+        agent += "-case-" + args.case
     compression = args.profile == "compression"
     case_timeout = 60 if args.profile == "core" else 600
-    spec = dict(PROFILES[args.profile], **{"exclude-agent-cases": {}, "outdir": "/reports"})
+    spec = dict(selection(args.profile, args.case), **{"exclude-agent-cases": {}, "outdir": "/reports"})
     if args.role == "server":
         spec["servers"] = [{"agent": agent, "url": "ws://127.0.0.1:9001"}]
     else:
@@ -68,6 +109,7 @@ def main():
         "go_version": run("go", "version", capture_output=True).stdout.strip(),
         "image": IMAGE, "suite_source": SOURCE, "role": args.role,
         "profile": args.profile, "agent": agent, "compression_enabled": compression,
+        "diagnostic_case": args.case or None, "profile_selection": PROFILES[args.profile],
         "max_message_bytes": 64 << 20, "case_timeout_seconds": case_timeout,
         "run_timeout_seconds": 1200, "network": "none (container loopback only)",
         "suite_environment": {"PYPY_GC_MAX": PYPY_GC_MAX,
@@ -108,6 +150,10 @@ def main():
         (output / "container-inspect.json").write_text(state.stdout or state.stderr)
         subprocess.run(["docker", "rm", "-f", name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         (output / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
+    metadata["resource_diagnostics"] = resource_diagnostics(output)
+    (output / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
+    if metadata["resource_diagnostics"]["oom_failure"]:
+        raise SystemExit("container OOM: incomplete resource evidence, not a protocol verdict")
     # Protocol failures are evidence, not an all-pass gate during baseline work.
     # Missing/malformed/unknown reports and container failures still fail the job.
     run(sys.executable, str(HERE / "summarize.py"), str(reports), "--agent", agent)
