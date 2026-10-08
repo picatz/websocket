@@ -1117,7 +1117,7 @@ func Dial(ctx context.Context, urlStr string, options ...DialOption) (ws *Conn, 
 		return nil, resp, ErrInvalidUpgradeHeader
 	}
 	accept := resp.Header.Get("Sec-WebSocket-Accept")
-	if accept == "" {
+	if accept == "" || len(resp.Header.Values("Sec-WebSocket-Accept")) != 1 {
 		conn.Close()
 		return nil, resp, ErrInvalidSecAccept
 	}
@@ -1215,7 +1215,7 @@ func Upgrade(w http.ResponseWriter, r *http.Request, options ...UpgradeOption) (
 	if !r.ProtoAtLeast(1, 1) {
 		return nil, ErrBadHandshake
 	}
-	if r.Header.Get("Sec-WebSocket-Version") != "13" {
+	if r.Header.Get("Sec-WebSocket-Version") != "13" || len(r.Header.Values("Sec-WebSocket-Version")) != 1 {
 		return nil, ErrUnsupportedVersion
 	}
 	key := r.Header.Get("Sec-WebSocket-Key")
