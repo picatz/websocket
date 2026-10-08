@@ -46,9 +46,13 @@
 // token. Omitting selection is allowed. Applications choose and implement their
 // subprotocols. Custom headers
 // reject invalid HTTP syntax and reserved fields before dialing or hijacking;
-// callers still own field-specific semantics. After a read or
-// protocol error, the caller should close the connection rather than resume
-// reading. Focused regression tests do not establish full RFC conformance.
+// callers still own field-specific semantics. Every ReadMessage error terminates
+// the connection while preserving the detecting call's original error. Protocol
+// failures notify the peer when the writer and extension encoding are safe, then
+// abort transport I/O without changing caller deadlines. The notification effort
+// is bounded to one second for default transports. Custom callbacks and transport
+// Close implementations, including wrappers hiding TLS, may still block.
+// Focused regression tests do not establish full RFC conformance.
 //
 // See the executable examples for local client/server usage.
 //

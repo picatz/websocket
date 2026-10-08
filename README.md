@@ -190,9 +190,20 @@ no automatic handshake timeout. Close the connection after any write error.
   fragmentation and context takeover are not implemented correctly, and window
   bit options do not impose DEFLATE window sizes. Leave compression disabled
   when interoperability or untrusted inputs matter
-- Close the connection after any read/protocol error. Invalid frames are reported
-  as errors; the library does not implement a complete protocol-error closing
-  state machine
+- Any `ReadMessage` error terminates the connection. The detecting call preserves
+  its original error; later reads and writes fail with `io.ErrClosedPipe`.
+  Known protocol, invalid UTF-8, and configured size violations make a single
+  best-effort Close notification with status 1002, 1007, or 1009 when the writer
+  is idle and safe. A busy or failed writer, transport/callback error, or enabled
+  custom extension instead causes an immediate transport abort. No additional
+  peer data is processed after failure
+- Automatic failure notification has a one-second transport-abort watchdog and
+  preserves existing transport deadlines. For `Dial` and concrete `*tls.Conn`
+  inputs to `NewConn`/`Upgrade`, abnormal shutdown closes the raw transport;
+  ordinary and valid-peer closure retain TLS shutdown behavior. A custom
+  transport or an outer wrapper hiding TLS may block in `Close`; trusted
+  extension/handler callbacks can also block. These cannot be bounded by the
+  library
 - The tests are focused regressions and local round trips, not a full RFC 6455 or
   RFC 7692 compliance certification
 
