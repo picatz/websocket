@@ -88,7 +88,8 @@ the official image and reviewing any changes to cases/result semantics.
 ## Reading a baseline
 
 Artifacts include `metadata.json` (testee commit, dirty-tree status, Go version,
-image/revision, options, exit status), `command.json`, image inspection, config,
+image/revision, options, exit status), `command.json`, image/container inspection,
+available cgroup memory/OOM counters, unbuffered suite output, config,
 selected/excluded case IDs, raw HTML/JSON reports, suite/testee logs, and
 `reports/summary.json` plus a short Markdown summary. GitHub retains them for
 30 days. Download and preserve an artifact if it must remain release evidence.

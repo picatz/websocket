@@ -72,13 +72,13 @@ def main():
     (output / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
     name = "websocket-autobahn-" + str(os.getpid())
     command = [
-        "docker", "run", "--name", name, "--rm", "--platform", "linux/amd64",
+        "docker", "run", "--name", name, "--platform", "linux/amd64",
         "--network", "none", "--read-only", "--cap-drop", "ALL",
         "--security-opt", "no-new-privileges", "--pids-limit", "128",
         "--memory", "1g", "--memory-swap", "1g", "--cpus", "2",
         "--user", str(os.getuid()) + ":" + str(os.getgid()),
         "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m",
-        "--env", "PYTHONDONTWRITEBYTECODE=1", "--env", "HOME=/tmp",
+        "--env", "PYTHONDONTWRITEBYTECODE=1", "--env", "PYTHONUNBUFFERED=1", "--env", "HOME=/tmp",
         "--mount", "type=bind,src=" + str(output / "testee") + ",dst=/testee,readonly",
         "--mount", "type=bind,src=" + str(HERE) + ",dst=/harness,readonly",
         "--mount", "type=bind,src=" + str(config) + ",dst=/config,readonly",
@@ -95,7 +95,11 @@ def main():
         metadata["container_timed_out"] = True
         raise
     finally:
-        # Force-removal is only for this invocation's disposable container.
+        # Stop this invocation's container, preserve exit/OOM diagnostics, then
+        # remove it. --rm would discard the evidence needed to diagnose a kill.
+        subprocess.run(["docker", "kill", name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        state = subprocess.run(["docker", "inspect", name], text=True, capture_output=True)
+        (output / "container-inspect.json").write_text(state.stdout or state.stderr)
         subprocess.run(["docker", "rm", "-f", name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         (output / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
     # Protocol failures are evidence, not an all-pass gate during baseline work.
