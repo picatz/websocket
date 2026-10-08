@@ -1482,6 +1482,10 @@ func WithUpgradeMaxMessageSize(maxBytes int) UpgradeOption {
 }
 
 // Upgrade upgrades the HTTP server connection to a WebSocket connection.
+// It requires an HTTP/1.1 connection with hijacking support. Middleware may
+// implement http.Hijacker directly or expose the underlying http.ResponseWriter
+// through an Unwrap() http.ResponseWriter method, as used by http.ResponseController.
+// A writer's own Hijack method takes precedence over Unwrap. HTTP/2 is not supported.
 func Upgrade(w http.ResponseWriter, r *http.Request, options ...UpgradeOption) (*Conn, error) {
 	opts := &upgradeOptions{}
 	opts.apply(options)
@@ -1569,13 +1573,17 @@ func Upgrade(w http.ResponseWriter, r *http.Request, options ...UpgradeOption) (
 		responseHeader.Set("Sec-WebSocket-Extensions", selection)
 	}
 
-	// Hijack the connection
+	// Preserve direct Hijacker errors and use the standard controller to reach
+	// hijacking support through middleware that exposes Unwrap.
 	hj, ok := w.(http.Hijacker)
 	if !ok {
-		return nil, ErrNotHijacker
+		hj = http.NewResponseController(w)
 	}
 	conn, bufrw, err := hj.Hijack()
 	if err != nil {
+		if !ok && errors.Is(err, http.ErrNotSupported) {
+			return nil, ErrNotHijacker
+		}
 		return nil, fmt.Errorf("%w: %v", ErrHandshakeFailed, err)
 	}
 
