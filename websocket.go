@@ -16,7 +16,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -120,128 +119,19 @@ type Extension interface {
 	IsEnabled() bool
 }
 
-// perMessageDeflate implements permessage-deflate as an Extension.
+// perMessageDeflate implements the experimental permessage-deflate extension.
+// Configuration, the actual client offer, and the agreed response are distinct.
 type perMessageDeflate struct {
 	enabled bool
+	server  bool
 
-	// Compression options
-	clientNoContextTakeover bool
-	serverNoContextTakeover bool
-
-	serverMaxWindowBits int // Allowed values: 8-15
-	clientMaxWindowBits int // Allowed values: 8-15
+	configured pmdParameters
+	offered    pmdParameters
+	offerSet   bool
+	negotiated pmdParameters
 
 	flateReaderPool sync.Pool
 	flateWriterPool sync.Pool
-}
-
-func (pmd *perMessageDeflate) Name() string {
-	return "permessage-deflate"
-}
-
-func (pmd *perMessageDeflate) Offer() string {
-	params := []string{"permessage-deflate"}
-	if pmd.clientNoContextTakeover {
-		params = append(params, "client_no_context_takeover")
-	}
-	if pmd.serverNoContextTakeover {
-		params = append(params, "server_no_context_takeover")
-	}
-	if pmd.clientMaxWindowBits > 0 {
-		params = append(params, fmt.Sprintf("client_max_window_bits=%d", pmd.clientMaxWindowBits))
-	}
-	if pmd.serverMaxWindowBits > 0 {
-		params = append(params, fmt.Sprintf("server_max_window_bits=%d", pmd.serverMaxWindowBits))
-	}
-	return strings.Join(params, "; ")
-}
-
-func (pmd *perMessageDeflate) Negotiate(response string) error {
-	var values []string
-	if response != "" {
-		values = []string{response}
-	}
-	extensions, err := parseExtensions(values)
-	if err != nil {
-		pmd.enabled = false
-		return err
-	}
-	return pmd.negotiate(extensions, false)
-}
-
-// A client response selects one configuration; a server may choose one of
-// several independent offers (RFC 7692 section 7.1.3).
-func (pmd *perMessageDeflate) negotiate(extensions []extensionOffer, server bool) error {
-	pmd.enabled = false
-	var selected bool
-	for _, ext := range extensions {
-		if ext.name != pmd.Name() {
-			continue
-		}
-		if selected && !server {
-			return fmt.Errorf("%w: repeated permessage-deflate selection", ErrInvalidExtension)
-		}
-		selected = true
-	}
-	// Repeated names above are only invalid in a response, not an offer.
-	// Server offers are considered independently below.
-	for _, ext := range extensions {
-		if ext.name != pmd.Name() {
-			continue
-		}
-		if err := pmd.negotiateParameters(ext.params, server); err != nil {
-			if server {
-				continue
-			}
-			return err
-		}
-		pmd.enabled = true
-		return nil
-	}
-	return nil
-}
-
-func (pmd *perMessageDeflate) negotiateParameters(params []extensionParameter, server bool) error {
-	clientNoContext, serverNoContext := pmd.clientNoContextTakeover, pmd.serverNoContextTakeover
-	clientWindow, serverWindow := pmd.clientMaxWindowBits, pmd.serverMaxWindowBits
-	seen := make(map[string]bool, len(params))
-	for _, param := range params {
-		if seen[param.name] {
-			return fmt.Errorf("%w: repeated permessage-deflate parameter %q", ErrInvalidExtension, param.name)
-		}
-		seen[param.name] = true
-		switch param.name {
-		case "client_no_context_takeover", "server_no_context_takeover":
-			if param.hasValue {
-				return fmt.Errorf("%w: permessage-deflate flag %q has a value", ErrInvalidExtension, param.name)
-			}
-			if param.name == "client_no_context_takeover" {
-				clientNoContext = true
-			} else {
-				serverNoContext = true
-			}
-		case "client_max_window_bits", "server_max_window_bits":
-			bits := 15
-			if !(server && param.name == "client_max_window_bits" && !param.hasValue) {
-				var err error
-				bits, err = strconv.Atoi(param.value)
-				if err != nil || bits < 8 || bits > 15 || strconv.Itoa(bits) != param.value {
-					return fmt.Errorf("%w: invalid permessage-deflate parameter %q", ErrInvalidExtension, param.name)
-				}
-			}
-			if param.name == "client_max_window_bits" {
-				clientWindow = bits
-			} else {
-				serverWindow = bits
-			}
-		default:
-			return fmt.Errorf("%w: unknown permessage-deflate parameter %q", ErrInvalidExtension, param.name)
-		}
-	}
-	// Commit only a complete configuration, never parts of a rejected offer.
-	pmd.clientNoContextTakeover, pmd.serverNoContextTakeover = clientNoContext, serverNoContext
-	pmd.clientMaxWindowBits, pmd.serverMaxWindowBits = clientWindow, serverWindow
-	return nil
 }
 
 func (pmd *perMessageDeflate) IsEnabled() bool {
@@ -251,6 +141,10 @@ func (pmd *perMessageDeflate) IsEnabled() bool {
 func (pmd *perMessageDeflate) ProcessOutgoingFrame(frame *Frame) error {
 	if !pmd.enabled || (frame.Opcode != TextMessage && frame.Opcode != BinaryMessage) {
 		return nil
+	}
+
+	if err := pmd.negotiated.validateLocalWindow(pmd.server); err != nil {
+		return err
 	}
 
 	// Compress the payload
@@ -325,22 +219,23 @@ func (pmd *perMessageDeflate) processIncomingFrame(frame *Frame, maxBytes int) e
 // getWriter retrieves or creates a flate.Writer, resetting it if necessary.
 func (pmd *perMessageDeflate) getWriter(buf *bytes.Buffer) *flate.Writer {
 	var w *flate.Writer
-	if pmd.serverNoContextTakeover {
-		w, _ = flate.NewWriter(buf, pmd.serverMaxWindowBitsToLevel())
+	if pmd.localNoContextTakeover() {
+		w, _ = flate.NewWriter(buf, flate.DefaultCompression)
 	} else {
 		if v := pmd.flateWriterPool.Get(); v != nil {
 			w = v.(*flate.Writer)
 			w.Reset(buf)
 		} else {
-			w, _ = flate.NewWriter(buf, pmd.serverMaxWindowBitsToLevel())
+			w, _ = flate.NewWriter(buf, flate.DefaultCompression)
 		}
 	}
 	return w
 }
 
-// putWriter returns the flate.Writer to the pool if context takeover is enabled.
+// putWriter reuses allocations when local no-context mode is not selected.
+// Reset still discards history; pooling does not implement context takeover.
 func (pmd *perMessageDeflate) putWriter(w *flate.Writer) {
-	if !pmd.serverNoContextTakeover {
+	if !pmd.localNoContextTakeover() {
 		pmd.flateWriterPool.Put(w)
 	}
 }
@@ -348,7 +243,7 @@ func (pmd *perMessageDeflate) putWriter(w *flate.Writer) {
 // getReader retrieves or creates a flate.Reader, resetting it if necessary.
 func (pmd *perMessageDeflate) getReader(r io.Reader) io.ReadCloser {
 	var fr io.ReadCloser
-	if pmd.clientNoContextTakeover {
+	if pmd.peerNoContextTakeover() {
 		fr = flate.NewReader(r)
 	} else {
 		if v := pmd.flateReaderPool.Get(); v != nil {
@@ -362,21 +257,12 @@ func (pmd *perMessageDeflate) getReader(r io.Reader) io.ReadCloser {
 	return fr
 }
 
-// putReader returns the flate.Reader to the pool if context takeover is enabled.
+// putReader reuses allocations when peer no-context mode is not selected.
+// Reset still discards history; incoming context takeover remains incomplete.
 func (pmd *perMessageDeflate) putReader(r io.ReadCloser) {
-	if !pmd.clientNoContextTakeover {
+	if !pmd.peerNoContextTakeover() {
 		pmd.flateReaderPool.Put(r)
 	}
-}
-
-// serverMaxWindowBitsToLevel converts the serverMaxWindowBits to a compression level.
-func (pmd *perMessageDeflate) serverMaxWindowBitsToLevel() int {
-	// Go's flate package uses levels from 1 (BestSpeed) to 9 (BestCompression)
-	// Map window bits 8-15 to levels 1-9
-	if pmd.serverMaxWindowBits >= 8 && pmd.serverMaxWindowBits <= 15 {
-		return (pmd.serverMaxWindowBits - 7) // windowBits 8 maps to level 1
-	}
-	return flate.DefaultCompression
 }
 
 // PerMessageDeflateOption represents an option for permessage-deflate extension.
@@ -385,36 +271,43 @@ type PerMessageDeflateOption func(*perMessageDeflate)
 // WithClientNoContextTakeover sets the client_no_context_takeover option.
 func WithClientNoContextTakeover() PerMessageDeflateOption {
 	return func(pmd *perMessageDeflate) {
-		pmd.clientNoContextTakeover = true
+		pmd.configured.clientNoContextTakeover = true
 	}
 }
 
 // WithServerNoContextTakeover sets the server_no_context_takeover option.
 func WithServerNoContextTakeover() PerMessageDeflateOption {
 	return func(pmd *perMessageDeflate) {
-		pmd.serverNoContextTakeover = true
+		pmd.configured.serverNoContextTakeover = true
 	}
 }
 
 // WithClientMaxWindowBits sets the client_max_window_bits option.
+// Dial supports only 15 for its local compressor; 8-14 fail before connecting.
+// Upgrade can request any peer window from 8 to 15, but declines offers that
+// do not permit the requested constraint. Values outside 8-15 are ignored.
 func WithClientMaxWindowBits(bits int) PerMessageDeflateOption {
 	return func(pmd *perMessageDeflate) {
 		if bits >= 8 && bits <= 15 {
-			pmd.clientMaxWindowBits = bits
+			pmd.configured.clientMaxWindowBits = bits
 		}
 	}
 }
 
 // WithServerMaxWindowBits sets the server_max_window_bits option.
+// Dial can request any peer window from 8 to 15. Upgrade supports only 15 for
+// its local compressor; 8-14 fail before hijacking. Values outside 8-15 are ignored.
 func WithServerMaxWindowBits(bits int) PerMessageDeflateOption {
 	return func(pmd *perMessageDeflate) {
 		if bits >= 8 && bits <= 15 {
-			pmd.serverMaxWindowBits = bits
+			pmd.configured.serverMaxWindowBits = bits
 		}
 	}
 }
 
-// NewPerMessageDeflateExtension creates a new permessage-deflate extension with optional settings.
+// NewPerMessageDeflateExtension creates an opt-in, experimental compression extension.
+// Incoming compressed fragmentation and context takeover remain incomplete.
+// Create a separate instance for each connection.
 func NewPerMessageDeflateExtension(options ...PerMessageDeflateOption) Extension {
 	pmd := &perMessageDeflate{
 		flateReaderPool: sync.Pool{
@@ -477,12 +370,22 @@ func WithMaxBytes(maxBytes int) ConnOption {
 }
 
 // NewConn creates a new WebSocket connection.
+// For a manual server handshake with the built-in compression extension, call
+// NewConn before Extension.Negotiate to establish the server role. Then negotiate
+// the client's offer and, only if Extension.IsEnabled reports true, include
+// Extension.Offer in the response before starting I/O.
 func NewConn(conn net.Conn, isServer bool, extensions []Extension, opts ...ConnOption) *Conn {
 	wsConn := &Conn{
 		conn:       conn,
 		rw:         bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn)),
 		isServer:   isServer,
 		extensions: extensions,
+	}
+
+	for _, ext := range extensions {
+		if pmd, ok := ext.(*perMessageDeflate); ok {
+			pmd.server = isServer
+		}
 	}
 
 	wsConn.abortConn = conn
@@ -1360,6 +1263,9 @@ func Dial(ctx context.Context, urlStr string, options ...DialOption) (ws *Conn, 
 		return nil, nil, fmt.Errorf("%w: %w", ErrInvalidHandshakeHeader, err)
 	}
 
+	if err := validatePMDConfiguration(opts.extensions, false); err != nil {
+		return nil, nil, fmt.Errorf("%w: %w", ErrInvalidHandshakeHeader, err)
+	}
 	extOffer, offeredExtensions, err := extensionOffers(opts.extensions)
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: %w", ErrInvalidHandshakeHeader, err)
@@ -1619,6 +1525,10 @@ func Upgrade(w http.ResponseWriter, r *http.Request, options ...UpgradeOption) (
 		return nil, fmt.Errorf("%w: %w", ErrInvalidHandshakeHeader, err)
 	}
 	acceptKey := computeAcceptKey(key)
+
+	if err := validatePMDConfiguration(opts.extensions, true); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalidHandshakeHeader, err)
+	}
 
 	// Handle extensions
 	var responseHeader http.Header
