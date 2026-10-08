@@ -546,8 +546,9 @@ func (c *Conn) SetPongHandler(handler func(appData string) error) {
 // an error matching io.ErrUnexpectedEOF. A peer close frame also returns io.EOF.
 // A header that already proves a protocol or size violation is rejected without
 // waiting for its payload, even when that payload is absent or truncated.
-// Invalid text is rejected after each decoded fragment, as soon as its bytes
-// cannot form valid UTF-8. An incomplete rune may span fragments and controls.
+// Without registered extensions, invalid text is rejected as its payload arrives.
+// With extensions, text is checked after each decoded fragment. An incomplete
+// rune may span network reads, fragments, and controls.
 // Any error makes the connection terminal: later reads and writes fail. Known
 // protocol and size violations send an appropriate best-effort Close when safe,
 // then abort the transport. Notification uses at most one second without changing
@@ -579,8 +580,14 @@ func (c *Conn) ReadMessage() (messageType Opcode, data []byte, err error) {
 		if err == nil {
 			err = c.validateMessageHeader(frame, payloadLen, messageTypeSet, len(message))
 		}
+		var checkedText bool
+		var pending int
 		if err == nil {
-			err = c.readFramePayload(frame, payloadLen)
+			// Extensions may transform payload, opcode, or FIN. Even registered
+			// disabled extensions keep the complete-frame, post-decode path.
+			checkedText = len(c.extensions) == 0 && (frame.Opcode == TextMessage ||
+				(frame.Opcode == ContinuationFrame && messageType == TextMessage))
+			pending, err = c.readFramePayloadText(frame, payloadLen, checkedText, message[validated:])
 		}
 		if err != nil {
 			if messageTypeSet && err == io.EOF {
@@ -603,8 +610,14 @@ func (c *Conn) ReadMessage() (messageType Opcode, data []byte, err error) {
 
 			message = append(message, frame.Payload...)
 			if messageType == TextMessage {
-				n, valid := validUTF8Prefix(message[validated:])
-				validated += n
+				valid := true
+				if checkedText {
+					validated = len(message) - pending
+				} else {
+					var n int
+					n, valid = validUTF8Prefix(message[validated:])
+					validated += n
+				}
 				if !valid || (frame.Final && validated != len(message)) {
 					return 0, nil, failWith(StatusInvalidFramePayloadData, ErrInvalidFrame)
 				}
@@ -622,8 +635,14 @@ func (c *Conn) ReadMessage() (messageType Opcode, data []byte, err error) {
 			}
 			message = append(message, frame.Payload...)
 			if messageType == TextMessage {
-				n, valid := validUTF8Prefix(message[validated:])
-				validated += n
+				valid := true
+				if checkedText {
+					validated = len(message) - pending
+				} else {
+					var n int
+					n, valid = validUTF8Prefix(message[validated:])
+					validated += n
+				}
 				if !valid || (frame.Final && validated != len(message)) {
 					return 0, nil, failWith(StatusInvalidFramePayloadData, ErrInvalidFrame)
 				}
@@ -913,13 +932,24 @@ func (c *Conn) readFrame() (*Frame, error) {
 }
 
 func (c *Conn) readFramePayload(frame *Frame, payloadLen uint64) error {
+	_, err := c.readFramePayloadText(frame, payloadLen, false, nil)
+	return err
+}
+
+// readFramePayloadText optionally validates an extension-free text payload as
+// bytes arrive. tail contains at most three incomplete UTF-8 bytes from the
+// previous frame; the returned count carries them across empty continuations.
+func (c *Conn) readFramePayloadText(frame *Frame, payloadLen uint64, checkText bool, tail []byte) (pending int, err error) {
+	if checkText {
+		pending = len(tail)
+	}
 	// Read masking key if necessary
 	if frame.Masked {
 		if _, err := io.ReadFull(c.rw, frame.MaskKey[:]); err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-				return io.ErrUnexpectedEOF
+				return 0, io.ErrUnexpectedEOF
 			}
-			return fmt.Errorf("failed to read masking key: %w", err)
+			return 0, fmt.Errorf("failed to read masking key: %w", err)
 		}
 	}
 
@@ -927,17 +957,27 @@ func (c *Conn) readFramePayload(frame *Frame, payloadLen uint64) error {
 	if payloadLen > 0 {
 		// Grow with bytes actually received, never with an untrusted length
 		// declaration alone, including when no application limit was set.
-		var err error
-		frame.Payload, err = io.ReadAll(io.LimitReader(c.rw, int64(payloadLen)))
+		if checkText {
+			r := &textPayloadReader{r: c.rw.Reader, remaining: int64(payloadLen), key: frame.MaskKey, masked: frame.Masked}
+			r.pending = byte(copy(r.carry[:], tail))
+			frame.Payload, err = io.ReadAll(r)
+			pending = int(r.pending)
+		} else {
+			frame.Payload, err = io.ReadAll(io.LimitReader(c.rw, int64(payloadLen)))
+		}
 		if err != nil {
-			return fmt.Errorf("failed to read payload data: %w", err)
+			// Preserve the typed protocol failure for failRead's close mapping.
+			if _, invalid := err.(*readFailure); invalid {
+				return 0, err
+			}
+			return 0, fmt.Errorf("failed to read payload data: %w", err)
 		}
 		if uint64(len(frame.Payload)) != payloadLen {
-			return io.ErrUnexpectedEOF
+			return 0, io.ErrUnexpectedEOF
 		}
 
 		// Unmask payload if necessary
-		if frame.Masked {
+		if frame.Masked && !checkText {
 			xor(frame.MaskKey[:], frame.Payload)
 		}
 	}
@@ -954,18 +994,79 @@ func (c *Conn) readFramePayload(frame *Frame, payloadLen uint64) error {
 			if err != nil {
 				cause := fmt.Errorf("extension %s failed to process incoming frame: %w", ext.Name(), err)
 				if _, builtin := ext.(*perMessageDeflate); builtin && err == ErrPayloadTooLarge {
-					return failWith(StatusMessageTooBig, cause)
+					return 0, failWith(StatusMessageTooBig, cause)
 				}
-				return cause
+				return 0, cause
 			}
 		}
 	}
 	// Extensions consume the reserved bits whose semantics they implement.
 	if frame.Rsv1 || frame.Rsv2 || frame.Rsv3 {
-		return failWith(StatusProtocolError, ErrUnsupportedExtensions)
+		return 0, failWith(StatusProtocolError, ErrUnsupportedExtensions)
 	}
 
-	return nil
+	return pending, nil
+}
+
+// textPayloadReader bounds a single frame without preallocating from its wire
+// length. Only newly received bytes are unmasked and validated. The mask phase
+// resets each frame, while carry bridges an incomplete rune across frames.
+type textPayloadReader struct {
+	r         *bufio.Reader
+	remaining int64
+	key       [4]byte
+	carry     [utf8.UTFMax]byte
+	phase     byte
+	pending   byte
+	masked    bool
+}
+
+func (r *textPayloadReader) Read(p []byte) (int, error) {
+	if r.remaining <= 0 {
+		return 0, io.EOF
+	}
+	if int64(len(p)) > r.remaining {
+		p = p[:r.remaining]
+	}
+	n, err := r.r.Read(p)
+	r.remaining -= int64(n)
+	if n > 0 {
+		if r.masked {
+			key := [4]byte{r.key[r.phase], r.key[(r.phase+1)&3], r.key[(r.phase+2)&3], r.key[(r.phase+3)&3]}
+			xor(key[:], p[:n])
+			r.phase = (r.phase + byte(n&3)) & 3
+		}
+		// Invalid bytes prove a protocol failure even if this read also
+		// delivered a transport error. Otherwise preserve that error.
+		if !r.check(p[:n]) {
+			return n, failWith(StatusInvalidFramePayloadData, ErrInvalidFrame)
+		}
+	}
+	return n, err
+}
+
+func (r *textPayloadReader) check(p []byte) bool {
+	// Complete the previous chunk's rune with at most three new bytes.
+	for r.pending > 0 && len(p) > 0 {
+		r.carry[r.pending] = p[0]
+		r.pending++
+		p = p[1:]
+		if utf8.FullRune(r.carry[:r.pending]) {
+			if !utf8.Valid(r.carry[:r.pending]) {
+				return false
+			}
+			r.pending = 0
+		}
+	}
+	if r.pending > 0 {
+		return true
+	}
+	n, valid := validUTF8Prefix(p)
+	if !valid {
+		return false
+	}
+	r.pending = byte(copy(r.carry[:], p[n:]))
+	return true
 }
 
 func validateClosePayload(payload []byte) error {
