@@ -27,6 +27,7 @@ import (
 var (
 	ErrBadHandshake            = errors.New("websocket: bad handshake")
 	ErrUnsupportedVersion      = errors.New("websocket: unsupported WebSocket version")
+	ErrInvalidHandshakeHeader  = errors.New("websocket: invalid custom handshake header")
 	ErrInvalidUpgradeHeader    = errors.New("websocket: invalid Upgrade header")
 	ErrInvalidConnectionHeader = errors.New("websocket: invalid Connection header")
 	ErrMissingSecKey           = errors.New("websocket: missing Sec-WebSocket-Key header")
@@ -931,6 +932,11 @@ func WithExtensions(extensions ...Extension) DialOption {
 }
 
 // WithHeader sets custom headers for the WebSocket handshake.
+// Dial rejects invalid HTTP field names/values and fields managed by the
+// handshake: Host, Upgrade, Connection, Sec-WebSocket-Key, Sec-WebSocket-Version,
+// and Sec-WebSocket-Extensions. Content-Length and Transfer-Encoding are also
+// forbidden because the handshake has no HTTP body. Names are case-insensitive.
+// Repeated ordinary fields are preserved; the caller owns their semantics.
 func WithHeader(header http.Header) DialOption {
 	return func(opts *dialOptions) {
 		opts.header = header
@@ -958,6 +964,10 @@ func WithMaxMessageSize(maxBytes int) DialOption {
 func Dial(ctx context.Context, urlStr string, options ...DialOption) (ws *Conn, response *http.Response, err error) {
 	opts := &dialOptions{}
 	opts.apply(options)
+
+	if err := validateHandshakeHeaders(opts.header, false); err != nil {
+		return nil, nil, err
+	}
 
 	u, err := url.Parse(urlStr)
 	if err != nil {
@@ -1136,6 +1146,11 @@ func WithUpgradeExtensions(extensions ...Extension) UpgradeOption {
 }
 
 // WithResponseHeader sets custom headers for the WebSocket handshake response.
+// Upgrade rejects invalid HTTP field names/values and fields managed by the
+// handshake: Upgrade, Connection, Sec-WebSocket-Accept, and
+// Sec-WebSocket-Extensions. Content-Length and Transfer-Encoding are also
+// forbidden in a 101 response. Names are case-insensitive. Repeated ordinary
+// fields, such as Set-Cookie, are preserved; the caller owns their semantics.
 func WithResponseHeader(header http.Header) UpgradeOption {
 	return func(opts *upgradeOptions) {
 		opts.responseHeader = header
@@ -1154,6 +1169,10 @@ func WithUpgradeMaxMessageSize(maxBytes int) UpgradeOption {
 func Upgrade(w http.ResponseWriter, r *http.Request, options ...UpgradeOption) (*Conn, error) {
 	opts := &upgradeOptions{}
 	opts.apply(options)
+
+	if err := validateHandshakeHeaders(opts.responseHeader, true); err != nil {
+		return nil, err
+	}
 
 	if !headerContains(r.Header, "Connection", "Upgrade") {
 		return nil, ErrInvalidConnectionHeader
@@ -1247,6 +1266,46 @@ func Upgrade(w http.ResponseWriter, r *http.Request, options ...UpgradeOption) (
 	ws := NewConn(conn, true, opts.extensions, WithMaxBytes(opts.maxBytes))
 	ws.rw = bufrw
 	return ws, nil
+}
+
+// validateHandshakeHeaders checks caller fields before acquiring a transport.
+// Field names use the HTTP token alphabet; values follow net/http's allowance
+// for HTAB, visible ASCII, and obs-text, excluding every other control byte.
+// Do not include field values in errors: they may contain credentials or cookies.
+func validateHandshakeHeaders(header http.Header, response bool) error {
+	for name, values := range header {
+		if name == "" {
+			return fmt.Errorf("%w: empty field name", ErrInvalidHandshakeHeader)
+		}
+		for i := 0; i < len(name); i++ {
+			c := name[i]
+			if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+				(c >= '0' && c <= '9') || strings.ContainsRune("!#$%&'*+-.^_`|~", rune(c))) {
+				return fmt.Errorf("%w: invalid field name %q", ErrInvalidHandshakeHeader, name)
+			}
+		}
+		reserved := false
+		switch strings.ToLower(name) {
+		case "upgrade", "connection", "sec-websocket-extensions", "content-length", "transfer-encoding":
+			reserved = true
+		case "host", "sec-websocket-key", "sec-websocket-version":
+			reserved = !response
+		case "sec-websocket-accept":
+			reserved = response
+		}
+		if reserved {
+			return fmt.Errorf("%w: reserved field %q", ErrInvalidHandshakeHeader, name)
+		}
+		for _, value := range values {
+			for i := 0; i < len(value); i++ {
+				c := value[i]
+				if (c < ' ' && c != '\t') || c == 0x7f {
+					return fmt.Errorf("%w: invalid value for field %q", ErrInvalidHandshakeHeader, name)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // computeAcceptKey computes the Sec-WebSocket-Accept value.

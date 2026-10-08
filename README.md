@@ -167,9 +167,12 @@ peer's closing handshake. A second call returns `ErrAlreadyClosed`.
 - Authenticate requests and validate their `Origin` in your HTTP handler before
   calling `Upgrade`. This package does not enforce an origin policy
 - Subprotocol and extension negotiation is not comprehensively validated
-- Custom request/response headers are serialized verbatim. Only pass trusted,
-  validated header names and values; reject CR/LF and do not supply reserved
-  WebSocket handshake headers through these options
+- Custom request/response headers reject invalid HTTP field names and values
+  (including CR/LF, NUL, and other forbidden control bytes) before dialing or
+  hijacking. Generated handshake fields and HTTP body-framing fields are reserved
+  case-insensitively; see `WithHeader` and `WithResponseHeader` for the lists.
+  Ordinary repeated fields (including `Set-Cookie`) are preserved. Callers still
+  own field-specific semantics, including subprotocol selection
 - `permessage-deflate` is experimental. Independent unfragmented messages are
   covered by tests, including a published RFC 7692 vector. Incoming compressed
   fragmentation and context takeover are not implemented correctly, and window
