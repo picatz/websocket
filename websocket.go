@@ -643,6 +643,8 @@ func (c *Conn) SetPongHandler(handler func(appData string) error) {
 // an error matching io.ErrUnexpectedEOF. A peer close frame also returns io.EOF.
 // A header that already proves a protocol or size violation is rejected without
 // waiting for its payload, even when that payload is absent or truncated.
+// Invalid text is rejected after each decoded fragment, as soon as its bytes
+// cannot form valid UTF-8. An incomplete rune may span fragments and controls.
 // Any error makes the connection terminal: later reads and writes fail. Known
 // protocol and size violations send an appropriate best-effort Close when safe,
 // then abort the transport. Notification uses at most one second without changing
@@ -667,6 +669,7 @@ func (c *Conn) ReadMessage() (messageType Opcode, data []byte, err error) {
 	}()
 
 	var message []byte
+	var validated int // Complete UTF-8 bytes; at most three bytes remain pending.
 	var messageTypeSet bool
 	for {
 		frame, payloadLen, err := c.readFrameHeader()
@@ -696,10 +699,14 @@ func (c *Conn) ReadMessage() (messageType Opcode, data []byte, err error) {
 			}
 
 			message = append(message, frame.Payload...)
-			if frame.Final {
-				if messageType == TextMessage && !utf8.Valid(message) {
+			if messageType == TextMessage {
+				n, valid := validUTF8Prefix(message[validated:])
+				validated += n
+				if !valid || (frame.Final && validated != len(message)) {
 					return 0, nil, failWith(StatusInvalidFramePayloadData, ErrInvalidFrame)
 				}
+			}
+			if frame.Final {
 				return messageType, message, nil
 			}
 
@@ -711,10 +718,14 @@ func (c *Conn) ReadMessage() (messageType Opcode, data []byte, err error) {
 				return 0, nil, failWith(StatusMessageTooBig, ErrPayloadTooLarge)
 			}
 			message = append(message, frame.Payload...)
-			if frame.Final {
-				if messageType == TextMessage && !utf8.Valid(message) {
+			if messageType == TextMessage {
+				n, valid := validUTF8Prefix(message[validated:])
+				validated += n
+				if !valid || (frame.Final && validated != len(message)) {
 					return 0, nil, failWith(StatusInvalidFramePayloadData, ErrInvalidFrame)
 				}
+			}
+			if frame.Final {
 				return messageType, message, nil
 			}
 
@@ -756,6 +767,27 @@ func (c *Conn) ReadMessage() (messageType Opcode, data []byte, err error) {
 			return 0, nil, failWith(StatusProtocolError, fmt.Errorf("%w: %d", ErrInvalidOpcode, frame.Opcode))
 		}
 	}
+}
+
+// validUTF8Prefix validates p, allowing only a potentially valid incomplete rune
+// at its end. It returns the number of complete bytes. ReadMessage keeps those
+// trailing bytes in its existing message buffer, so each fragment is scanned
+// once, with at most three bytes carried into the next fragment and no copying.
+func validUTF8Prefix(p []byte) (int, bool) {
+	n := len(p)
+	if n > 0 {
+		start := n - 1
+		for start > 0 && n-start < utf8.UTFMax && !utf8.RuneStart(p[start]) {
+			start--
+		}
+		// FullRune also reports true for invalid encodings, including invalid
+		// short prefixes (such as ED A0). Only a prefix that could become a
+		// valid rune is left pending for the next fragment.
+		if !utf8.FullRune(p[start:]) {
+			n = start
+		}
+	}
+	return n, utf8.Valid(p[:n])
 }
 
 // WriteMessage writes a WebSocket message. Transport errors match ErrWriteFailed
