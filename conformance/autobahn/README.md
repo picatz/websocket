@@ -1,10 +1,5 @@
 # Autobahn conformance evidence
 
-> Temporary diagnostic checkpoint, not ready to merge: the hosted workflow
-> currently runs only server-compression case `12.1.9` to distinguish per-case
-> memory demand from accumulation. This is explicitly partial coverage. Restore
-> the complete matrix with reconciled bounded shards before accepting this PR.
-
 This is a repeatable **informational baseline**, not a claim of complete RFC
 6455 compliance. The driver exercises this module's public `Dial`, `Upgrade`,
 `ReadMessage`, `WriteMessage`, and `Close` entry points. It does not repair
@@ -29,7 +24,15 @@ python3 conformance/autobahn/run.py --role client --profile core --output /tmp/w
 ```
 
 Repeat both roles with `--profile limits` and `--profile compression`, each
-with its own output directory, for all three disjoint selections. A role names
+with its own output directory, for all three disjoint selections. Use
+`--shard-size 1` for server compression, as the hosted workflow does:
+
+```sh
+python3 conformance/autobahn/run.py --role server --profile compression --shard-size 1 --output /tmp/ws-server-compression
+python3 conformance/autobahn/run.py --role client --profile compression --output /tmp/ws-client-compression
+```
+
+A role names
 the Go implementation being tested: `server` runs Autobahn's `fuzzingclient`,
 and `client` runs its `fuzzingserver`.
 
@@ -54,6 +57,28 @@ all cases outside that run's selection. No agent-specific exclusions or
 known-failure exclusions are allowed. Compression being `UNIMPLEMENTED` is a
 skip, not a passing test. Compression results cannot establish default-mode
 conformance, and default-mode results cannot establish RFC 7692 support.
+
+Server compression partitions the authoritative selected inventory into
+deterministic single-case shards. Both peers restart in a fresh isolated
+container per shard, sequentially within one job. The binary and pinned image
+are prepared once. The aggregate deadline remains 20 minutes, not 20 minutes
+per shard. Every shard keeps its config, resource diagnostics, logs, and raw
+reports. Aggregation must account for exactly the full selected inventory with
+no duplicate, missing, or unexpected IDs; protocol failures are kept as results.
+An infrastructure failure stops the remaining shards and makes the aggregate
+incomplete, with the stopping cause and missing cases preserved. Core, limits,
+and client-compression selections remain unsharded.
+
+In the aggregate, `reported` counts observed raw rows and `classified` counts
+fully validated evidence. Invalid detail files or resource-failed shards retain
+their original observations but cannot contribute an OK/FAILED verdict or case
+link; `unvalidated_case_ids` identifies them explicitly. After the execution
+deadline, cleanup alone may use three bounded 10-second Docker calls to kill,
+inspect, and remove the last container. No new shard receives more time.
+
+For an explicitly partial diagnosis, `--case 12.1.9 --profile compression`
+selects exactly that case and records it separately. It cannot be combined with
+sharding and must never be presented as full-profile evidence.
 
 All profiles deliberately set a **test-only 64 MiB message cap** and a 20-minute
 whole-run deadline. The per-connection watchdog is 60 seconds for core and 600
@@ -93,6 +118,13 @@ Docker recorded `OOMKilled=true`, cgroup `oom_kill=1`, and a peak of
 incomplete evidence, not 216 protocol failures; its original artifact is kept
 separately from subsequent configured runs. A completed run must still pass
 all inventory/detail completeness checks below.
+
+The [configured unsharded run](https://github.com/picatz/websocket/actions/runs/37843864438)
+also exhausted the container, at case `12.1.9`. The
+[isolated case diagnostic](https://github.com/picatz/websocket/actions/runs/37844611572)
+then completed that single case with both outcomes OK, zero OOM kills, and a
+387,620,864-byte cgroup peak. That justified testing bounded shards; it did not
+establish a full compression result or prove a specific allocation root cause.
 
 Pinned suite:
 

@@ -445,11 +445,14 @@ type Conn struct {
 
 	readMu  sync.Mutex // Protects read operations
 	writeMu sync.Mutex // Protects write operations
-	closeMu sync.Mutex // Protects Close method
+	closeMu sync.Mutex // Protects shutdown reservation; never held during I/O
 
-	closed    atomic.Bool // Indicates if the connection is closed
-	closeErr  error       // Stores the error from closing the connection
-	closeSent bool        // Protected by writeMu; forbids later data frames
+	closed      atomic.Bool // Indicates if the connection is closed
+	failed      bool        // Protected by closeMu; failure permits concurrent abort
+	closeSent   bool        // Protected by writeMu; forbids later data frames
+	writeFailed bool        // Protected by writeMu; wire stream cannot be reused
+	abortConn   net.Conn    // Raw transport for abnormal shutdown (never protocol I/O)
+	abortOnce   sync.Once   // Independent of normal, potentially graceful TLS Close
 
 	// Optional handlers for control frames
 	handlerMu   sync.RWMutex
@@ -480,6 +483,11 @@ func NewConn(conn net.Conn, isServer bool, extensions []Extension, opts ...ConnO
 		rw:         bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn)),
 		isServer:   isServer,
 		extensions: extensions,
+	}
+
+	wsConn.abortConn = conn
+	if tlsConn, ok := conn.(*tls.Conn); ok {
+		wsConn.abortConn = tlsConn.NetConn()
 	}
 
 	for _, opt := range opts {
@@ -519,26 +527,101 @@ func (c *Conn) Close() error {
 
 func (c *Conn) closeWithPayload(payload []byte) error {
 	c.closeMu.Lock()
-	defer c.closeMu.Unlock()
 	if c.closed.Swap(true) {
+		failed := c.failed
+		c.closeMu.Unlock()
+		if failed {
+			c.abort()
+		}
 		return ErrAlreadyClosed
 	}
+	c.closeMu.Unlock()
 
-	// Do not wait behind a stalled writer: closing the transport must be able
-	// to interrupt it. Bypass the public closed-state guard for this final frame.
+	// Do not wait behind a stalled writer. Reserve the only close attempt
+	// before writing, and never reuse a stream after a partial write.
 	if c.writeMu.TryLock() {
-		if !c.closeSent {
+		if !c.closeSent && !c.writeFailed {
+			c.closeSent = true
 			if err := c.conn.SetWriteDeadline(time.Now().Add(time.Second)); err == nil {
 				_ = c.writeFrame(&Frame{Final: true, Opcode: CloseMessage, Payload: payload, Masked: !c.isServer})
 			}
-			c.closeSent = true
 		}
 		c.writeMu.Unlock()
 	}
 
-	// Close the underlying connection
-	c.closeErr = c.conn.Close()
-	return c.closeErr
+	// Ordinary and valid-peer closure retain TLS close_notify behavior.
+	// This must not share abortOnce: concurrent failure must interrupt it.
+	return c.conn.Close()
+}
+
+// readFailure attaches status only at library-owned validation sites. Removing
+// it at the public boundary preserves existing sentinel equality and diagnostics.
+// Arbitrary callback errors must never acquire status through errors.Is alone.
+type readFailure struct {
+	cause error
+	code  uint16
+}
+
+func (e *readFailure) Error() string { return e.cause.Error() }
+func (e *readFailure) Unwrap() error { return e.cause }
+
+func failWith(code uint16, cause error) error { return &readFailure{cause: cause, code: code} }
+
+func (c *Conn) abort() {
+	c.abortOnce.Do(func() { _ = c.abortConn.Close() })
+}
+
+// failRead publishes terminal state before attempting notification. The original
+// error always wins over cleanup errors, including timeout and partial writes.
+func (c *Conn) failRead(err error) error {
+	var code uint16
+	if failure, ok := err.(*readFailure); ok {
+		code, err = failure.code, failure.cause
+	}
+	c.closeMu.Lock()
+	alreadyClosed := c.closed.Swap(true)
+	c.failed = true
+	c.closeMu.Unlock()
+	if alreadyClosed || code == 0 || !c.failureCloseSafe() || !c.writeMu.TryLock() {
+		c.abort()
+		return err
+	}
+	defer c.writeMu.Unlock()
+	if c.closeSent || c.writeFailed {
+		c.abort()
+		return err
+	}
+	c.closeSent = true
+
+	// No net.Conn deadline getter exists. A watchdog bounds notification
+	// without extending or clearing an earlier deadline set by the caller.
+	// The write stays synchronous; the callback only aborts transport I/O.
+	// Only this owner stops/joins it, even when concurrent Close aborts early.
+	done := make(chan struct{})
+	timer := time.AfterFunc(time.Second, func() {
+		c.abort()
+		close(done)
+	})
+	var payload [2]byte
+	binary.BigEndian.PutUint16(payload[:], code)
+	_ = c.writeFrameRaw(&Frame{Final: true, Opcode: CloseMessage, Payload: payload[:], Masked: !c.isServer})
+	c.abort()
+	if !timer.Stop() {
+		<-done
+	}
+	return err
+}
+
+// The built-in extension leaves control frames unchanged. Custom extensions
+// have no interruptible, safe control-encoding contract; do not reenter their
+// outgoing callbacks or guess an encoding during automatic failure cleanup.
+func (c *Conn) failureCloseSafe() bool {
+	for _, ext := range c.extensions {
+		if _, builtin := ext.(*perMessageDeflate); !builtin && ext.IsEnabled() {
+			return false
+		}
+	}
+	return true
 }
 
 // SetPingHandler sets the handler function for Ping frames.
@@ -560,6 +643,11 @@ func (c *Conn) SetPongHandler(handler func(appData string) error) {
 // an error matching io.ErrUnexpectedEOF. A peer close frame also returns io.EOF.
 // A header that already proves a protocol or size violation is rejected without
 // waiting for its payload, even when that payload is absent or truncated.
+// Any error makes the connection terminal: later reads and writes fail. Known
+// protocol and size violations send an appropriate best-effort Close when safe,
+// then abort the transport. Notification uses at most one second without changing
+// caller deadlines. Custom extensions may require dropping without notification.
+// Arbitrary callbacks and custom transport Close implementations can still block.
 func (c *Conn) ReadMessage() (messageType Opcode, data []byte, err error) {
 	if c.closed.Load() {
 		return 0, nil, io.ErrClosedPipe
@@ -570,6 +658,13 @@ func (c *Conn) ReadMessage() (messageType Opcode, data []byte, err error) {
 	if c.closed.Load() {
 		return 0, nil, io.ErrClosedPipe
 	}
+
+	peerClosed := false
+	defer func() {
+		if err != nil && !peerClosed {
+			err = c.failRead(err)
+		}
+	}()
 
 	var message []byte
 	var messageTypeSet bool
@@ -591,42 +686,43 @@ func (c *Conn) ReadMessage() (messageType Opcode, data []byte, err error) {
 		switch frame.Opcode {
 		case TextMessage, BinaryMessage:
 			if messageTypeSet {
-				return 0, nil, ErrUnexpectedFrame
+				return 0, nil, failWith(StatusProtocolError, ErrUnexpectedFrame)
 			}
 			messageType = frame.Opcode
 			messageTypeSet = true
 
 			if c.maxBytes > 0 && len(frame.Payload) > c.maxBytes-len(message) {
-				return 0, nil, ErrPayloadTooLarge
+				return 0, nil, failWith(StatusMessageTooBig, ErrPayloadTooLarge)
 			}
 
 			message = append(message, frame.Payload...)
 			if frame.Final {
 				if messageType == TextMessage && !utf8.Valid(message) {
-					return 0, nil, ErrInvalidFrame
+					return 0, nil, failWith(StatusInvalidFramePayloadData, ErrInvalidFrame)
 				}
 				return messageType, message, nil
 			}
 
 		case ContinuationFrame:
 			if !messageTypeSet {
-				return 0, nil, ErrUnexpectedContinuation
+				return 0, nil, failWith(StatusProtocolError, ErrUnexpectedContinuation)
 			}
 			if c.maxBytes > 0 && len(frame.Payload) > c.maxBytes-len(message) {
-				return 0, nil, ErrPayloadTooLarge
+				return 0, nil, failWith(StatusMessageTooBig, ErrPayloadTooLarge)
 			}
 			message = append(message, frame.Payload...)
 			if frame.Final {
 				if messageType == TextMessage && !utf8.Valid(message) {
-					return 0, nil, ErrInvalidFrame
+					return 0, nil, failWith(StatusInvalidFramePayloadData, ErrInvalidFrame)
 				}
 				return messageType, message, nil
 			}
 
 		case CloseMessage:
-			if err := validateClosePayload(frame.Payload); err != nil {
+			if err := validateIncomingClosePayload(frame.Payload); err != nil {
 				return 0, nil, err
 			}
+			peerClosed = true
 			_ = c.closeWithPayload(frame.Payload)
 			return 0, nil, io.EOF
 
@@ -657,7 +753,7 @@ func (c *Conn) ReadMessage() (messageType Opcode, data []byte, err error) {
 			// Default behavior: ignore Pong frames
 
 		default:
-			return 0, nil, fmt.Errorf("%w: %d", ErrInvalidOpcode, frame.Opcode)
+			return 0, nil, failWith(StatusProtocolError, fmt.Errorf("%w: %d", ErrInvalidOpcode, frame.Opcode))
 		}
 	}
 }
@@ -759,23 +855,23 @@ func (c *Conn) readFrameHeader() (*Frame, uint64, error) {
 	switch frame.Opcode {
 	case ContinuationFrame, TextMessage, BinaryMessage, CloseMessage, PingMessage, PongMessage:
 	default:
-		return nil, 0, ErrInvalidOpcode
+		return nil, 0, failWith(StatusProtocolError, ErrInvalidOpcode)
 	}
 	if frame.Masked && !c.isServer {
-		return nil, 0, ErrMaskedFrame
+		return nil, 0, failWith(StatusProtocolError, ErrMaskedFrame)
 	}
 	if !frame.Masked && c.isServer {
-		return nil, 0, ErrUnmaskedFrame
+		return nil, 0, failWith(StatusProtocolError, ErrUnmaskedFrame)
 	}
 
 	// Control frames must not be fragmented
 	if !frame.Final && frame.Opcode >= 0x8 {
-		return nil, 0, ErrControlFrameFragment
+		return nil, 0, failWith(StatusProtocolError, ErrControlFrameFragment)
 	}
 
 	// Control frames must have payload length <= 125
 	if frame.Opcode >= 0x8 && payloadLen > 125 {
-		return nil, 0, fmt.Errorf("%w: control frame payload too large: %d", ErrPayloadTooLarge, payloadLen)
+		return nil, 0, failWith(StatusProtocolError, fmt.Errorf("%w: control frame payload too large: %d", ErrPayloadTooLarge, payloadLen))
 	}
 
 	// Built-in compression can consume RSV1 only on data message frames.
@@ -794,7 +890,7 @@ func (c *Conn) readFrameHeader() (*Frame, uint64, error) {
 			}
 		}
 		if !consumable {
-			return nil, 0, ErrUnsupportedExtensions
+			return nil, 0, failWith(StatusProtocolError, ErrUnsupportedExtensions)
 		}
 	}
 
@@ -809,7 +905,7 @@ func (c *Conn) readFrameHeader() (*Frame, uint64, error) {
 			return nil, 0, fmt.Errorf("failed to read extended payload length: %w", err)
 		}
 		if extLen < 126 {
-			return nil, 0, ErrInvalidFrame
+			return nil, 0, failWith(StatusProtocolError, ErrInvalidFrame)
 		}
 		payloadLen = uint64(extLen)
 	case 127:
@@ -821,14 +917,14 @@ func (c *Conn) readFrameHeader() (*Frame, uint64, error) {
 			return nil, 0, fmt.Errorf("failed to read extended payload length: %w", err)
 		}
 		if extLen >= (1<<63) || extLen < 65536 {
-			return nil, 0, ErrInvalidFrame
+			return nil, 0, failWith(StatusProtocolError, ErrInvalidFrame)
 		}
 		payloadLen = extLen
 	}
 	// Validate lengths before converting to int or allocating payload storage.
 	if payloadLen > uint64(^uint(0)>>1) ||
 		(c.maxBytes > 0 && frame.Opcode < CloseMessage && payloadLen > uint64(c.maxBytes)) {
-		return nil, 0, ErrPayloadTooLarge
+		return nil, 0, failWith(StatusMessageTooBig, ErrPayloadTooLarge)
 	}
 
 	return frame, payloadLen, nil
@@ -847,15 +943,15 @@ func (c *Conn) validateMessageHeader(frame *Frame, payloadLen uint64, started bo
 	switch frame.Opcode {
 	case TextMessage, BinaryMessage:
 		if started {
-			return ErrUnexpectedFrame
+			return failWith(StatusProtocolError, ErrUnexpectedFrame)
 		}
 	case ContinuationFrame:
 		if !started {
-			return ErrUnexpectedContinuation
+			return failWith(StatusProtocolError, ErrUnexpectedContinuation)
 		}
 	case CloseMessage:
 		if payloadLen == 1 {
-			return ErrInvalidFrame
+			return failWith(StatusProtocolError, ErrInvalidFrame)
 		}
 	}
 	// Compressed data may shrink after decoding. Continuations are not
@@ -863,7 +959,7 @@ func (c *Conn) validateMessageHeader(frame *Frame, payloadLen uint64, started bo
 	// and neither consume nor reset a fragmented message's remaining budget.
 	if c.maxBytes > 0 && frame.Opcode < CloseMessage && !frame.Rsv1 &&
 		payloadLen > uint64(c.maxBytes-messageBytes) {
-		return ErrPayloadTooLarge
+		return failWith(StatusMessageTooBig, ErrPayloadTooLarge)
 	}
 	return nil
 }
@@ -920,28 +1016,42 @@ func (c *Conn) readFramePayload(frame *Frame, payloadLen uint64) error {
 				err = ext.ProcessIncomingFrame(frame)
 			}
 			if err != nil {
-				return fmt.Errorf("extension %s failed to process incoming frame: %w", ext.Name(), err)
+				cause := fmt.Errorf("extension %s failed to process incoming frame: %w", ext.Name(), err)
+				if _, builtin := ext.(*perMessageDeflate); builtin && err == ErrPayloadTooLarge {
+					return failWith(StatusMessageTooBig, cause)
+				}
+				return cause
 			}
 		}
 	}
 	// Extensions consume the reserved bits whose semantics they implement.
 	if frame.Rsv1 || frame.Rsv2 || frame.Rsv3 {
-		return ErrUnsupportedExtensions
+		return failWith(StatusProtocolError, ErrUnsupportedExtensions)
 	}
 
 	return nil
 }
 
 func validateClosePayload(payload []byte) error {
+	if err := validateIncomingClosePayload(payload); err != nil {
+		return ErrInvalidFrame
+	}
+	return nil
+}
+
+func validateIncomingClosePayload(payload []byte) error {
 	if len(payload) == 0 {
 		return nil
 	}
-	if len(payload) == 1 || !utf8.Valid(payload[2:]) {
-		return ErrInvalidFrame
+	if len(payload) == 1 {
+		return failWith(StatusProtocolError, ErrInvalidFrame)
 	}
 	code := binary.BigEndian.Uint16(payload)
 	if code < 1000 || code >= 5000 || code == 1004 || code == 1005 || code == 1006 || (code >= 1015 && code < 3000) {
-		return ErrInvalidFrame
+		return failWith(StatusProtocolError, ErrInvalidFrame)
+	}
+	if !utf8.Valid(payload[2:]) {
+		return failWith(StatusInvalidFramePayloadData, ErrInvalidFrame)
 	}
 	return nil
 }
@@ -957,6 +1067,12 @@ func (c *Conn) writeFrame(frame *Frame) error {
 		}
 	}
 
+	return c.writeFrameRaw(frame)
+}
+
+// writeFrameRaw encodes a frame without calling extensions. writeMu must be
+// held; any transport failure poisons the stream for later close notification.
+func (c *Conn) writeFrameRaw(frame *Frame) error {
 	b0 := byte(frame.Opcode)
 	if frame.Final {
 		b0 |= 0x80
@@ -1009,6 +1125,7 @@ func (c *Conn) writeFrame(frame *Frame) error {
 
 	// Write header
 	if _, err := c.rw.Write(header[:headerPos]); err != nil {
+		c.writeFailed = true
 		return fmt.Errorf("%w: failed to write frame header: %w", ErrWriteFailed, err)
 	}
 
@@ -1023,12 +1140,14 @@ func (c *Conn) writeFrame(frame *Frame) error {
 	// Write payload
 	if len(frame.Payload) > 0 {
 		if _, err := c.rw.Write(frame.Payload); err != nil {
+			c.writeFailed = true
 			return fmt.Errorf("%w: failed to write frame payload: %w", ErrWriteFailed, err)
 		}
 	}
 
 	// Flush the buffer to ensure the data is sent
 	if err := c.rw.Flush(); err != nil {
+		c.writeFailed = true
 		return fmt.Errorf("%w: failed to flush data: %w", ErrWriteFailed, err)
 	}
 
@@ -1269,6 +1388,7 @@ func Dial(ctx context.Context, urlStr string, options ...DialOption) (ws *Conn, 
 	}
 
 	ws = NewConn(conn, false, opts.extensions, WithMaxBytes(opts.maxBytes))
+	ws.abortConn = rawConn
 	ws.rw.Reader = br
 	return ws, resp, nil
 }
