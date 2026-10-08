@@ -9,6 +9,9 @@ import sys
 
 IMAGE = "crossbario/autobahn-testsuite:25.10.1@sha256:519915fb568b04c9383f70a1c405ae3ff44ab9e35835b085239c258b6fac3074"
 SOURCE = "6ed6f439dc7ed0d7432fe2cf7481b110905ecc5c"
+# Bound the legacy suite's GC-managed heap below the shared container limit.
+# This is not a total-RSS limit and does not configure the Go testee's runtime.
+PYPY_GC_MAX = "512MB"
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 PROFILES = {
@@ -67,6 +70,8 @@ def main():
         "profile": args.profile, "agent": agent, "compression_enabled": compression,
         "max_message_bytes": 64 << 20, "case_timeout_seconds": case_timeout,
         "run_timeout_seconds": 1200, "network": "none (container loopback only)",
+        "suite_environment": {"PYPY_GC_MAX": PYPY_GC_MAX,
+                              "PYTHONDONTWRITEBYTECODE": "1", "PYTHONUNBUFFERED": "1"},
         "spec": spec,
     }
     (output / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
@@ -79,6 +84,7 @@ def main():
         "--user", str(os.getuid()) + ":" + str(os.getgid()),
         "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m",
         "--env", "PYTHONDONTWRITEBYTECODE=1", "--env", "PYTHONUNBUFFERED=1", "--env", "HOME=/tmp",
+        "--env", "PYPY_GC_MAX=" + PYPY_GC_MAX,
         "--mount", "type=bind,src=" + str(output / "testee") + ",dst=/testee,readonly",
         "--mount", "type=bind,src=" + str(HERE) + ",dst=/harness,readonly",
         "--mount", "type=bind,src=" + str(config) + ",dst=/config,readonly",

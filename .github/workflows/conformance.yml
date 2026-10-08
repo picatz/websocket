@@ -6,6 +6,9 @@ on:
     paths:
       - 'conformance/autobahn/**'
       - '.github/workflows/conformance.yml'
+      - 'websocket.go'
+      - 'extensions.go'
+      - 'go.mod'
 
 permissions:
   contents: read

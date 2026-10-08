@@ -29,9 +29,10 @@ the Go implementation being tested: `server` runs Autobahn's `fuzzingclient`,
 and `client` runs its `fuzzingserver`.
 
 The `Autobahn baseline` workflow runs all six combinations for changes to this
-harness and through **Actions → Autobahn baseline → Run workflow** after the
-workflow is on the default branch. PR jobs check out the exact PR head commit.
-Other library changes do not automatically run this expensive baseline yet.
+harness, the protocol implementation, or `go.mod`, and through
+**Actions → Autobahn baseline → Run workflow** after the workflow is on the
+default branch. PR jobs check out the exact PR head commit. Documentation-only
+and test-only changes do not automatically run this expensive baseline.
 The existing test workflow remains the ordinary correctness gate.
 
 ## Selections and limits
@@ -69,6 +70,24 @@ Only the test binary, this harness, and generated config are mounted read-only;
 only the report directory is writable. No Docker socket, credentials, checkout,
 or external targets are passed into the container. Pulling the official image
 occurs on the host before this network-disabled run.
+
+The legacy suite runs with `PYPY_GC_MAX=512MB` (512 MiB in PyPy's parser),
+recorded in `metadata.json`. This starts more frequent collection near that
+GC-managed heap limit and can raise `MemoryError` or terminate if exhausted.
+It does not cap total RSS, change the Go testee's runtime, raise the shared
+1 GiB container cap, or suppress OOM failures. This is baseline-generation
+infrastructure, not a production tuning recommendation or performance result.
+See [official PyPy GC configuration](https://doc.pypy.org/gc_info.html#environment-variables)
+and the [pinned runtime implementation](https://github.com/pypy/pypy/blob/release-pypy2.7-v7.3.20/rpython/memory/gc/incminimark.py).
+
+The unconfigured diagnostic run at
+[`6671ff9`](https://github.com/picatz/websocket/actions/runs/37842946446)
+reached server-compression case `12.1.8`, then exhausted the 1 GiB container:
+Docker recorded `OOMKilled=true`, cgroup `oom_kill=1`, and a peak of
+1,073,741,824 bytes. No compression report was produced. That run remains
+incomplete evidence, not 216 protocol failures; its original artifact is kept
+separately from subsequent configured runs. A completed run must still pass
+all inventory/detail completeness checks below.
 
 Pinned suite:
 
