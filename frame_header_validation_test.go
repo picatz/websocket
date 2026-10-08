@@ -6,7 +6,9 @@ import (
 	"errors"
 	"io"
 	"strconv"
+	"sync"
 	"testing"
+	"time"
 )
 
 // headerOnlyConn allows buffered reads up to a known invalid header, then
@@ -181,6 +183,19 @@ func TestReadMessageCustomHeaderTransforms(t *testing.T) {
 			}
 			return nil
 		}, "ab", nil},
+		{"shrinking first fragment", []byte{0x02, 2, 'a', 'b', 0x80, 2, 'c', 'd'}, func(f *Frame) error {
+			if f.Opcode == BinaryMessage {
+				f.Payload = nil
+			}
+			return nil
+		}, "cd", nil},
+		{"normalize fragmented opcode", []byte{0x02, 0, 0x82, 1, 'x'}, func(f *Frame) error {
+			if f.Final {
+				f.Opcode = ContinuationFrame
+			}
+			return nil
+		}, "x", nil},
+		{"noop new message", []byte{0x02, 0, 0x82, 1, 'x'}, func(*Frame) error { return nil }, "", ErrUnexpectedFrame},
 		{"reserved bits", []byte{0xf2, 1, 'x'}, func(f *Frame) error {
 			f.Rsv1, f.Rsv2, f.Rsv3 = false, false, false
 			return nil
@@ -251,5 +266,76 @@ func TestReadMessageAtLimitStillRequiresFinalFrame(t *testing.T) {
 		if !errors.Is(err, want) {
 			t.Fatalf("tail %x: %v, want %v", tail, err, want)
 		}
+	}
+}
+
+// stalledFrameConn lets a read reach each header/body boundary deterministically
+// before Close interrupts it, with no sleeps or network scheduling assumptions.
+type stalledFrameConn struct {
+	memoryConn
+	waiting, closed     chan struct{}
+	waitOnce, closeOnce sync.Once
+}
+
+func (c *stalledFrameConn) Read(p []byte) (int, error) {
+	if c.Reader.Len() > 0 {
+		return c.Reader.Read(p)
+	}
+	c.waitOnce.Do(func() { close(c.waiting) })
+	<-c.closed
+	return 0, io.ErrClosedPipe
+}
+
+func (c *stalledFrameConn) Close() error {
+	c.closeOnce.Do(func() { close(c.closed) })
+	return nil
+}
+
+func TestCloseInterruptsFrameReadStages(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		wire   []byte
+		server bool
+	}{
+		{"header", nil, false},
+		{"partial header", []byte{0x82}, false},
+		{"extended length", []byte{0x82, 126, 0}, false},
+		{"mask key", []byte{0x82, 0x81, 1, 2}, true},
+		{"payload", []byte{0x82, 2, 'x'}, false},
+		{"continuation header at limit", []byte{0x02, 2, 'a', 'b', 0x80}, false},
+		{"continuation payload", []byte{0x02, 1, 'a', 0x80, 1}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := &stalledFrameConn{memoryConn: memoryConn{Reader: bytes.NewReader(tc.wire)}, waiting: make(chan struct{}), closed: make(chan struct{})}
+			defer raw.Close()
+			c := NewConn(raw, tc.server, nil, WithMaxBytes(2))
+			result := make(chan error, 1)
+			go func() { _, _, err := c.ReadMessage(); result <- err }()
+			select {
+			case <-raw.waiting:
+			case err := <-result:
+				t.Fatalf("read returned before reaching expected boundary: %v", err)
+			case <-time.After(time.Second):
+				t.Fatal("read did not reach expected boundary")
+			}
+			closed := make(chan error, 1)
+			go func() { closed <- c.Close() }()
+			select {
+			case err := <-closed:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("Close waited for the stalled read")
+			}
+			select {
+			case err := <-result:
+				if !errors.Is(err, io.ErrClosedPipe) {
+					t.Fatalf("read = %v", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("Close did not interrupt frame read")
+			}
+		})
 	}
 }
