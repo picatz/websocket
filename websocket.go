@@ -1593,7 +1593,18 @@ func headerContains(h http.Header, name string, value string) bool {
 //
 // https://tools.ietf.org/html/rfc6455#section-5.3
 func xor(key []byte, data []byte) {
+	// A whole number of four-byte key cycles preserves the mask phase. Using
+	// encoding/binary keeps these word operations safe for unaligned slices
+	// and independent of the machine's byte order.
+	if len(data) >= 8 {
+		k := uint64(binary.LittleEndian.Uint32(key))
+		k |= k << 32
+		for len(data) >= 8 {
+			binary.LittleEndian.PutUint64(data, binary.LittleEndian.Uint64(data)^k)
+			data = data[8:]
+		}
+	}
 	for i := range data {
-		data[i] ^= key[i%4]
+		data[i] ^= key[i&3]
 	}
 }
