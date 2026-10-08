@@ -323,7 +323,9 @@ func TestConcurrentCloseCancelsFailureNotification(t *testing.T) {
 		raw := &failurePipeConn{Conn: transport, input: bytes.NewReader([]byte{0x81, 1, 255}), started: make(chan struct{})}
 		c := NewConn(raw, false, nil)
 		done := make(chan error, 1)
-		go func() { _, _, err := c.ReadMessage(); done <- err }()
+		finished := make(chan struct{})
+		t.Cleanup(func() { transport.Close(); peer.Close(); <-finished })
+		go func() { defer close(finished); _, _, err := c.ReadMessage(); done <- err }()
 		select {
 		case <-raw.started:
 		case <-time.After(2 * time.Second):
@@ -355,8 +357,13 @@ func TestReadFailureAbortsStalledDataWriter(t *testing.T) {
 		raw := &failurePipeConn{Conn: transport, input: bytes.NewReader(failureWire(server, 0x81, []byte{255})), started: make(chan struct{})}
 		c := NewConn(raw, server, nil)
 		done := make(chan error, 1)
+		finished := make(chan struct{})
+		t.Cleanup(func() { transport.Close(); peer.Close(); <-finished })
 		payload := bytes.Repeat([]byte{'a'}, 8192)
-		go func() { done <- c.WriteMessage(BinaryMessage, payload) }()
+		go func() { defer close(finished); done <- c.WriteMessage(BinaryMessage, payload) }()
+		if err := peer.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
 		// Consume only the independently known data header, so payload is stalled.
 		header := make([]byte, 4)
 		if !server {
@@ -446,6 +453,141 @@ func TestReadFailureTransportEOFIsTerminal(t *testing.T) {
 		}
 		if raw.closes != 1 || raw.written.Len() != 0 {
 			t.Fatal("transport failure manufactured close code")
+		}
+	}
+}
+
+func TestReadFailureKeepsCauseWhenPeerCannotReceive(t *testing.T) {
+	transport, peer := net.Pipe()
+	peer.Close()
+	defer transport.Close()
+	raw := &failurePipeConn{Conn: transport, input: bytes.NewReader([]byte{0x81, 1, 255}), started: make(chan struct{})}
+	c := NewConn(raw, false, nil)
+	if _, _, err := c.ReadMessage(); err != ErrInvalidFrame {
+		t.Fatal(err)
+	}
+	if raw.closes.Load() != 1 || raw.setters.Load() != 0 {
+		t.Fatal("unexpected failure cleanup")
+	}
+}
+
+func TestReadFailureAfterExplicitCloseDoesNotSendAnother(t *testing.T) {
+	for _, server := range []bool{false, true} {
+		raw := &failureMemoryConn{memoryConn: memoryConn{Reader: bytes.NewReader(failureWire(server, 0x81, []byte{255}))}}
+		c := NewConn(raw, server, nil)
+		if err := c.WriteControlFrame(CloseMessage, []byte{3, 232}); err != nil {
+			t.Fatal(err)
+		}
+		before := bytes.Clone(raw.written.Bytes())
+		if _, _, err := c.ReadMessage(); err != ErrInvalidFrame {
+			t.Fatal(err)
+		}
+		if raw.closes != 1 || !bytes.Equal(before, raw.written.Bytes()) {
+			t.Fatal("duplicate close after explicit reservation")
+		}
+	}
+}
+
+func TestReadFailurePlatformLimitStatus(t *testing.T) {
+	if strconv.IntSize != 32 {
+		t.Skip("32-bit declared-size boundary")
+	}
+	wire := []byte{0x82, 127, 0, 0, 0, 0, 128, 0, 0, 0}
+	raw := &failureMemoryConn{memoryConn: memoryConn{Reader: bytes.NewReader(wire)}}
+	if _, _, err := NewConn(raw, false, nil).ReadMessage(); err != ErrPayloadTooLarge {
+		t.Fatal(err)
+	}
+	if binary.BigEndian.Uint16(failureClosePayload(t, raw.written.Bytes(), false)) != 1009 {
+		t.Fatal("platform limit status")
+	}
+}
+
+type unsupportedDeadlineConn struct{ *failurePipeConn }
+
+func (c *unsupportedDeadlineConn) SetWriteDeadline(time.Time) error {
+	c.setters.Add(1)
+	return errors.New("deadlines unsupported")
+}
+
+func TestReadFailureDoesNotRequireDeadlineSupport(t *testing.T) {
+	transport, peer := net.Pipe()
+	defer peer.Close()
+	defer transport.Close()
+	raw := &unsupportedDeadlineConn{&failurePipeConn{Conn: transport, input: bytes.NewReader([]byte{0x81, 1, 255}), started: make(chan struct{})}}
+	start := time.Now()
+	if _, _, err := NewConn(raw, false, nil).ReadMessage(); err != ErrInvalidFrame {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(start); elapsed < 800*time.Millisecond || elapsed > 2*time.Second {
+		t.Fatalf("watchdog duration=%s", elapsed)
+	}
+	if raw.setters.Load() != 0 || raw.closes.Load() != 1 {
+		t.Fatal("cleanup depended on unsupported deadlines")
+	}
+}
+
+type joinedAbortConn struct {
+	*failurePipeConn
+	entered  chan struct{}
+	release  chan struct{}
+	returned atomic.Bool
+}
+
+func (c *joinedAbortConn) Close() error {
+	err := c.failurePipeConn.Close() // Unblock the synchronous notification first.
+	close(c.entered)
+	<-c.release
+	c.returned.Store(true)
+	return err
+}
+
+func TestReadFailureJoinsRunningAbortWatchdog(t *testing.T) {
+	transport, peer := net.Pipe()
+	raw := &joinedAbortConn{failurePipeConn: &failurePipeConn{Conn: transport, input: bytes.NewReader([]byte{0x81, 1, 255}), started: make(chan struct{})}, entered: make(chan struct{}), release: make(chan struct{})}
+	c := NewConn(raw, false, nil)
+	done := make(chan error, 1)
+	finished := make(chan struct{})
+	var release sync.Once
+	t.Cleanup(func() { release.Do(func() { close(raw.release) }); transport.Close(); peer.Close(); <-finished })
+	go func() { defer close(finished); _, _, err := c.ReadMessage(); done <- err }()
+	// No peer reads and no deadline exists. Only the watchdog can end the write.
+	select {
+	case <-raw.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("watchdog did not abort")
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("read returned before abort callback completed: %v", err)
+	default:
+	}
+	release.Do(func() { close(raw.release) })
+	if err := failureAwait(t, done); err != ErrInvalidFrame {
+		t.Fatal(err)
+	}
+	if !raw.returned.Load() || raw.closes.Load() != 1 || raw.setters.Load() != 0 {
+		t.Fatal("abort callback not joined exactly once")
+	}
+}
+
+func TestReadFailurePartialNotificationIsNeverRetried(t *testing.T) {
+	for _, server := range []bool{false, true} {
+		for _, n := range []int{0, 1, 2, 3, 4} {
+			raw := &failureFaultConn{failureMemoryConn: failureMemoryConn{memoryConn: memoryConn{Reader: bytes.NewReader(failureWire(server, 0x81, []byte{255}))}}, n: n, cause: io.ErrClosedPipe}
+			c := NewConn(raw, server, nil)
+			if _, _, err := c.ReadMessage(); err != ErrInvalidFrame {
+				t.Fatal(err)
+			}
+			before := bytes.Clone(raw.written.Bytes())
+			if err := c.Close(); err != ErrAlreadyClosed {
+				t.Fatal(err)
+			}
+			if err := c.WriteControlFrame(CloseMessage, nil); err != io.ErrClosedPipe {
+				t.Fatal(err)
+			}
+			if raw.writes != 1 || raw.closes != 1 || !bytes.Equal(before, raw.written.Bytes()) {
+				t.Fatalf("writes=%d closes=%d wire=%x", raw.writes, raw.closes, raw.written.Bytes())
+			}
 		}
 	}
 }

@@ -191,7 +191,7 @@ no automatic handshake timeout. Close the connection after any write error.
   bit options do not impose DEFLATE window sizes. Leave compression disabled
   when interoperability or untrusted inputs matter
 - Any `ReadMessage` error terminates the connection. The detecting call preserves
-  its original error; later reads and writes fail with `io.ErrClosedPipe`.
+  its original error; later reads and valid writes fail with `io.ErrClosedPipe`.
   Known protocol, invalid UTF-8, and configured size violations make a single
   best-effort Close notification with status 1002, 1007, or 1009 when the writer
   is idle and safe. A busy or failed writer, transport/callback error, or enabled
