@@ -36,11 +36,13 @@ A role names
 the Go implementation being tested: `server` runs Autobahn's `fuzzingclient`,
 and `client` runs its `fuzzingserver`.
 
-The `Autobahn baseline` workflow runs all six combinations for changes to this
-harness, the protocol implementation, or `go.mod`, and through
+The `Autobahn baseline` workflow runs all six combinations for pull requests and
+pushes to `main` that change this harness, the protocol implementation, or
+`go.mod`, and through
 **Actions → Autobahn baseline → Run workflow** after the workflow is on the
-default branch. PR jobs check out the exact PR head commit. Documentation-only
-and test-only changes do not automatically run this expensive baseline.
+default branch. PR jobs check out the exact PR head commit. Unrelated
+documentation and library-test-only changes do not automatically run this
+expensive baseline.
 The existing test workflow remains the ordinary correctness gate.
 
 ## Selections and limits

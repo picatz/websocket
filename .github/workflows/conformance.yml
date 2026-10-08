@@ -1,6 +1,14 @@
 name: Autobahn baseline
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'conformance/autobahn/**'
+      - '.github/workflows/conformance.yml'
+      - 'websocket.go'
+      - 'extensions.go'
+      - 'go.mod'
   workflow_dispatch:
   pull_request:
     paths:
