@@ -26,12 +26,22 @@
 // handlers run synchronously from ReadMessage and must not call it recursively.
 // An extension instance must not be shared between connections.
 //
+// # Extension negotiation
+//
+// Dial and Upgrade validate the complete extension header, including repeated
+// fields and quoted parameter tokens. Dial rejects selections that were not
+// offered and closes the transport on negotiation failure. Upgrade validates
+// extension-generated selections before hijacking. Errors can be checked with
+// errors.Is(err, ErrInvalidExtension). Custom extensions receive the complete
+// comma-joined peer header and must validate their own parameter and repetition
+// semantics. Multiple offers for the same extension remain valid alternatives.
+//
 // # Limitations
 //
 // The optional permessage-deflate extension is experimental. Compressed message
 // fragmentation, context takeover, and DEFLATE window-size negotiation are not
 // fully implemented. Leave it disabled for production interoperability needs.
-// Extension handshake validation is incomplete. Subprotocol offers are unique
+// Full compression parameter compatibility remains experimental. Subprotocol offers are unique
 // HTTP tokens; any selected protocol must be exactly one case-sensitive offered
 // token. Omitting selection is allowed. Applications choose and implement their
 // subprotocols. Custom headers
