@@ -17,8 +17,25 @@
 //
 // The Dial context covers TCP, TLS, and the HTTP upgrade handshake. Once Dial
 // succeeds, canceling that context does not cancel message I/O. Call Conn.Close
-// to interrupt reads and writes. Close sends a best-effort notification with a
-// bounded write deadline and closes the transport without waiting for the peer.
+// to interrupt reads and writes. NewConn takes over framing and I/O and closes
+// its transport on Close or read failure; do not read or write framed bytes
+// directly on that transport.
+//
+// Conn.SetDeadline, Conn.SetReadDeadline and Conn.SetWriteDeadline delegate to
+// the transport and affect future and currently blocked I/O. A zero time clears
+// a deadline; there is no default message timeout. ReadMessage may write an
+// automatic Pong, so a read deadline alone cannot bound the call. Set an
+// appropriate write deadline too, or use SetDeadline for a shared budget.
+// Any read timeout is terminal. Write timeouts preserve ErrWriteFailed and the
+// underlying cause; close afterward, because partial frames cannot be retried.
+// Already buffered data may still be consumed. Deadlines do not preempt
+// callbacks, extension work, lock waits or custom transport Close implementations.
+// They are not whole-method timeouts.
+//
+// Close sends a best-effort notification and closes the transport without
+// waiting for the peer. When no writer is active, that notification replaces
+// any caller write deadline with a one-second deadline. Read-failure cleanup
+// instead preserves caller deadlines.
 //
 // # Message limits and concurrency
 //
@@ -35,7 +52,9 @@
 // does not bound total memory, CPU, fragment count, concurrency or lifetime.
 //
 // Reads and writes are independently serialized. Close may be called concurrently
-// with either. WriteMessage does not modify the caller's payload. Ping and pong
+// with either, as may all three deadline setters. Callers must coordinate
+// competing updates to the shared transport deadlines. WriteMessage does not
+// modify the caller's payload. Ping and pong
 // handlers run synchronously from ReadMessage and must not call it recursively.
 // An extension instance must not be shared between connections.
 //

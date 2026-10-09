@@ -176,17 +176,39 @@ the intentional changes to high-level defaults.
 
 `Dial`'s context covers TCP connection establishment, TLS, and the HTTP upgrade.
 It is detached after a successful handshake. It does not cancel later reads or
-writes. Call `Close` to interrupt connection I/O.
+writes. Call `Close` to interrupt connection I/O, or set transport deadlines with
+`SetDeadline`, `SetReadDeadline`, and `SetWriteDeadline`. There is no default
+message timeout. A zero `time.Time` clears a deadline; otherwise it applies to
+future and currently blocked transport I/O in that direction. `SetDeadline`
+sets both directions. The setters return the underlying transport error unchanged.
+
+`ReadMessage` may synchronously write an automatic Pong. A read deadline alone
+does not bound that write; set an appropriate write deadline too, or use
+`SetDeadline` for a shared transport budget. Any read error, including a timeout,
+is terminal: clearing the deadline afterward does not make the connection
+reusable. A write timeout preserves `ErrWriteFailed` and its underlying cause;
+close the connection afterward, because a partial frame cannot be retried safely.
+
+Deadlines are transport controls, not per-call contexts or whole-method timeouts.
+They do not preempt callbacks, extension work, lock waits or custom transport
+`Close` implementations, and already buffered data may still be consumed.
+`NewConn` takes over WebSocket framing and I/O and closes its transport on `Close`
+or read failure; do not read or write framed bytes directly on that transport.
 
 Reads and writes are independently serialized. `Close` can run concurrently with
-either. The library does not mutate the byte slice passed to `WriteMessage`.
+either, as can all three deadline setters. Deadlines are shared transport state;
+callers must coordinate competing updates. The library does not mutate the byte
+slice passed to `WriteMessage`.
 Ping and pong handlers run from `ReadMessage`; a handler must not call
 `ReadMessage` recursively. Extension instances are connection-specific and must
 not be reused across connections.
 
 `Close` makes a best-effort normal close notification, limited to one second when
-no other writer is active, then closes the transport. It does not wait for the
-peer's closing handshake. A second call returns `ErrAlreadyClosed`.
+no other writer is active, then closes the transport. That notification replaces
+any caller write deadline with a one-second deadline, so an earlier deadline is
+not a strict bound on graceful `Close`. Read-failure cleanup instead preserves
+caller deadlines. `Close` does not wait for the peer's closing handshake.
+A second call returns `ErrAlreadyClosed`.
 
 `WriteControlFrame(CloseMessage, payload)` starts a closing handshake without
 closing the transport. After a successful close frame, data writes and duplicate
