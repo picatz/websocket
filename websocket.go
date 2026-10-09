@@ -335,7 +335,9 @@ func NewPerMessageDeflateExtension(options ...PerMessageDeflateOption) Extension
 }
 
 // Conn represents a WebSocket connection. Reads and writes are independently
-// serialized. Close may be called concurrently with reads and writes.
+// serialized. Close and the deadline setters may be called concurrently with
+// reads and writes. Deadlines are shared transport state; callers must coordinate
+// competing deadline updates.
 type Conn struct {
 	conn     net.Conn          // Underlying network connection
 	rw       *bufio.ReadWriter // Buffered reader and writer
@@ -376,6 +378,9 @@ func WithMaxBytes(maxBytes int) ConnOption {
 }
 
 // NewConn creates a new WebSocket connection.
+// It takes over WebSocket framing and I/O; Close and read-error cleanup close
+// the transport. Callers must not read or write framed bytes directly on conn.
+//
 // For a manual server handshake with the built-in compression extension, call
 // NewConn before Extension.Negotiate to establish the server role. Then negotiate
 // the client's offer and, only if Extension.IsEnabled reports true, include
@@ -406,6 +411,42 @@ func NewConn(conn net.Conn, isServer bool, extensions []Extension, opts ...ConnO
 	return wsConn
 }
 
+// SetDeadline sets the underlying transport's read and write deadlines, including
+// currently blocked I/O. A zero value clears both deadlines. It returns the
+// transport's error unchanged and may run concurrently with reads, writes and
+// Close. Callers must coordinate updates to the shared deadline state.
+//
+// Deadlines bound transport I/O, not an entire method call: already buffered
+// data may still be consumed, and callbacks, extension work and lock waits are
+// not preempted. ReadMessage may
+// write automatic Pong responses, so bounding both directions may be necessary.
+// A read timeout is terminal. Close after a write timeout; a partially written
+// frame cannot be retried safely. Normal Close may replace the write deadline
+// with its own one-second deadline; failure cleanup preserves caller deadlines.
+func (c *Conn) SetDeadline(t time.Time) error {
+	return c.conn.SetDeadline(t)
+}
+
+// SetReadDeadline sets the underlying transport's deadline for future and
+// currently blocked reads. A zero value clears it. Like SetDeadline, it returns
+// the transport's error unchanged and may run concurrently with I/O and Close.
+// A read timeout makes the connection terminal; clearing the deadline afterward
+// does not make it reusable. This does not bound ReadMessage's automatic Pong
+// writes; set an appropriate write deadline too, or use SetDeadline.
+func (c *Conn) SetReadDeadline(t time.Time) error {
+	return c.conn.SetReadDeadline(t)
+}
+
+// SetWriteDeadline sets the underlying transport's deadline for future and
+// currently blocked writes, including automatic control replies. A zero value
+// clears it. Like SetDeadline, it returns the transport's error unchanged and
+// may run concurrently with I/O and Close. Close after a write timeout; a
+// partially written frame cannot be retried safely. Normal Close may replace
+// this deadline with its own one-second deadline.
+func (c *Conn) SetWriteDeadline(t time.Time) error {
+	return c.conn.SetWriteDeadline(t)
+}
+
 // WebSocket status codes. StatusNoStatusReceived, StatusAbnormalClosure, and
 // StatusTLSHandshake are local-only indicators and must not appear on the wire.
 //
@@ -426,8 +467,10 @@ const (
 )
 
 // Close closes the transport, making a best-effort normal close notification
-// with a one-second write deadline when no other writer is active. It does not
-// wait for the peer's closing handshake. Repeated calls return ErrAlreadyClosed.
+// with a one-second write deadline when no other writer is active, replacing
+// any write deadline set by the caller. It does not wait for the peer's closing
+// handshake. Repeated calls return ErrAlreadyClosed. Custom transport Close
+// implementations can still block.
 func (c *Conn) Close() error {
 	closePayload := make([]byte, 2)
 	binary.BigEndian.PutUint16(closePayload, StatusNormalClosure)
