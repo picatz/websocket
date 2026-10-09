@@ -26,3 +26,4 @@ jobs:
       - run: go test . -run '^$' -fuzz '^FuzzReadMessage$' -fuzztime=15s -parallel=2
       - run: go test . -run '^$' -fuzz '^FuzzExtensionNegotiation$' -fuzztime=15s -parallel=2
       - run: go test . -run '^$' -fuzz '^FuzzUTF8Fragments$' -fuzztime=15s -parallel=2
+      - run: go test . -run '^$' -fuzz '^FuzzCanonicalOrigin$' -fuzztime=15s -parallel=2

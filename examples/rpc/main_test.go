@@ -47,3 +47,42 @@ func Test_rpcHandler(t *testing.T) {
 		t.Fatalf("Expected message data %s, got %s", `{"result":3}`, string(messageData))
 	}
 }
+
+func TestHandshakeHTTPResponses(t *testing.T) {
+	for _, tc := range []struct {
+		name, origin string
+		valid        bool
+		status       int
+	}{
+		{"cross origin", "https://other.test", true, http.StatusForbidden},
+		{"opaque origin", "null", true, http.StatusForbidden},
+		{"malformed origin", "http://example.test/", true, http.StatusForbidden},
+		{"bad handshake", "", false, http.StatusBadRequest},
+		{"unsupported version", "", true, http.StatusUpgradeRequired},
+		{"no hijacker", "", true, http.StatusInternalServerError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodGet, "http://example.test/ws", nil)
+			if tc.valid {
+				r.Header.Set("Upgrade", "websocket")
+				r.Header.Set("Connection", "Upgrade")
+				r.Header.Set("Sec-WebSocket-Version", "13")
+				r.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+			}
+			if tc.name == "unsupported version" {
+				r.Header.Set("Sec-WebSocket-Version", "12")
+			}
+			if tc.origin != "" {
+				r.Header.Set("Origin", tc.origin)
+			}
+			w := httptest.NewRecorder()
+			rpcHandler(w, r)
+			if tc.status == http.StatusUpgradeRequired && w.Header().Get("Sec-WebSocket-Version") != "13" {
+				t.Fatal("missing supported version")
+			}
+			if w.Code != tc.status {
+				t.Fatalf("status %d, want %d", w.Code, tc.status)
+			}
+		})
+	}
+}

@@ -33,6 +33,7 @@ Here's how you can use the websocket package to create a simple WebSocket echo s
 package main
 
 import (
+	"errors"
 	"io"
 	"log"
 	"net/http"
@@ -45,6 +46,17 @@ func echoHandler(w http.ResponseWriter, r *http.Request) {
 	conn, err := websocket.Upgrade(w, r, websocket.WithUpgradeMaxMessageSize(1<<20))
 	if err != nil {
 		log.Printf("Upgrade failed: %v", err)
+		switch {
+		case errors.Is(err, websocket.ErrOriginNotAllowed):
+			http.Error(w, "WebSocket origin not allowed", http.StatusForbidden)
+		case errors.Is(err, websocket.ErrUnsupportedVersion):
+			w.Header().Set("Sec-WebSocket-Version", "13")
+			http.Error(w, "Unsupported WebSocket version", http.StatusUpgradeRequired)
+		case errors.Is(err, websocket.ErrNotHijacker):
+			http.Error(w, "WebSocket upgrade unavailable", http.StatusInternalServerError)
+		case !errors.Is(err, websocket.ErrHandshakeFailed):
+			http.Error(w, "Invalid WebSocket handshake", http.StatusBadRequest)
+		}
 		return
 	}
 	defer conn.Close()
@@ -141,12 +153,26 @@ conn.SetPongHandler(func(appData string) error {
 
 ## Limits and connection lifetime
 
-Set `WithMaxMessageSize(n)` for a client, `WithUpgradeMaxMessageSize(n)` for a server,
-or `WithMaxBytes(n)` with `NewConn`. Limits apply to incoming frame payloads,
-reassembled messages, and decoded data from the built-in compression extension.
-The default is unlimited; set an application-appropriate positive limit before
-accepting untrusted peers. Custom extensions are responsible for bounding their
-own intermediate allocations.
+`Dial` and `Upgrade` default to `DefaultMaxMessageSize`, 1 MiB (1,048,576 bytes).
+Set `WithMaxMessageSize(n)` for a client or `WithUpgradeMaxMessageSize(n)` for a
+server to choose an application-appropriate budget. An explicit zero or negative
+value opts into unlimited incoming payloads; the last size option wins.
+`NewConn` remains low-level and unlimited unless given positive `WithMaxBytes(n)`.
+Non-positive `WithMaxBytes` options are ignored, including after a positive option.
+
+Limits apply to each incoming data-frame wire payload and the reassembled decoded
+message. Headers, masking keys and interleaved controls do not consume the message
+budget; outgoing messages are not capped. Supported unfragmented built-in
+compression bounds both encoded and decoded bytes. Incompressible data can fit
+the decoded budget but exceed the encoded budget, so allow headroom when choosing
+a compression limit. The wire limit is per frame, not aggregate compressed input.
+Custom extensions must bound their own intermediate allocations; their final
+results are checked but extension code is trusted.
+
+A payload cap is not a total-memory, CPU, fragment-count, concurrency or lifetime
+limit. Applications still need connection/lifetime controls for slow peers and
+empty-fragment or control-frame floods. See [migration notes](MIGRATION.md) for
+the intentional changes to high-level defaults.
 
 `Dial`'s context covers TCP connection establishment, TLS, and the HTTP upgrade.
 It is detached after a successful handshake. It does not cancel later reads or
@@ -169,10 +195,40 @@ Receiving the peer's close or calling `Close` closes the transport without
 sending another close frame. Call `Close` if the peer does not respond; there is
 no automatic handshake timeout. Close the connection after any write error.
 
+## Browser origins and proxies
+
+`Upgrade` allows a missing Origin for native clients. Otherwise it requires one
+valid HTTP/HTTPS Origin matching the request's scheme, host and effective port.
+The scheme comes only from the actual `r.TLS` connection; authority comes from
+`r.Host`. It ignores `Forwarded`, `X-Forwarded-*` and `r.URL.Scheme`. A default
+HTTP/HTTPS port is equivalent to its omission. Host case and IPv6 spelling are
+normalized; trailing dots and loopback aliases remain distinct.
+
+Use `WithUpgradeOriginCheck(func(r *http.Request, origin string) bool)` to replace
+that decision with an exact public-origin allowlist, including behind a
+TLS-terminating proxy. The callback receives a canonical origin, `""` for absent,
+or `"null"` for an opaque origin. Explicitly decide whether to allow those cases;
+`null` does not identify one trusted website. A nil callback restores the default,
+and repeated options are last-wins. See [migration examples](MIGRATION.md).
+
+Before any callback, empty, multiple, list-valued or malformed fields are denied.
+Tuple hosts use ASCII RFC 3986 reg-name characters except percent escapes and
+commas, or bracketed IPv6 without a zone. Unicode hosts must use ASCII/punycode.
+Userinfo, paths (even `/`), queries, fragments and invalid ports are rejected.
+Comma rejection is an intentional single-origin policy, including commas in a
+reg-name. There is no DNS resolution or IDNA conversion.
+
+On rejection, `Upgrade` returns `ErrOriginNotAllowed` before extension negotiation
+or hijacking. It does not write HTTP 403: the caller owns the response, as in the
+server example. Other pre-hijack errors likewise leave the writer untouched.
+After `ErrHandshakeFailed`, the transport may have been hijacked; do not try to
+write another HTTP response.
+
 ## Protocol limitations
 
-- Authenticate requests and validate their `Origin` in your HTTP handler before
-  calling `Upgrade`. This package does not enforce an origin policy
+- Authenticate and authorize requests and validate the authoritative Host in your
+  HTTP handler. `Upgrade` enforces the Origin policy described above; Origin is
+  not authentication, and non-browser clients can omit or forge it
 - Extension negotiation is not comprehensively validated
 - Subprotocol offers must contain unique, case-sensitive HTTP tokens. `Dial`
   rejects unsolicited, unoffered, malformed, or multiple server selections.
