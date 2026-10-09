@@ -47,3 +47,34 @@ func Test_rpcHandler(t *testing.T) {
 		t.Fatalf("Expected message data %s, got %s", `{"result":3}`, string(messageData))
 	}
 }
+
+func TestHandshakeHTTPResponses(t *testing.T) {
+	for _, tc := range []struct {
+		name, origin string
+		valid        bool
+		status       int
+	}{
+		{"cross origin", "https://other.test", true, http.StatusForbidden},
+		{"opaque origin", "null", true, http.StatusForbidden},
+		{"malformed origin", "http://example.test/", true, http.StatusForbidden},
+		{"bad handshake", "", false, http.StatusBadRequest},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodGet, "http://example.test/ws", nil)
+			if tc.valid {
+				r.Header.Set("Upgrade", "websocket")
+				r.Header.Set("Connection", "Upgrade")
+				r.Header.Set("Sec-WebSocket-Version", "13")
+				r.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+			}
+			if tc.origin != "" {
+				r.Header.Set("Origin", tc.origin)
+			}
+			w := httptest.NewRecorder()
+			rpcHandler(w, r)
+			if w.Code != tc.status {
+				t.Fatalf("status %d, want %d", w.Code, tc.status)
+			}
+		})
+	}
+}

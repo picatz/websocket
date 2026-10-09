@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"io"
 	"log"
 	"net/http"
@@ -13,6 +14,12 @@ func echoHandler(w http.ResponseWriter, r *http.Request) {
 	conn, err := websocket.Upgrade(w, r)
 	if err != nil {
 		log.Printf("Upgrade failed: %v", err)
+		if errors.Is(err, websocket.ErrOriginNotAllowed) {
+			http.Error(w, "WebSocket origin not allowed", http.StatusForbidden)
+		} else if !errors.Is(err, websocket.ErrHandshakeFailed) {
+			// A failed hijack/101 write may already own the transport.
+			http.Error(w, "Invalid WebSocket handshake", http.StatusBadRequest)
+		}
 		return
 	}
 	defer conn.Close()

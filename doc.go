@@ -5,8 +5,15 @@
 // # Connections
 //
 // Use Dial to connect to a ws or wss URL, and Upgrade to take over an HTTP/1.1
-// request on a server. The caller must authenticate requests and validate Origin
-// before Upgrade; the package does not impose an origin policy.
+// request on a server. Upgrade allows a missing Origin for native clients;
+// otherwise it requires a single valid HTTP/HTTPS Origin matching r.Host and the
+// actual connection's TLS scheme. Forwarded headers are not trusted. Use
+// WithUpgradeOriginCheck to replace that decision, for example with an exact
+// public-origin allowlist behind a TLS-terminating proxy. Malformed/multiple
+// fields are rejected before a callback. ErrOriginNotAllowed leaves the response
+// writer untouched; the caller may send HTTP 403. Authentication, authorization,
+// and authoritative Host validation remain application responsibilities. Origin
+// is not authentication and non-browser clients can omit or forge it.
 //
 // The Dial context covers TCP, TLS, and the HTTP upgrade handshake. Once Dial
 // succeeds, canceling that context does not cancel message I/O. Call Conn.Close
@@ -15,11 +22,17 @@
 //
 // # Message limits and concurrency
 //
-// Incoming messages are unlimited by default. Use WithMaxMessageSize with Dial,
-// WithUpgradeMaxMessageSize with Upgrade, or WithMaxBytes with NewConn to impose
-// an incoming frame and reassembled-message limit. The built-in compression
-// extension also limits decoded output when a connection limit is configured.
-// Custom extensions must bound their own intermediate allocations.
+// Dial and Upgrade default to DefaultMaxMessageSize (1 MiB). Choose an explicit
+// limit with WithMaxMessageSize or WithUpgradeMaxMessageSize; zero/negative means
+// unlimited, and the last option wins. NewConn remains unlimited by default;
+// WithMaxBytes applies only positive limits and ignores non-positive options.
+// Limits bound each incoming data-frame wire payload and reassembled decoded
+// message. Headers, masking keys and controls do not consume the message budget.
+// Writes are not capped. For supported unfragmented built-in compression, encoded
+// and decoded sizes must both fit; incompressible input may need extra headroom.
+// The encoded limit is per frame, not an aggregate compressed-message budget.
+// Custom extensions must bound their own intermediate allocations. A byte cap
+// does not bound total memory, CPU, fragment count, concurrency or lifetime.
 //
 // Reads and writes are independently serialized. Close may be called concurrently
 // with either. WriteMessage does not modify the caller's payload. Ping and pong

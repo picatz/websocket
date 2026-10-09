@@ -27,6 +27,7 @@ var (
 	ErrInvalidExtension        = errors.New("websocket: invalid extension negotiation")
 	ErrInvalidSubprotocol      = errors.New("websocket: invalid subprotocol negotiation")
 	ErrBadHandshake            = errors.New("websocket: bad handshake")
+	ErrOriginNotAllowed        = errors.New("websocket: origin not allowed")
 	ErrUnsupportedVersion      = errors.New("websocket: unsupported WebSocket version")
 	ErrInvalidHandshakeHeader  = errors.New("websocket: invalid custom handshake header")
 	ErrInvalidUpgradeHeader    = errors.New("websocket: invalid Upgrade header")
@@ -50,6 +51,11 @@ var (
 	ErrWriteFailed             = errors.New("websocket: write failed")
 	ErrAlreadyClosed           = errors.New("websocket: connection already closed")
 )
+
+// DefaultMaxMessageSize is the incoming payload limit used by Dial and Upgrade
+// when no size option is supplied. It bounds each data frame and the reassembled
+// decoded message, not total memory, connection lifetime, or outgoing messages.
+const DefaultMaxMessageSize = 1 << 20
 
 type Opcode int
 
@@ -1241,7 +1247,8 @@ func WithTLSConfig(config *tls.Config) DialOption {
 
 // WithMaxMessageSize sets the maximum frame and reassembled message size in bytes.
 // For the built-in compression extension, this also bounds decompressed data.
-// A non-positive value leaves the size unlimited.
+// The default is DefaultMaxMessageSize. An explicit non-positive value makes
+// the size unlimited. When repeated, the last option wins.
 func WithMaxMessageSize(maxBytes int) DialOption {
 	return func(opts *dialOptions) {
 		opts.maxBytes = maxBytes
@@ -1251,7 +1258,7 @@ func WithMaxMessageSize(maxBytes int) DialOption {
 // Dial establishes a WebSocket client connection to the given URL.
 // ctx covers TCP, TLS, and the HTTP upgrade handshake, but not subsequent I/O.
 func Dial(ctx context.Context, urlStr string, options ...DialOption) (ws *Conn, response *http.Response, err error) {
-	opts := &dialOptions{}
+	opts := &dialOptions{maxBytes: DefaultMaxMessageSize}
 	opts.apply(options)
 
 	if err := validateHandshakeHeaders(opts.header, false); err != nil {
@@ -1441,6 +1448,7 @@ type upgradeOptions struct {
 	extensions     []Extension
 	responseHeader http.Header
 	maxBytes       int
+	originCheck    func(*http.Request, string) bool
 }
 
 // apply applies the options to the upgradeOptions.
@@ -1474,20 +1482,47 @@ func WithResponseHeader(header http.Header) UpgradeOption {
 }
 
 // WithUpgradeMaxMessageSize sets the maximum incoming frame and reassembled
-// message size, including built-in decompression. Non-positive means unlimited.
+// message size, including built-in decompression. The default is
+// DefaultMaxMessageSize. An explicit non-positive value means unlimited.
+// When repeated, the last option wins.
 func WithUpgradeMaxMessageSize(maxBytes int) UpgradeOption {
 	return func(opts *upgradeOptions) {
 		opts.maxBytes = maxBytes
 	}
 }
 
+// WithUpgradeOriginCheck replaces the default same-origin decision. The callback
+// receives the request and one canonical Origin: a lowercase scheme/ASCII host,
+// normalized numeric port (HTTP/HTTPS defaults omitted), and normalized IPv6;
+// "" means absent and "null" means an opaque origin. Host spelling is otherwise
+// preserved, including trailing dots; Unicode hosts must use ASCII/punycode.
+// Malformed, empty, multiple, or list-valued Origin fields are rejected before
+// the callback. A nil callback restores the default. The last option wins.
+//
+// Use an exact allowlist for public origins behind a TLS-terminating proxy.
+// Forwarded headers are untrusted unless the application validates its ingress.
+// A callback replaces, rather than supplements, the default decision; it must
+// explicitly decide whether missing and opaque origins are allowed.
+func WithUpgradeOriginCheck(check func(r *http.Request, origin string) bool) UpgradeOption {
+	return func(opts *upgradeOptions) {
+		opts.originCheck = check
+	}
+}
+
 // Upgrade upgrades the HTTP server connection to a WebSocket connection.
+// Incoming payloads default to DefaultMaxMessageSize. A missing Origin is allowed;
+// otherwise a single valid HTTP/HTTPS Origin must match r.Host and the scheme
+// observed through r.TLS. Forwarded headers and r.URL.Scheme are not trusted.
+// Origin is not authentication: callers still own authentication, authorization,
+// and authoritative Host validation. WithUpgradeOriginCheck replaces the policy.
+// Origin rejection returns ErrOriginNotAllowed without writing an HTTP response;
+// the caller may send HTTP 403. Other pre-hijack errors also leave w untouched.
 // It requires an HTTP/1.1 connection with hijacking support. Middleware may
 // implement http.Hijacker directly or expose the underlying http.ResponseWriter
 // through an Unwrap() http.ResponseWriter method, as used by http.ResponseController.
 // A writer's own Hijack method takes precedence over Unwrap. HTTP/2 is not supported.
 func Upgrade(w http.ResponseWriter, r *http.Request, options ...UpgradeOption) (*Conn, error) {
-	opts := &upgradeOptions{}
+	opts := &upgradeOptions{maxBytes: DefaultMaxMessageSize}
 	opts.apply(options)
 
 	if err := validateHandshakeHeaders(opts.responseHeader, true); err != nil {
@@ -1523,6 +1558,9 @@ func Upgrade(w http.ResponseWriter, r *http.Request, options ...UpgradeOption) (
 	}
 	if err := validateSubprotocolSelection(opts.responseHeader, offered); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidHandshakeHeader, err)
+	}
+	if !upgradeOriginAllowed(r, opts.originCheck) {
+		return nil, ErrOriginNotAllowed
 	}
 	acceptKey := computeAcceptKey(key)
 
