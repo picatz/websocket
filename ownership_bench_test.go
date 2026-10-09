@@ -29,13 +29,16 @@ func BenchmarkReadMessageOwnership(b *testing.B) {
 
 func BenchmarkReadMessageOwnershipFallback(b *testing.B) {
 	for _, size := range []int{16, 4096, 65536} {
-		for _, mode := range []string{"fragmented", "disabled", "enabled"} {
+		for _, mode := range []string{"fragmented", "disabled", "enabled", "disabled-pmd", "enabled-pmd-uncompressed"} {
 			b.Run(fmt.Sprintf("bytes=%d/mode=%s", size, mode), func(b *testing.B) {
 				fragments := 1
 				var extensions []Extension
-				if mode == "fragmented" {
+				switch mode {
+				case "fragmented":
 					fragments = 4
-				} else {
+				case "disabled-pmd", "enabled-pmd-uncompressed":
+					extensions = []Extension{&perMessageDeflate{enabled: mode == "enabled-pmd-uncompressed"}}
+				default:
 					extensions = []Extension{&headerTransformExtension{
 						enabled: mode == "enabled",
 						process: func(*Frame) error { return nil },
