@@ -663,7 +663,13 @@ func (c *Conn) ReadMessage() (messageType Opcode, data []byte, err error) {
 				return 0, nil, failWith(StatusMessageTooBig, ErrPayloadTooLarge)
 			}
 
-			message = append(message, frame.Payload...)
+			// A final, extension-free frame owns its payload. Retain it only
+			// without spare capacity so small messages do not keep a large buffer.
+			if frame.Final && len(c.extensions) == 0 && len(frame.Payload) > 0 && cap(frame.Payload) == len(frame.Payload) {
+				message = frame.Payload
+			} else {
+				message = append(message, frame.Payload...)
+			}
 			if messageType == TextMessage {
 				valid := true
 				if checkedText {
