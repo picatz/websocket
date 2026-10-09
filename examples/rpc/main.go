@@ -16,9 +16,15 @@ func rpcHandler(w http.ResponseWriter, r *http.Request) {
 	conn, err := websocket.Upgrade(w, r)
 	if err != nil {
 		log.Printf("Upgrade failed: %v", err)
-		if errors.Is(err, websocket.ErrOriginNotAllowed) {
+		switch {
+		case errors.Is(err, websocket.ErrOriginNotAllowed):
 			http.Error(w, "WebSocket origin not allowed", http.StatusForbidden)
-		} else if !errors.Is(err, websocket.ErrHandshakeFailed) {
+		case errors.Is(err, websocket.ErrUnsupportedVersion):
+			w.Header().Set("Sec-WebSocket-Version", "13")
+			http.Error(w, "Unsupported WebSocket version", http.StatusUpgradeRequired)
+		case errors.Is(err, websocket.ErrNotHijacker):
+			http.Error(w, "WebSocket upgrade unavailable", http.StatusInternalServerError)
+		case !errors.Is(err, websocket.ErrHandshakeFailed):
 			// A failed hijack/101 write may already own the transport.
 			http.Error(w, "Invalid WebSocket handshake", http.StatusBadRequest)
 		}

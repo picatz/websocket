@@ -1256,6 +1256,7 @@ func WithMaxMessageSize(maxBytes int) DialOption {
 }
 
 // Dial establishes a WebSocket client connection to the given URL.
+// Incoming payloads default to DefaultMaxMessageSize; WithMaxMessageSize overrides it.
 // ctx covers TCP, TLS, and the HTTP upgrade handshake, but not subsequent I/O.
 func Dial(ctx context.Context, urlStr string, options ...DialOption) (ws *Conn, response *http.Response, err error) {
 	opts := &dialOptions{maxBytes: DefaultMaxMessageSize}
@@ -1496,6 +1497,8 @@ func WithUpgradeMaxMessageSize(maxBytes int) UpgradeOption {
 // normalized numeric port (HTTP/HTTPS defaults omitted), and normalized IPv6;
 // "" means absent and "null" means an opaque origin. Host spelling is otherwise
 // preserved, including trailing dots; Unicode hosts must use ASCII/punycode.
+// Hosts accept ASCII RFC 3986 reg-name characters except percent escapes and
+// commas, or bracketed IPv6 without a zone. Mapped IPv6 is serialized in hex.
 // Malformed, empty, multiple, or list-valued Origin fields are rejected before
 // the callback. A nil callback restores the default. The last option wins.
 //

@@ -46,9 +46,15 @@ func echoHandler(w http.ResponseWriter, r *http.Request) {
 	conn, err := websocket.Upgrade(w, r, websocket.WithUpgradeMaxMessageSize(1<<20))
 	if err != nil {
 		log.Printf("Upgrade failed: %v", err)
-		if errors.Is(err, websocket.ErrOriginNotAllowed) {
+		switch {
+		case errors.Is(err, websocket.ErrOriginNotAllowed):
 			http.Error(w, "WebSocket origin not allowed", http.StatusForbidden)
-		} else if !errors.Is(err, websocket.ErrHandshakeFailed) {
+		case errors.Is(err, websocket.ErrUnsupportedVersion):
+			w.Header().Set("Sec-WebSocket-Version", "13")
+			http.Error(w, "Unsupported WebSocket version", http.StatusUpgradeRequired)
+		case errors.Is(err, websocket.ErrNotHijacker):
+			http.Error(w, "WebSocket upgrade unavailable", http.StatusInternalServerError)
+		case !errors.Is(err, websocket.ErrHandshakeFailed):
 			http.Error(w, "Invalid WebSocket handshake", http.StatusBadRequest)
 		}
 		return
@@ -221,7 +227,7 @@ write another HTTP response.
 ## Protocol limitations
 
 - Authenticate and authorize requests and validate the authoritative Host in your
-  HTTP handler. `Upgrade` enforces the Origin policy described below; Origin is
+  HTTP handler. `Upgrade` enforces the Origin policy described above; Origin is
   not authentication, and non-browser clients can omit or forge it
 - Extension negotiation is not comprehensively validated
 - Subprotocol offers must contain unique, case-sensitive HTTP tokens. `Dial`

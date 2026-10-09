@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Every ResponseWriter operation, including Header, is observable on rejection.
@@ -93,7 +94,7 @@ func TestUpgradeRejectsAmbiguousOriginBeforeCallback(t *testing.T) {
 		{"Origin": {}, "origin": {"http://example.test"}},
 	}
 	for _, value := range []string{
-		"", " \t", "NULL", "http://example.test,http://evil.test", "http://example.test http://evil.test",
+		"", " \t", "NULL", "http://example.test,http://evil.test", "http://a,b.test", "http://example.test http://evil.test",
 		"http://user@example.test", "http://example.test/", "http://example.test/path", "http://example.test?",
 		"http://example.test?q=x", "http://example.test#", "http://example.test#fragment", "/relative", "http:example.test",
 		"http://example.test\\evil", "http://ex%61mple.test", "http://[broken]", "http://[127.0.0.1]", "http://[::1%25eth0]",
@@ -129,6 +130,9 @@ func TestUpgradeOriginOverride(t *testing.T) {
 		{"<missing>", ""}, {"null", "null"}, {" \tHTTPS://PUBLIC.TEST:00443\t", "https://public.test"},
 		{"CUSTOM+app://EXAMPLE.test:00080", "custom+app://example.test:80"},
 		{"http://[2001:0DB8::1]:0080", "http://[2001:db8::1]"},
+		{"http://[::ffff:192.0.2.1]", "http://[::ffff:c000:201]"},
+		{"http://[::ffff:c000:201]", "http://[::ffff:c000:201]"},
+		{"HTTPS://a!$&'()*+;=~B.test:443", "https://a!$&'()*+;=~b.test"},
 	} {
 		t.Run(tc.value, func(t *testing.T) {
 			r := upgradeRequest()
@@ -164,6 +168,8 @@ func TestUpgradeOriginOverride(t *testing.T) {
 		{"replace default", "http://example.test", []UpgradeOption{allow}, false},
 		{"deny missing", "<missing>", []UpgradeOption{deny}, false},
 		{"deny same-origin", "http://example.test", []UpgradeOption{deny}, false},
+		{"nil restores same origin", "http://example.test", []UpgradeOption{deny, WithUpgradeOriginCheck(nil)}, true},
+		{"nil restores missing", "<missing>", []UpgradeOption{deny, WithUpgradeOriginCheck(nil)}, true},
 		{"nil restores default", "https://public.test", []UpgradeOption{allow, WithUpgradeOriginCheck(nil)}, false},
 		{"last deny", "https://public.test", []UpgradeOption{allow, deny}, false},
 		{"last allow", "https://public.test", []UpgradeOption{deny, nil, allow}, true},
@@ -202,14 +208,29 @@ func TestUpgradeOriginProxyBoundary(t *testing.T) {
 		expected, ok := r.Context().Value(publicOriginKey{}).(string)
 		return ok && o == expected
 	})
-	for _, trusted := range []bool{false, true} {
-		r2 := r.Clone(t.Context())
-		if trusted {
-			r2 = r2.WithContext(context.WithValue(r2.Context(), publicOriginKey{}, "https://example.test"))
+	installIngressContext := func(r *http.Request) *http.Request {
+		// This fixture's configured ingress is one exact address. A real
+		// deployment must also prevent untrusted access through that ingress.
+		host, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil || host != "192.0.2.10" {
+			return r
 		}
-		_, err := originUpgrade(t, r2, policy)
-		if (err == nil) != trusted {
-			t.Fatalf("trusted ingress %v: %v", trusted, err)
+		return r.WithContext(context.WithValue(r.Context(), publicOriginKey{}, "https://example.test"))
+	}
+	for _, tc := range []struct {
+		peer, origin string
+		allow        bool
+	}{
+		{"198.51.100.20:1234", "https://example.test", false},
+		{"192.0.2.10:1234", "https://example.test", true},
+		{"192.0.2.10:1234", "https://evil.test", false},
+	} {
+		r2 := r.Clone(t.Context())
+		r2.RemoteAddr = tc.peer
+		r2.Header.Set("Origin", tc.origin)
+		_, err := originUpgrade(t, installIngressContext(r2), policy)
+		if (err == nil) != tc.allow {
+			t.Fatalf("ingress %s origin %s: %v", tc.peer, tc.origin, err)
 		}
 	}
 }
@@ -243,7 +264,9 @@ func TestUpgradeOriginRealLoopback(t *testing.T) {
 				if secure {
 					opts = append(opts, WithTLSConfig(srv.Client().Transport.(*http.Transport).TLSClientConfig))
 				}
-				c, resp, err := Dial(t.Context(), "ws"+strings.TrimPrefix(u.Scheme, "http")+"://"+u.Host, opts...)
+				ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+				defer cancel()
+				c, resp, err := Dial(ctx, "ws"+strings.TrimPrefix(u.Scheme, "http")+"://"+u.Host, opts...)
 				allowed := origin == "" || origin == srv.URL
 				if allowed {
 					if err != nil {
@@ -292,4 +315,31 @@ func FuzzCanonicalOrigin(f *testing.F) {
 			t.Fatalf("ambiguous origin %q", got)
 		}
 	})
+}
+
+func TestUpgradeOriginDenialHasNoSideEffects(t *testing.T) {
+	for _, tc := range []struct {
+		origin string
+		check  func(*http.Request, string) bool
+	}{
+		{"https://evil.test", nil}, {"null", nil},
+		{"http://example.test", func(*http.Request, string) bool { return false }},
+		{"<missing>", func(*http.Request, string) bool { return false }},
+	} {
+		r := upgradeRequest()
+		if tc.origin != "<missing>" {
+			r.Header.Set("Origin", tc.origin)
+		}
+		w := new(originWriter)
+		ext := &negotiationExtension{name: "example", offer: "example"}
+		c, err := Upgrade(w, r, WithUpgradeOriginCheck(tc.check), WithUpgradeExtensions(ext))
+		if c != nil || err != ErrOriginNotAllowed || w.calls != 0 || ext.calls != 0 {
+			t.Fatalf("rejection: conn %v err %v writer %d extension %d", c, err, w.calls, ext.calls)
+		}
+	}
+	r := upgradeRequest()
+	r.Header["oRiGiN"] = []string{"http://example.test"}
+	if _, err := originUpgrade(t, r); err != nil {
+		t.Fatalf("single noncanonical header key: %v", err)
+	}
 }

@@ -58,6 +58,8 @@ func TestHandshakeHTTPResponses(t *testing.T) {
 		{"opaque origin", "null", true, http.StatusForbidden},
 		{"malformed origin", "http://example.test/", true, http.StatusForbidden},
 		{"bad handshake", "", false, http.StatusBadRequest},
+		{"unsupported version", "", true, http.StatusUpgradeRequired},
+		{"no hijacker", "", true, http.StatusInternalServerError},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := httptest.NewRequest(http.MethodGet, "http://example.test/ws", nil)
@@ -67,11 +69,17 @@ func TestHandshakeHTTPResponses(t *testing.T) {
 				r.Header.Set("Sec-WebSocket-Version", "13")
 				r.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
 			}
+			if tc.name == "unsupported version" {
+				r.Header.Set("Sec-WebSocket-Version", "12")
+			}
 			if tc.origin != "" {
 				r.Header.Set("Origin", tc.origin)
 			}
 			w := httptest.NewRecorder()
 			echoHandler(w, r)
+			if tc.status == http.StatusUpgradeRequired && w.Header().Get("Sec-WebSocket-Version") != "13" {
+				t.Fatal("missing supported version")
+			}
 			if w.Code != tc.status {
 				t.Fatalf("status %d, want %d", w.Code, tc.status)
 			}

@@ -94,7 +94,7 @@ integration reviewed before pinning this change.
 `Upgrade` returns `ErrOriginNotAllowed` without writing, negotiating extensions,
 or hijacking. The caller should map it to HTTP 403. Other pre-hijack handshake
 errors also leave the response untouched. Use the executable examples for a
-minimal 403/400 mapping; after `ErrHandshakeFailed`, a failed hijack or 101 write
+minimal 403/426/400 mapping (and 500 for missing hijacking support); after `ErrHandshakeFailed`, a failed hijack or 101 write
 may already own the transport, so do not write another HTTP response.
 
 ## Verification scope
