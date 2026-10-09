@@ -354,12 +354,12 @@ type Conn struct {
 	writeMu sync.Mutex // Protects write operations
 	closeMu sync.Mutex // Protects shutdown reservation; never held during I/O
 
-	closed      atomic.Bool // Indicates if the connection is closed
-	failed      bool        // Protected by closeMu; failure permits concurrent abort
-	closeSent   bool        // Protected by writeMu; forbids later data frames
-	writeFailed bool        // Protected by writeMu; wire stream cannot be reused
-	abortConn   net.Conn    // Raw transport for abnormal shutdown (never protocol I/O)
-	abortOnce   sync.Once   // Independent of normal, potentially graceful TLS Close
+	closed    atomic.Bool // Indicates if the connection is closed
+	failed    bool        // Protected by closeMu; failure permits concurrent abort
+	closeSent bool        // Protected by writeMu; forbids later data frames
+	writeErr  error       // Protected by writeMu; first transport write failure
+	abortConn net.Conn    // Raw transport for abnormal shutdown (never protocol I/O)
+	abortOnce sync.Once   // Independent of normal, potentially graceful TLS Close
 
 	// Optional handlers for control frames
 	handlerMu   sync.RWMutex
@@ -498,7 +498,7 @@ func (c *Conn) closeWithPayload(payload []byte) error {
 	// Do not wait behind a stalled writer. Reserve the only close attempt
 	// before writing, and never reuse a stream after a partial write.
 	if c.writeMu.TryLock() {
-		if !c.closeSent && !c.writeFailed {
+		if !c.closeSent && c.writeErr == nil {
 			c.closeSent = true
 			if err := c.conn.SetWriteDeadline(time.Now().Add(time.Second)); err == nil {
 				_ = c.writeFrame(&Frame{Final: true, Opcode: CloseMessage, Payload: payload, Masked: !c.isServer})
@@ -545,7 +545,7 @@ func (c *Conn) failRead(err error) error {
 		return err
 	}
 	defer c.writeMu.Unlock()
-	if c.closeSent || c.writeFailed {
+	if c.closeSent || c.writeErr != nil {
 		c.abort()
 		return err
 	}
@@ -770,7 +770,11 @@ func validUTF8Prefix(p []byte) (int, bool) {
 
 // WriteMessage writes a WebSocket message. Transport errors match ErrWriteFailed
 // and wrap the underlying error for errors.Is and errors.As. Close the connection
-// after a transport error; a partially written message cannot be retried safely.
+// after a transport error; the transport is not closed automatically, and clearing
+// a write deadline cannot make a partially written message safe to retry. Later
+// writes fail with the original cause without calling outgoing extensions again,
+// unless argument validation or a closed connection takes precedence. Argument
+// validation and extension rejection before transport I/O do not poison writes.
 func (c *Conn) WriteMessage(messageType Opcode, data []byte) error {
 	if messageType != TextMessage && messageType != BinaryMessage {
 		return ErrInvalidOpcode
@@ -801,6 +805,14 @@ func (c *Conn) WriteMessage(messageType Opcode, data []byte) error {
 // io.ErrClosedPipe. Reads and ping/pong frames remain available until the peer
 // closes or Close is called. Call Close to release the transport if the peer
 // does not respond; this method does not impose a handshake timeout.
+//
+// Transport errors match ErrWriteFailed and wrap the underlying error for
+// errors.Is and errors.As. Close after a transport error; the transport is not
+// closed automatically, and clearing a write deadline cannot make the frame
+// stream reusable. Later writes fail with the original cause without calling
+// outgoing extensions again, unless argument validation or the closing state
+// takes precedence. Argument validation and extension rejection before transport
+// I/O do not poison writes.
 func (c *Conn) WriteControlFrame(opcode Opcode, data []byte) error {
 	if opcode != CloseMessage && opcode != PingMessage && opcode != PongMessage {
 		return ErrInvalidOpcode
@@ -1148,8 +1160,11 @@ func validateIncomingClosePayload(payload []byte) error {
 	return nil
 }
 
-// writeFrame writes a WebSocket frame to the connection.
+// writeFrame writes a WebSocket frame to the connection. writeMu must be held.
 func (c *Conn) writeFrame(frame *Frame) error {
+	if c.writeErr != nil {
+		return fmt.Errorf("%w: failed to write frame header: %w", ErrWriteFailed, c.writeErr)
+	}
 	// Process outgoing frame through extensions
 	for _, ext := range c.extensions {
 		if ext.IsEnabled() {
@@ -1217,7 +1232,7 @@ func (c *Conn) writeFrameRaw(frame *Frame) error {
 
 	// Write header
 	if _, err := c.rw.Write(header[:headerPos]); err != nil {
-		c.writeFailed = true
+		c.writeErr = err
 		return fmt.Errorf("%w: failed to write frame header: %w", ErrWriteFailed, err)
 	}
 
@@ -1232,14 +1247,14 @@ func (c *Conn) writeFrameRaw(frame *Frame) error {
 	// Write payload
 	if len(frame.Payload) > 0 {
 		if _, err := c.rw.Write(frame.Payload); err != nil {
-			c.writeFailed = true
+			c.writeErr = err
 			return fmt.Errorf("%w: failed to write frame payload: %w", ErrWriteFailed, err)
 		}
 	}
 
 	// Flush the buffer to ensure the data is sent
 	if err := c.rw.Flush(); err != nil {
-		c.writeFailed = true
+		c.writeErr = err
 		return fmt.Errorf("%w: failed to flush data: %w", ErrWriteFailed, err)
 	}
 
