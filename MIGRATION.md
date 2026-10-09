@@ -85,9 +85,10 @@ not establish trust. Do not mutate `r.TLS` to pretend the backend received TLS.
 
 An existing application pre-check is followed by the new library check. Migrate
 its deliberately approved policy into the callback, or consciously tighten it.
-Do not add an unconditional callback merely to hide denied handshakes. The known
-Derpz consumer retains its explicit 64 KiB budget and needs its separate policy
-integration reviewed before pinning this change.
+Do not add an unconditional callback merely to hide denied handshakes. Existing
+consumers retain their explicit budgets and need their separate policy
+integration reviewed before pinning this change. This library change does not
+update downstream dependencies or automatically migrate application policies.
 
 ## HTTP error ownership
 
