@@ -36,6 +36,37 @@ is not a total-process memory or connection-lifetime guarantee. Use application
 concurrency/lifetime controls and `Close` to interrupt stalled I/O; Dial's context
 ends after the handshake.
 
+## Client HTTP response-head budget
+
+`Dial` now independently defaults to `DefaultMaxResponseHeaderBytes = 1 << 20`
+(1,048,576 bytes). Previously the standalone HTTP response parser had no
+configured head-byte limit. This is an intentional default tightening: inventory
+large custom response headers and choose a larger positive budget if needed.
+
+```go
+client, response, err := websocket.Dial(ctx, endpoint,
+    websocket.WithMaxResponseHeaderBytes(2 << 20))
+```
+
+The budget includes the status line, every raw header line, duplicate fields,
+folding whitespace, line separators, and the final empty line. A complete head
+of exactly the budget fits; needing another byte returns an error matching both
+`ErrBadHandshake` and `ErrResponseHeaderTooLarge`, closes the transport, and
+returns a nil connection and response. Ordinary malformed-input and transport
+errors retain their causes; a canceled Dial context retains precedence.
+
+Omitted/nil options keep the default. An explicit zero or negative value opts
+out of the bound; the last option wins. The budget is decrypted HTTP bytes, not
+TLS overhead. It does not count HTTP bodies or WebSocket frames, and is separate
+from the incoming message limit. Buffered first-frame bytes are preserved.
+This is not a total-memory, CPU, concurrency or wall-clock guarantee. Use the
+Dial context to bound handshake waiting; there is no new default timeout.
+
+Handshake validation and response ownership are unchanged. A parsed non-101
+response is returned with `ErrBadHandshake` after closing its transport; callers
+still own `response.Body.Close`. A complete streaming error body is not promised.
+The body on a successful 101 response remains `http.NoBody`.
+
 ## Browser Origin policy
 
 Previously callers owned every Origin decision. `Upgrade` now allows a missing

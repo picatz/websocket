@@ -27,6 +27,7 @@ var (
 	ErrInvalidExtension        = errors.New("websocket: invalid extension negotiation")
 	ErrInvalidSubprotocol      = errors.New("websocket: invalid subprotocol negotiation")
 	ErrBadHandshake            = errors.New("websocket: bad handshake")
+	ErrResponseHeaderTooLarge  = errors.New("websocket: response header too large")
 	ErrOriginNotAllowed        = errors.New("websocket: origin not allowed")
 	ErrUnsupportedVersion      = errors.New("websocket: unsupported WebSocket version")
 	ErrInvalidHandshakeHeader  = errors.New("websocket: invalid custom handshake header")
@@ -56,6 +57,11 @@ var (
 // when no size option is supplied. It bounds each data frame and the reassembled
 // decoded message, not total memory, connection lifetime, or outgoing messages.
 const DefaultMaxMessageSize = 1 << 20
+
+// DefaultMaxResponseHeaderBytes is Dial's HTTP response-head byte limit when no
+// WithMaxResponseHeaderBytes option is supplied. It includes the status line,
+// all header lines and their separators, and the final empty line.
+const DefaultMaxResponseHeaderBytes = 1 << 20
 
 type Opcode int
 
@@ -1245,10 +1251,11 @@ type DialOption func(*dialOptions)
 
 // dialOptions stores the options for the Dial function.
 type dialOptions struct {
-	extensions []Extension
-	header     http.Header
-	tlsConfig  *tls.Config
-	maxBytes   int
+	extensions             []Extension
+	header                 http.Header
+	tlsConfig              *tls.Config
+	maxBytes               int
+	maxResponseHeaderBytes int64
 }
 
 // apply applies the options to the dialOptions.
@@ -1298,11 +1305,32 @@ func WithMaxMessageSize(maxBytes int) DialOption {
 	}
 }
 
+// WithMaxResponseHeaderBytes sets Dial's HTTP response-head byte limit. The
+// budget includes the status line, every raw header line (including duplicates
+// and continuation whitespace), line separators, and the final empty line.
+// Exactly maxBytes bytes fit if the complete head ends within that budget.
+// It counts decrypted HTTP bytes, not TLS overhead, response bodies or frames.
+// This is not a total-memory or time limit; use Dial's context to bound waiting.
+// The default is DefaultMaxResponseHeaderBytes. An explicit non-positive value
+// makes the limit unlimited. When repeated, the last option wins.
+// An exceeded limit returns an error matching both ErrBadHandshake and
+// ErrResponseHeaderTooLarge, with a nil connection and response.
+func WithMaxResponseHeaderBytes(maxBytes int64) DialOption {
+	return func(opts *dialOptions) {
+		opts.maxResponseHeaderBytes = maxBytes
+	}
+}
+
 // Dial establishes a WebSocket client connection to the given URL.
 // Incoming payloads default to DefaultMaxMessageSize; WithMaxMessageSize overrides it.
+// The response head defaults to DefaultMaxResponseHeaderBytes;
+// WithMaxResponseHeaderBytes overrides it independently of the message limit.
 // ctx covers TCP, TLS, and the HTTP upgrade handshake, but not subsequent I/O.
 func Dial(ctx context.Context, urlStr string, options ...DialOption) (ws *Conn, response *http.Response, err error) {
-	opts := &dialOptions{maxBytes: DefaultMaxMessageSize}
+	opts := &dialOptions{
+		maxBytes:               DefaultMaxMessageSize,
+		maxResponseHeaderBytes: DefaultMaxResponseHeaderBytes,
+	}
 	opts.apply(options)
 
 	if err := validateHandshakeHeaders(opts.header, false); err != nil {
@@ -1425,11 +1453,10 @@ func Dial(ctx context.Context, urlStr string, options ...DialOption) (ws *Conn, 
 	}
 
 	// Read the response
-	br := bufio.NewReader(conn)
-	resp, err := http.ReadResponse(br, nil)
+	resp, br, err := readHandshakeResponse(conn, opts.maxResponseHeaderBytes)
 	if err != nil {
 		conn.Close()
-		return nil, nil, fmt.Errorf("%w: failed to read handshake response: %v", ErrBadHandshake, err)
+		return nil, nil, fmt.Errorf("%w: failed to read handshake response: %w", ErrBadHandshake, err)
 	}
 	if resp.StatusCode != http.StatusSwitchingProtocols {
 		conn.Close()

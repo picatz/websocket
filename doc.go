@@ -21,6 +21,15 @@
 // its transport on Close or read failure; do not read or write framed bytes
 // directly on that transport.
 //
+// Dial separately limits the HTTP response head to DefaultMaxResponseHeaderBytes
+// (1 MiB). WithMaxResponseHeaderBytes overrides it; explicit zero/negative means
+// unlimited, and the last option wins. The budget counts the decrypted status
+// line, all raw header lines and separators, including duplicates/continuations,
+// and the final empty line. Exactly that many bytes fit. Bodies and WebSocket
+// frames do not consume this budget. An exceeded limit matches ErrBadHandshake
+// and ErrResponseHeaderTooLarge and returns no connection or response. It is
+// not a heap or time guarantee; use Dial's context to bound handshake waiting.
+//
 // Conn.SetDeadline, Conn.SetReadDeadline and Conn.SetWriteDeadline delegate to
 // the transport and affect future and currently blocked I/O. A zero time clears
 // a deadline; there is no default message timeout. ReadMessage may write an
