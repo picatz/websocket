@@ -15,11 +15,21 @@
 // and authoritative Host validation remain application responsibilities. Origin
 // is not authentication and non-browser clients can omit or forge it.
 //
-// The Dial context covers TCP, TLS, and the HTTP upgrade handshake. Once Dial
-// succeeds, canceling that context does not cancel message I/O. Call Conn.Close
-// to interrupt reads and writes. NewConn takes over framing and I/O and closes
-// its transport on Close or read failure; do not read or write framed bytes
-// directly on that transport.
+// The Dial context covers TCP, TLS, any proxy tunnel, and the HTTP upgrade
+// handshake. Once Dial succeeds, canceling that context does not cancel message
+// I/O. Use Conn.ReadMessageContext and Conn.WriteMessageContext to bound a call
+// with a context: when it ends mid-call the connection is aborted, as after a
+// timeout. Call Conn.Close to interrupt reads and writes. NewConn takes over
+// framing and I/O and closes its transport on Close or read failure; do not
+// read or write framed bytes directly on that transport.
+//
+// # Proxies and custom transports
+//
+// Dial connects directly unless WithProxy selects an HTTP or HTTPS proxy, for
+// example with http.ProxyFromEnvironment. It then tunnels with CONNECT and runs
+// the WebSocket handshake, and TLS for wss, end to end inside the tunnel. Proxy
+// credentials go only to the proxy, and redirects are never followed.
+// WithNetDialContext replaces the TCP dialer, for SOCKS, Unix sockets or tests.
 //
 // Dial separately limits the HTTP response head to DefaultMaxResponseHeaderBytes
 // (1 MiB). WithMaxResponseHeaderBytes overrides it; explicit zero/negative means

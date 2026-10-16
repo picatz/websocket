@@ -51,6 +51,7 @@ var (
 	ErrInvalidOpcode           = errors.New("websocket: invalid opcode")
 	ErrWriteFailed             = errors.New("websocket: write failed")
 	ErrAlreadyClosed           = errors.New("websocket: connection already closed")
+	ErrProxy                   = errors.New("websocket: proxy tunnel failed")
 )
 
 // DefaultMaxMessageSize is the incoming payload limit used by Dial and Upgrade
@@ -1248,6 +1249,8 @@ type dialOptions struct {
 	tlsConfig              *tls.Config
 	maxBytes               int
 	maxResponseHeaderBytes int64
+	netDialContext         func(ctx context.Context, network, addr string) (net.Conn, error)
+	proxy                  func(*http.Request) (*url.URL, error)
 }
 
 // apply applies the options to the dialOptions.
@@ -1359,11 +1362,10 @@ func Dial(ctx context.Context, urlStr string, options ...DialOption) (ws *Conn, 
 	}
 	host := net.JoinHostPort(u.Hostname(), port)
 
-	// Establish the network connection
-	var d net.Dialer
-	conn, err := d.DialContext(ctx, "tcp", host)
+	// Establish the network connection, directly or to the selected proxy.
+	conn, proxyURL, err := dialTransport(ctx, opts, u, host)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w: failed to dial: %w", ErrBadHandshake, err)
+		return nil, nil, err
 	}
 	// Closing the raw transport interrupts blocked HTTP reads/writes as well
 	// as TLS. Join the callback before returning so it cannot close a live
@@ -1384,6 +1386,15 @@ func Dial(ctx context.Context, urlStr string, options ...DialOption) (ws *Conn, 
 			err = fmt.Errorf("%w: %w", ErrBadHandshake, ctx.Err())
 		}
 	}()
+
+	// Tunnel through the proxy before any end-to-end TLS. The cancellation
+	// callback above closes the raw transport, interrupting this exchange too.
+	if proxyURL != nil {
+		if conn, err = connectProxy(ctx, conn, proxyURL, host, opts); err != nil {
+			rawConn.Close()
+			return nil, nil, err
+		}
+	}
 
 	// If using TLS, perform the handshake
 	if u.Scheme == "wss" {
