@@ -151,6 +151,19 @@ conn.SetPongHandler(func(appData string) error {
 })
 ```
 
+### Examples
+
+Each directory under [`examples`](examples) is a small program with tests:
+
+- [`echo`](examples/echo) echoes every message back.
+- [`keepalive`](examples/keepalive) pings clients on an interval and drops
+  those that stop answering.
+- [`chat`](examples/chat) broadcasts messages to every connected client, with a
+  bounded send queue per client.
+- [`pubsub`](examples/pubsub) delivers messages by topic over a small JSON
+  protocol.
+- [`rpc`](examples/rpc) answers JSON requests sent as binary messages.
+
 ## Limits and connection lifetime
 
 `Dial` and `Upgrade` default to `DefaultMaxMessageSize`, 1 MiB (1,048,576 bytes).

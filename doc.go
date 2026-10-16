@@ -87,6 +87,37 @@
 // comma-joined peer header and must validate their own parameter and repetition
 // semantics. Multiple offers for the same extension remain valid alternatives.
 //
+// # Common patterns
+//
+// Read each connection from one goroutine, calling Conn.ReadMessage in a loop
+// until it returns an error; io.EOF means the peer closed normally. Control
+// frames are handled inside that loop: ReadMessage answers Pings and runs the
+// Pong handler, so a connection nobody reads cannot answer a keepalive.
+//
+// Writes may run on another goroutine, concurrently with the read loop. When
+// several goroutines produce messages for one connection, as in a chat room or
+// a pub/sub broker, give the connection a bounded queue drained by a single
+// writer goroutine, and disconnect a peer whose queue is full instead of
+// blocking every other sender on it. Set a write deadline per write so a stalled
+// peer cannot hold the writer forever.
+//
+// To detect dead peers, send Conn.WriteControlFrame(PingMessage, nil) on a
+// ticker, keep a read deadline a little longer than the ticker period, and
+// extend it from Conn.SetPongHandler. A peer that stops answering lets the
+// deadline pass and ReadMessage fails with an error matching
+// os.ErrDeadlineExceeded. If pings and messages are written from different
+// goroutines, coordinate their write deadline updates.
+//
+// Conn.Close may be called from any goroutine, for example a writer that hit
+// an error, and interrupts a blocked ReadMessage. Return from the read loop on
+// any error: the connection is unusable after one.
+//
+// The examples directory has a runnable, tested program for each pattern:
+// [github.com/picatz/websocket/examples/keepalive] for pings and dead peer
+// detection, [github.com/picatz/websocket/examples/chat] for broadcast to every
+// client, and [github.com/picatz/websocket/examples/pubsub] for topic
+// subscriptions.
+//
 // # Limitations
 //
 // The optional permessage-deflate extension is experimental. Compressed message
