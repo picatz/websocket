@@ -103,7 +103,7 @@ func TestReadMessageEOFAtMessageBoundaries(t *testing.T) {
 		{0x02, 1, 'a', 0x88, 0},
 	} {
 		_, _, err := frameConn(wire, false, 0).ReadMessage()
-		if err != io.EOF {
+		if !errors.Is(err, io.EOF) {
 			t.Errorf("wire %x: error = %v, want EOF", wire, err)
 		}
 	}

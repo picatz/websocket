@@ -162,7 +162,7 @@ func TestIncomingCloseStatusBoundaries(t *testing.T) {
 						t.Fatal(err)
 					}
 					want = []byte{3, 234}
-				} else if err != io.EOF {
+				} else if !errors.Is(err, io.EOF) || CloseStatus(err) != StatusCode(code) {
 					t.Fatal(err)
 				}
 				if got := failureClosePayload(t, raw.written.Bytes(), server); !bytes.Equal(got, want) {
@@ -172,7 +172,7 @@ func TestIncomingCloseStatusBoundaries(t *testing.T) {
 		}
 		for _, p := range [][]byte{nil, append([]byte{3, 232}, bytes.Repeat([]byte{'x'}, 123)...)} {
 			raw := &failureMemoryConn{memoryConn: memoryConn{Reader: bytes.NewReader(failureWire(server, 0x88, p))}}
-			if _, _, err := NewConn(raw, server, nil).ReadMessage(); err != io.EOF {
+			if _, _, err := NewConn(raw, server, nil).ReadMessage(); !errors.Is(err, io.EOF) {
 				t.Fatal(err)
 			}
 			if got := failureClosePayload(t, raw.written.Bytes(), server); !bytes.Equal(got, p) {

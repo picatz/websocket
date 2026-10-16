@@ -37,8 +37,8 @@ func rpcHandler(w http.ResponseWriter, r *http.Request) {
 		// Read a message from the client
 		messageType, message, err := conn.ReadMessage()
 		if err != nil {
-			if err == io.EOF {
-				log.Println("Connection closed by peer")
+			if errors.Is(err, io.EOF) {
+				log.Printf("Connection closed by peer (status %v)", websocket.CloseStatus(err))
 			} else {
 				log.Printf("ReadMessage failed: %v", err)
 			}

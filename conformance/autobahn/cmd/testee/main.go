@@ -153,7 +153,7 @@ func command(address, path, agent string, caseNumber int) ([]byte, error) {
 	timer := time.AfterFunc(30*time.Second, func() { _ = conn.Close() })
 	defer timer.Stop()
 	_, payload, err := conn.ReadMessage()
-	if path == "/updateReports" && err == io.EOF {
+	if path == "/updateReports" && errors.Is(err, io.EOF) {
 		return nil, nil // Autobahn closes after synchronously writing reports.
 	}
 	if path == "/updateReports" && err == nil {
