@@ -422,12 +422,12 @@ def main():
     parser.add_argument("--profile", choices=PROFILES, required=True)
     parser.add_argument("--case", default="", help="one exact case ID for an explicitly partial diagnostic")
     parser.add_argument("--shard-size", type=int, default=0,
-                        help="sequential server-compression batch size; 0 disables sharding")
+                        help="sequential compression batch size; 0 disables sharding")
     parser.add_argument("--output", type=Path, required=True,
                         help="new/empty directory; prior reports are never reused")
     args = parser.parse_args()
-    if args.shard_size < 0 or (args.shard_size and (args.role, args.profile) != ("server", "compression")):
-        parser.error("sharding is supported only for server compression, with a positive size")
+    if args.shard_size < 0 or (args.shard_size and args.profile != "compression"):
+        parser.error("sharding is supported only for the compression profile, with a positive size")
     if args.shard_size and args.case:
         parser.error("--case cannot be combined with sharding")
     try:

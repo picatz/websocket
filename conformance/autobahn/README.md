@@ -25,11 +25,12 @@ python3 conformance/autobahn/run.py --role client --profile core --output /tmp/w
 
 Repeat both roles with `--profile limits` and `--profile compression`, each
 with its own output directory, for all three disjoint selections. Use
-`--shard-size 1` for server compression, as the hosted workflow does:
+`--shard-size 1` for server compression and `--shard-size 8` for client
+compression, as the hosted workflow does:
 
 ```sh
 python3 conformance/autobahn/run.py --role server --profile compression --shard-size 1 --output /tmp/ws-server-compression
-python3 conformance/autobahn/run.py --role client --profile compression --output /tmp/ws-client-compression
+python3 conformance/autobahn/run.py --role client --profile compression --shard-size 8 --output /tmp/ws-client-compression
 ```
 
 A role names
@@ -60,16 +61,18 @@ known-failure exclusions are allowed. Compression being `UNIMPLEMENTED` is a
 skip, not a passing test. Compression results cannot establish default-mode
 conformance, and default-mode results cannot establish RFC 7692 support.
 
-Server compression partitions the authoritative selected inventory into
-deterministic single-case shards. Both peers restart in a fresh isolated
+Compression partitions the authoritative selected inventory into
+deterministic shards: single cases for server compression, and batches of eight
+for client compression, whose single `fuzzingserver` run exceeded the 1 GiB cap
+when unsharded. Both peers restart in a fresh isolated
 container per shard, sequentially within one job. The binary and pinned image
 are prepared once. The aggregate deadline remains 20 minutes, not 20 minutes
 per shard. Every shard keeps its config, resource diagnostics, logs, and raw
 reports. Aggregation must account for exactly the full selected inventory with
 no duplicate, missing, or unexpected IDs; protocol failures are kept as results.
 An infrastructure failure stops the remaining shards and makes the aggregate
-incomplete, with the stopping cause and missing cases preserved. Core, limits,
-and client-compression selections remain unsharded.
+incomplete, with the stopping cause and missing cases preserved. Core and
+limits selections remain unsharded.
 
 In the aggregate, `reported` counts observed raw rows and `classified` counts
 fully validated evidence. Invalid detail files or resource-failed shards retain
