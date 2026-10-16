@@ -174,9 +174,13 @@ limit. Applications still need connection/lifetime controls for slow peers and
 empty-fragment or control-frame floods. See [migration notes](MIGRATION.md) for
 the intentional changes to high-level defaults.
 
-`Dial`'s context covers TCP connection establishment, TLS, and the HTTP upgrade.
-It is detached after a successful handshake. It does not cancel later reads or
-writes. Call `Close` to interrupt connection I/O, or set transport deadlines with
+`Dial`'s context covers TCP connection establishment, TLS, any proxy tunnel, and
+the HTTP upgrade. It is detached after a successful handshake. It does not cancel
+later reads or writes. Bound a single call with `ReadMessageContext` or
+`WriteMessageContext`: an already-done context returns its error without touching
+the connection, while one that ends mid-call aborts the connection (like a timeout)
+and returns an error matching both the context's cause and the I/O failure. Call
+`Close` to interrupt connection I/O, or set transport deadlines with
 `SetDeadline`, `SetReadDeadline`, and `SetWriteDeadline`. There is no default
 message timeout. A zero `time.Time` clears a deadline; otherwise it applies to
 future and currently blocked transport I/O in that direction. `SetDeadline`
@@ -216,6 +220,28 @@ close frames return `io.ErrClosedPipe`; reads and ping/pong remain available.
 Receiving the peer's close or calling `Close` closes the transport without
 sending another close frame. Call `Close` if the peer does not respond; there is
 no automatic handshake timeout. Close the connection after any write error.
+
+## Client proxies and custom dialers
+
+`Dial` connects directly by default. `WithProxy` takes the same function type as
+`http.Transport.Proxy`, so `http.ProxyFromEnvironment` honors `HTTP_PROXY`,
+`HTTPS_PROXY` and `NO_PROXY` (a `wss` URL is selected like `https`):
+
+```go
+conn, _, err := websocket.Dial(ctx, "wss://example.com/socket",
+	websocket.WithProxy(http.ProxyFromEnvironment))
+```
+
+`http` and `https` proxies are supported through an HTTP/1.1 `CONNECT` tunnel; the
+WebSocket handshake and `wss` TLS then run end to end inside it. An `https` proxy
+is verified with a clone of `WithTLSConfig` whose `ServerName` is the proxy host.
+Proxy URL credentials are sent only to the proxy as Basic `Proxy-Authorization`
+and are never included in errors. The `CONNECT` response head shares the
+`WithMaxResponseHeaderBytes` budget; a non-200 status, or data sent before the
+tunnel is used, fails with an error matching `ErrBadHandshake` and `ErrProxy`.
+
+`WithNetDialContext` replaces the TCP dialer used to reach the server or proxy,
+for example to use a SOCKS dialer, a Unix socket, or an in-memory test transport.
 
 ## Browser origins and proxies
 
