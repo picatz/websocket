@@ -198,10 +198,11 @@ func TestReadMessageOwnershipRegisteredExtensions(t *testing.T) {
 					if enabled {
 						wantProcess = 1
 					}
-					// One IsEnabled call for header validation and one for payload
-					// processing. The ownership gate must not query it again.
-					if err != nil || kind != op || !bytes.Equal(got, want) || ext.enabledCalls != 2 || ext.processCalls != wantProcess {
-						t.Fatalf("read: type=%v err=%v callbacks=%d/%d, want 2/%d", kind, err, ext.enabledCalls, ext.processCalls, wantProcess)
+					// One IsEnabled call for the per-message composition check, one for
+					// header validation and one for payload processing. The ownership
+					// gate must not query it again.
+					if err != nil || kind != op || !bytes.Equal(got, want) || ext.enabledCalls != 3 || ext.processCalls != wantProcess {
+						t.Fatalf("read: type=%v err=%v callbacks=%d/%d, want 3/%d", kind, err, ext.enabledCalls, ext.processCalls, wantProcess)
 					}
 					// RSV1 is deliberately clear: even enabled PMD must keep the
 					// registered-extension fallback for uncompressed messages.

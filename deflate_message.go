@@ -29,9 +29,23 @@ func (e *compressedPayloadError) Error() string {
 func (e *compressedPayloadError) Unwrap() error        { return e.cause }
 func (e *compressedPayloadError) Is(target error) bool { return target == ErrInvalidCompressedPayload }
 
+// messageCompression returns the enabled built-in PMD extension, if any. It
+// calls IsEnabled once per extension and rejects unsupported compositions.
 func messageCompression(extensions []Extension) (*perMessageDeflate, error) {
-	var pmd *perMessageDeflate
-	var custom bool
+	var buf [4]Extension
+	enabled, err := enabledExtensions(extensions, buf[:0])
+	if err != nil || len(enabled) == 0 {
+		return nil, err
+	}
+	pmd, _ := enabled[0].(*perMessageDeflate)
+	return pmd, nil
+}
+
+// enabledExtensions appends the enabled extensions to dst, in order, calling
+// IsEnabled exactly once on each. Enabled built-in PMD must be the only enabled
+// extension; any other combination returns ErrUnsupportedExtensionComposition.
+func enabledExtensions(extensions, dst []Extension) ([]Extension, error) {
+	var pmd, custom bool
 	for _, ext := range extensions {
 		if ext == nil {
 			return nil, fmt.Errorf("%w: nil extension", ErrInvalidExtension)
@@ -39,19 +53,20 @@ func messageCompression(extensions []Extension) (*perMessageDeflate, error) {
 		if !ext.IsEnabled() {
 			continue
 		}
-		if p, ok := ext.(*perMessageDeflate); ok {
-			if pmd != nil {
+		if _, ok := ext.(*perMessageDeflate); ok {
+			if pmd {
 				return nil, fmt.Errorf("%w: multiple permessage-deflate owners", ErrUnsupportedExtensionComposition)
 			}
-			pmd = p
+			pmd = true
 		} else {
 			custom = true
 		}
+		dst = append(dst, ext)
 	}
-	if pmd != nil && custom {
+	if pmd && custom {
 		return nil, fmt.Errorf("%w: permessage-deflate with a legacy frame extension", ErrUnsupportedExtensionComposition)
 	}
-	return pmd, nil
+	return dst, nil
 }
 
 // closeCompression does not acquire receive serialization or touch active
@@ -444,7 +459,9 @@ func (p *perMessageDeflate) decodeMessage(input *deflateMessageInput, limit int,
 			if input.sourceErr != nil && input.sourceErr != io.EOF {
 				return nil, input.sourceErr
 			}
-			return nil, failWith(StatusInvalidFramePayloadData, &compressedPayloadError{readErr})
+			// Malformed DEFLATE aborts without a Close code, matching the
+			// established extension-failure contract for invalid streams.
+			return nil, &compressedPayloadError{readErr}
 		}
 		more, e := input.more()
 		if input.closedByPeer() {

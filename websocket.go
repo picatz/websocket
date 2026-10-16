@@ -429,9 +429,6 @@ func (c *Conn) Close() error {
 }
 
 func (c *Conn) closeWithPayload(payload []byte) error {
-	if _, err := messageCompression(c.extensions); err != nil {
-		return c.failRead(err)
-	}
 	c.closeMu.Lock()
 	c.closeCompression()
 	if c.closed.Swap(true) {
@@ -448,9 +445,23 @@ func (c *Conn) closeWithPayload(payload []byte) error {
 	// before writing, and never reuse a stream after a partial write.
 	if c.writeMu.TryLock() {
 		if !c.closeSent && c.writeErr == nil {
+			// Query extensions only when this call will write. A reentrant Close
+			// from an extension callback, or one after a write failure, does not.
+			var buf [4]Extension
+			enabled, err := enabledExtensions(c.extensions, buf[:0])
+			if err != nil {
+				// An unsupported composition must not emit a Close frame that
+				// bypasses the extension chain. Abort the transport instead.
+				c.writeMu.Unlock()
+				c.closeMu.Lock()
+				c.failed = true
+				c.closeMu.Unlock()
+				c.abort()
+				return err
+			}
 			c.closeSent = true
 			if err := c.conn.SetWriteDeadline(time.Now().Add(time.Second)); err == nil {
-				_ = c.writeFrame(&Frame{Final: true, Opcode: CloseMessage, Payload: payload, Masked: !c.isServer})
+				_ = c.writeFrameExtensions(&Frame{Final: true, Opcode: CloseMessage, Payload: payload, Masked: !c.isServer}, enabled)
 			}
 		}
 		c.writeMu.Unlock()
@@ -729,11 +740,6 @@ func validUTF8Prefix(p []byte) (int, bool) {
 // unless argument validation or a closed connection takes precedence. Argument
 // validation and extension rejection before transport I/O do not poison writes.
 func (c *Conn) WriteMessage(messageType Opcode, data []byte) error {
-	if !c.closed.Load() {
-		if _, err := messageCompression(c.extensions); err != nil {
-			return c.failRead(err)
-		}
-	}
 	if messageType != TextMessage && messageType != BinaryMessage {
 		return ErrInvalidOpcode
 	}
@@ -772,11 +778,6 @@ func (c *Conn) WriteMessage(messageType Opcode, data []byte) error {
 // takes precedence. Argument validation and extension rejection before transport
 // I/O do not poison writes.
 func (c *Conn) WriteControlFrame(opcode Opcode, data []byte) error {
-	if !c.closed.Load() {
-		if _, err := messageCompression(c.extensions); err != nil {
-			return c.failRead(err)
-		}
-	}
 	if opcode != CloseMessage && opcode != PingMessage && opcode != PongMessage {
 		return ErrInvalidOpcode
 	}
@@ -1130,12 +1131,23 @@ func (c *Conn) writeFrame(frame *Frame) error {
 	if c.writeErr != nil {
 		return fmt.Errorf("%w: failed to write frame header: %w", ErrWriteFailed, c.writeErr)
 	}
-	// Process outgoing frame through extensions
-	for _, ext := range c.extensions {
-		if ext.IsEnabled() {
-			if err := ext.ProcessOutgoingFrame(frame); err != nil {
-				return fmt.Errorf("extension %s failed to process outgoing frame: %v", ext.Name(), err)
-			}
+	// Ask each extension once whether it is enabled. An unsupported composition
+	// is terminal and performs no I/O; a write after a transport failure returns
+	// above without calling extensions at all.
+	var buf [4]Extension
+	enabled, err := enabledExtensions(c.extensions, buf[:0])
+	if err != nil {
+		return c.failRead(err)
+	}
+	return c.writeFrameExtensions(frame, enabled)
+}
+
+// writeFrameExtensions passes frame through the already-resolved enabled
+// extensions, then writes it. writeMu must be held.
+func (c *Conn) writeFrameExtensions(frame *Frame, enabled []Extension) error {
+	for _, ext := range enabled {
+		if err := ext.ProcessOutgoingFrame(frame); err != nil {
+			return fmt.Errorf("extension %s failed to process outgoing frame: %v", ext.Name(), err)
 		}
 	}
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestPMDMessageRFCFragmentation(t *testing.T) {
@@ -53,4 +54,37 @@ func TestPMDMessageTakeoverAndFinalStreams(t *testing.T) {
 			t.Fatal("history was not committed")
 		}
 	}
+}
+
+// FuzzPMDReadMessage drives arbitrary wire bytes through ReadMessage with
+// permessage-deflate and context takeover enabled. Decoded messages must stay
+// within the configured limit, and text messages must be valid UTF-8.
+func FuzzPMDReadMessage(f *testing.F) {
+	hello := []byte{0xf2, 0x48, 0xcd, 0xc9, 0xc9, 0x07, 0x00}
+	history := []byte{0xf2, 0x00, 0x11, 0x00, 0x00}
+	f.Add(append(failureWire(false, 0xc1, hello), failureWire(false, 0xc2, history)...), false)
+	f.Add(append(failureWire(true, 0x41, hello[:3]), failureWire(true, 0x80, hello[3:])...), true)
+	f.Add(failureWire(false, 0xc2, []byte{0x06}), false)
+	f.Add(failureWire(false, 0xc2, bytes.Repeat([]byte{0x00}, 64)), false)
+	const limit = 1024
+	f.Fuzz(func(t *testing.T, wire []byte, server bool) {
+		p := NewPerMessageDeflateExtension().(*perMessageDeflate)
+		p.server = server
+		if err := p.Negotiate("permessage-deflate"); err != nil {
+			t.Fatal(err)
+		}
+		c := NewConn(&memoryConn{Reader: bytes.NewReader(wire)}, server, []Extension{p}, WithMaxBytes(limit))
+		for range 4 {
+			kind, data, err := c.ReadMessage()
+			if err != nil {
+				return
+			}
+			if len(data) > limit {
+				t.Fatalf("limit bypass: %d", len(data))
+			}
+			if kind == TextMessage && !utf8.Valid(data) {
+				t.Fatalf("invalid UTF-8 text message: %q", data)
+			}
+		}
+	})
 }
