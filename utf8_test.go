@@ -109,7 +109,7 @@ func TestReadMessageUTF8RejectsBeforeFIN(t *testing.T) {
 					wire = append(wire, failureWire(server, 0x8a, nil)...)
 					wire = append(wire, failureWire(server, 0x00, invalid[split:])...)
 					raw := &failureMemoryConn{memoryConn: memoryConn{Reader: bytes.NewReader(wire)}}
-					c := NewConn(raw, ConnConfig{Server: server})
+					c := newTestConn(raw, ConnConfig{Server: server})
 					op, p, err := c.ReadMessage()
 					if op != 0 || p != nil || err != ErrInvalidFrame {
 						t.Fatalf("read = %v %x %v", op, p, err)
@@ -140,7 +140,7 @@ func TestReadMessageUTF8RejectsWhilePeerWaits(t *testing.T) {
 			defer raw.Close()
 			defer peer.Close()
 			peer.SetDeadline(time.Now().Add(3 * time.Second))
-			c := NewConn(raw, ConnConfig{Server: server})
+			c := newTestConn(raw, ConnConfig{Server: server})
 			done := make(chan error, 1)
 			go func() { _, _, err := c.ReadMessage(); done <- err }()
 			// ED is incomplete; A0 proves a surrogate without a final frame.
@@ -194,11 +194,11 @@ func TestReadMessageUTF8AfterExtensions(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		wire      []byte
-		transform func(*Frame) error
+		transform func(*wireFrame) error
 		want      []byte
 		wantErr   error
 	}{
-		{"decode before validation", []byte{0x01, 1, 0xff, 0x80, 1, 0xff}, func(f *Frame) error {
+		{"decode before validation", []byte{0x01, 1, 0xff, 0x80, 1, 0xff}, func(f *wireFrame) error {
 			if f.Opcode == TextMessage {
 				f.Payload = []byte{0xc2}
 			} else {
@@ -206,14 +206,14 @@ func TestReadMessageUTF8AfterExtensions(t *testing.T) {
 			}
 			return nil
 		}, []byte("¢"), nil},
-		{"decoded invalid before FIN", []byte{0x01, 1, 'x'}, func(f *Frame) error { f.Payload = []byte{0xed, 0xa0}; return nil }, nil, ErrInvalidFrame},
-		{"normalize opcode", []byte{0x02, 1, 0xff}, func(f *Frame) error { f.Opcode = TextMessage; return nil }, nil, ErrInvalidFrame},
-		{"normalize final", []byte{0x01, 1, 0xc2}, func(f *Frame) error { f.Final = true; return nil }, nil, ErrInvalidFrame},
-		{"decoded limit first", []byte{0x01, 1, 'x'}, func(f *Frame) error { f.Payload = []byte{0xff, 0xff, 0xff}; return nil }, nil, ErrPayloadTooLarge},
+		{"decoded invalid before FIN", []byte{0x01, 1, 'x'}, func(f *wireFrame) error { f.Payload = []byte{0xed, 0xa0}; return nil }, nil, ErrInvalidFrame},
+		{"normalize opcode", []byte{0x02, 1, 0xff}, func(f *wireFrame) error { f.Opcode = TextMessage; return nil }, nil, ErrInvalidFrame},
+		{"normalize final", []byte{0x01, 1, 0xc2}, func(f *wireFrame) error { f.Final = true; return nil }, nil, ErrInvalidFrame},
+		{"decoded limit first", []byte{0x01, 1, 'x'}, func(f *wireFrame) error { f.Payload = []byte{0xff, 0xff, 0xff}; return nil }, nil, ErrPayloadTooLarge},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := frameConn(tc.wire, false, 2)
-			c.extensions = []Extension{&headerTransformExtension{enabled: true, process: tc.transform}}
+			c.extensions = []frameExtension{&headerTransformExtension{enabled: true, process: tc.transform}}
 			_, p, err := c.ReadMessage()
 			if err != tc.wantErr || !bytes.Equal(p, tc.want) {
 				t.Fatalf("read = %x %v; want %x %v", p, err, tc.want, tc.wantErr)

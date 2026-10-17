@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"fmt"
 	"net"
 	"net/http"
 	"net/url"
@@ -75,10 +76,10 @@ type Dialer struct {
 	// settings. Each connection gets its own compression state.
 	Compression *Compression
 
-	// NewExtensions, if non-nil, returns further extensions to offer, after
-	// Compression. It is called once per Dial and must return new instances:
-	// an Extension holds one connection's negotiated state.
-	NewExtensions func() []Extension
+	// newExtensions, if non-nil, returns further extensions to offer, after
+	// Compression. Only tests set it. It is called once per Dial and must
+	// return new instances.
+	newExtensions func() []frameExtension
 
 	// MaxMessageSize bounds each incoming frame and reassembled message in
 	// bytes, including data decompressed by Compression. Zero means
@@ -104,7 +105,7 @@ func (d *Dialer) Dial(ctx context.Context, urlStr string) (*Conn, *http.Response
 	if d == nil {
 		d = &Dialer{}
 	}
-	extensions, err := buildExtensions(d.Compression, d.NewExtensions)
+	extensions, err := buildExtensions(d.Compression, d.newExtensions)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -173,10 +174,10 @@ type Upgrader struct {
 	// compression state.
 	Compression *Compression
 
-	// NewExtensions, if non-nil, returns further extensions to negotiate,
-	// after Compression. It is called once per Upgrade and must return new
-	// instances: an Extension holds one connection's negotiated state.
-	NewExtensions func() []Extension
+	// newExtensions, if non-nil, returns further extensions to negotiate,
+	// after Compression. Only tests set it. It is called once per Upgrade and
+	// must return new instances.
+	newExtensions func() []frameExtension
 
 	// MaxMessageSize bounds each incoming frame and reassembled message in
 	// bytes, including data decompressed by Compression. Zero means
@@ -230,7 +231,7 @@ func (u *Upgrader) Upgrade(w http.ResponseWriter, r *http.Request) (*Conn, error
 }
 
 func (u *Upgrader) upgrade(w http.ResponseWriter, r *http.Request) (*Conn, error) {
-	extensions, err := buildExtensions(u.Compression, u.NewExtensions)
+	extensions, err := buildExtensions(u.Compression, u.newExtensions)
 	if err != nil {
 		return nil, err
 	}
@@ -260,32 +261,81 @@ type ConnConfig struct {
 	// Conn.Subprotocol reports.
 	Subprotocol string
 
-	// Extensions are the extensions the caller's handshake negotiated, in
-	// the order they were offered. The Conn takes them over.
+	// Extensions is the Sec-WebSocket-Extensions value of the 101 response
+	// that completed the caller's handshake: the one a server sent or a
+	// client received. Empty means no extension was agreed. The only
+	// extension NewConn supports is permessage-deflate, whose parameters it
+	// takes from this value as agreed; NewConn does not check them against an
+	// offer, so the caller's handshake must have followed RFC 7692 section 7.
 	//
-	// For a manual server handshake with NewPerMessageDeflateExtension, call
-	// NewConn before Extension.Negotiate to establish the server role. Then
-	// negotiate the client's offer and, only if Extension.IsEnabled reports
-	// true, include Extension.Offer in the response before starting I/O. Do
-	// not advertise enabled permessage-deflate together with another enabled
-	// extension: operations reject that composition, and NewConn cannot undo
-	// a manual handshake.
-	Extensions []Extension
+	// https://www.rfc-editor.org/rfc/rfc7692#section-7
+	Extensions string
+
+	// Compression sets Level, Threshold and MemoryLimit for permessage-deflate
+	// when Extensions agrees on it. Its window and no_context_takeover fields
+	// are not used: the agreement decides those. If nil, the zero Compression
+	// is used.
+	Compression *Compression
 
 	// MaxMessageSize bounds each incoming frame and reassembled message in
 	// bytes, including decompressed data. Zero means DefaultMaxMessageSize; a
 	// negative value means no limit.
 	MaxMessageSize int
+
+	// extensions are further negotiated extensions, after Extensions'. Only
+	// tests set them.
+	extensions []frameExtension
 }
 
 // NewConn creates a WebSocket connection over conn, whose opening handshake
 // the caller has completed. It takes over WebSocket framing and I/O; Close and
 // read-error cleanup close the transport. Callers must not read or write
 // framed bytes directly on conn.
-func NewConn(conn net.Conn, cfg ConnConfig) *Conn {
-	ws := newConn(conn, bufio.NewReader(conn), cfg.Server, cfg.Extensions, messageLimit(cfg.MaxMessageSize))
+//
+// NewConn fails with ErrInvalidExtension when cfg.Extensions is malformed or
+// names an extension other than permessage-deflate, and with ErrInvalidConfig
+// for an invalid cfg.Compression.
+func NewConn(conn net.Conn, cfg ConnConfig) (*Conn, error) {
+	extensions := cfg.extensions
+	if cfg.Extensions != "" {
+		pmd, err := agreedCompression(cfg.Extensions, cfg.Compression, cfg.Server)
+		if err != nil {
+			return nil, err
+		}
+		extensions = append([]frameExtension{pmd}, extensions...)
+	}
+	ws := newConn(conn, bufio.NewReader(conn), cfg.Server, extensions, messageLimit(cfg.MaxMessageSize))
 	ws.subprotocol = cfg.Subprotocol
-	return ws
+	return ws, nil
+}
+
+// agreedCompression returns an enabled permessage-deflate extension for the
+// response value agreement, with settings from c.
+func agreedCompression(agreement string, c *Compression, server bool) (*perMessageDeflate, error) {
+	offers, err := parseExtensions([]string{agreement})
+	if err != nil {
+		return nil, err
+	}
+	if len(offers) != 1 || offers[0].name != "permessage-deflate" {
+		return nil, fmt.Errorf("%w: NewConn supports exactly one permessage-deflate agreement, got %q", ErrInvalidExtension, agreement)
+	}
+	// A response gives every window parameter a value (RFC 7692 section 7.1.2).
+	params, err := parsePMDParameters(offers[0].params, false)
+	if err != nil {
+		return nil, err
+	}
+	if c == nil {
+		c = &Compression{}
+	}
+	ext, err := c.extension()
+	if err != nil {
+		return nil, err
+	}
+	pmd := ext.(*perMessageDeflate)
+	pmd.server = server
+	pmd.offered, pmd.offerSet = params, true
+	pmd.negotiated, pmd.enabled = params, true
+	return pmd, nil
 }
 
 // messageLimit maps a configured message size to the internal limit, where 0
@@ -314,8 +364,8 @@ func headLimit(n int64) int64 {
 
 // buildExtensions creates one connection's extensions: permessage-deflate
 // from compression, if any, then the factory's.
-func buildExtensions(compression *Compression, factory func() []Extension) ([]Extension, error) {
-	var extensions []Extension
+func buildExtensions(compression *Compression, factory func() []frameExtension) ([]frameExtension, error) {
+	var extensions []frameExtension
 	if compression != nil {
 		pmd, err := compression.extension()
 		if err != nil {

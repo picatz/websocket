@@ -1,6 +1,7 @@
 package websocket
 
 import (
+	"bytes"
 	"compress/flate"
 	"context"
 	"errors"
@@ -40,7 +41,7 @@ func TestNewConnConfigLimit(t *testing.T) {
 		{-1, 0},
 		{512, 512},
 	} {
-		if got := NewConn(&memoryConn{}, ConnConfig{MaxMessageSize: tc.in}).maxBytes; got != tc.want {
+		if got := newTestConn(&memoryConn{}, ConnConfig{MaxMessageSize: tc.in}).maxBytes; got != tc.want {
 			t.Errorf("ConnConfig{MaxMessageSize: %d} limit = %d, want %d", tc.in, got, tc.want)
 		}
 	}
@@ -123,12 +124,12 @@ func TestCompressionExtension(t *testing.T) {
 }
 
 // A shared Upgrader gives every connection its own extensions: a fresh
-// permessage-deflate instance and a fresh call to NewExtensions.
+// permessage-deflate instance and a fresh call to newExtensions.
 func TestUpgraderBuildsExtensionsPerConnection(t *testing.T) {
 	var calls atomic.Int32
 	u := &Upgrader{
 		Compression: &Compression{},
-		NewExtensions: func() []Extension {
+		newExtensions: func() []frameExtension {
 			calls.Add(1)
 			return nil
 		},
@@ -162,18 +163,18 @@ func TestUpgraderBuildsExtensionsPerConnection(t *testing.T) {
 		t.Fatalf("extensions %v and %v, want one distinct instance each", a.extensions, b.extensions)
 	}
 	if got := calls.Load(); got != 2 {
-		t.Fatalf("NewExtensions called %d times, want 2", got)
+		t.Fatalf("newExtensions called %d times, want 2", got)
 	}
 }
 
-// Compression is negotiated before the NewExtensions extensions.
+// Compression is negotiated before the newExtensions extensions.
 func TestBuildExtensionsOrder(t *testing.T) {
 	custom := &xorExtension{}
-	exts, err := buildExtensions(&Compression{}, func() []Extension { return []Extension{custom} })
+	exts, err := buildExtensions(&Compression{}, func() []frameExtension { return []frameExtension{custom} })
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(exts) != 2 || exts[1] != Extension(custom) {
+	if len(exts) != 2 || exts[1] != frameExtension(custom) {
 		t.Fatalf("extensions = %v", exts)
 	}
 	if _, ok := exts[0].(*perMessageDeflate); !ok {
@@ -244,5 +245,71 @@ func TestMisconfigurationMatchesErrInvalidConfig(t *testing.T) {
 				t.Fatalf("hijacks = %d, status = %d; want 0 and 500", w.calls, w.Code)
 			}
 		})
+	}
+}
+
+// NewConn takes the agreed permessage-deflate parameters from the response
+// value, in both roles, and the two ends then exchange compressed messages.
+func TestNewConnAgreedCompression(t *testing.T) {
+	const agreement = "permessage-deflate; server_no_context_takeover; client_max_window_bits=10"
+	a, b := net.Pipe()
+	t.Cleanup(func() { a.Close(); b.Close() })
+	server, err := NewConn(a, ConnConfig{Server: true, Extensions: agreement})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := NewConn(b, ConnConfig{Extensions: agreement, Compression: &Compression{Level: 9, ClientMaxWindowBits: 15}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []*Conn{server, client} {
+		pmd, ok := c.extensions[0].(*perMessageDeflate)
+		if len(c.extensions) != 1 || !ok || !pmd.enabled || pmd.server != c.isServer {
+			t.Fatalf("extensions = %v", c.extensions)
+		}
+		want := pmdParameters{serverNoContextTakeover: true, clientMaxWindowBits: 10}
+		if pmd.negotiated != want {
+			t.Fatalf("negotiated %+v, want %+v", pmd.negotiated, want)
+		}
+	}
+	if got := client.extensions[0].(*perMessageDeflate); got.level != 9 || got.localWindowBits() != 10 {
+		t.Fatalf("client level %d window %d; want 9 and the agreed 10", got.level, got.localWindowBits())
+	}
+
+	msg := bytes.Repeat([]byte("agreed "), 200)
+	errc := make(chan error, 1)
+	go func() { errc <- client.WriteMessage(TextMessage, msg) }()
+	_, got, err := server.ReadMessage()
+	if err != nil || !bytes.Equal(got, msg) {
+		t.Fatalf("server read %d bytes, %v", len(got), err)
+	}
+	if err := <-errc; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNewConnRejectsInvalidAgreement(t *testing.T) {
+	for name, tc := range map[string]struct {
+		cfg  ConnConfig
+		want error
+	}{
+		"unknown extension":   {ConnConfig{Extensions: "x-webkit-deflate-frame"}, ErrInvalidExtension},
+		"two extensions":      {ConnConfig{Extensions: "permessage-deflate, permessage-deflate"}, ErrInvalidExtension},
+		"syntax":              {ConnConfig{Extensions: "permessage-deflate;"}, ErrInvalidExtension},
+		"bare window":         {ConnConfig{Extensions: "permessage-deflate; client_max_window_bits"}, ErrInvalidExtension},
+		"window out of range": {ConnConfig{Extensions: "permessage-deflate; server_max_window_bits=16"}, ErrInvalidExtension},
+		"unknown parameter":   {ConnConfig{Extensions: "permessage-deflate; x=1"}, ErrInvalidExtension},
+		"invalid compression": {ConnConfig{Extensions: "permessage-deflate", Compression: &Compression{Level: 11}}, ErrInvalidConfig},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if c, err := NewConn(&memoryConn{}, tc.cfg); c != nil || !errors.Is(err, tc.want) {
+				t.Fatalf("NewConn = %v, %v; want %v", c, err, tc.want)
+			}
+		})
+	}
+	// Compression alone, without an agreement, enables nothing.
+	c, err := NewConn(&memoryConn{}, ConnConfig{Compression: &Compression{}})
+	if err != nil || len(c.extensions) != 0 {
+		t.Fatalf("NewConn = %v, %v", c.extensions, err)
 	}
 }

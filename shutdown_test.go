@@ -144,7 +144,7 @@ func TestShutdownContextBoundsSilentPeer(t *testing.T) {
 			}
 		}
 	}()
-	c := websocket.NewConn(a, websocket.ConnConfig{})
+	c := mustNewConn(a, websocket.ConnConfig{})
 	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()
 	err := c.Shutdown(ctx, websocket.StatusNormalClosure, "")
@@ -165,7 +165,7 @@ func TestShutdownPeerDropsConnection(t *testing.T) {
 		_, _ = b.Read(buf) // the Close frame
 		b.Close()
 	}()
-	c := websocket.NewConn(a, websocket.ConnConfig{})
+	c := mustNewConn(a, websocket.ConnConfig{})
 	err := c.Shutdown(shutdownContext(t), websocket.StatusNormalClosure, "")
 	if err == nil || errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("Shutdown: err = %v, want an unfinished-handshake error", err)
@@ -224,7 +224,7 @@ func ExampleConn_Shutdown() {
 func TestShutdownFailedWriteClosesConn(t *testing.T) {
 	a, b := net.Pipe()
 	b.Close()
-	c := websocket.NewConn(a, websocket.ConnConfig{})
+	c := mustNewConn(a, websocket.ConnConfig{})
 	if err := c.Shutdown(shutdownContext(t), websocket.StatusNormalClosure, ""); !errors.Is(err, websocket.ErrWriteFailed) {
 		t.Fatalf("Shutdown: err = %v, want ErrWriteFailed", err)
 	}

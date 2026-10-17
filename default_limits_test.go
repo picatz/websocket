@@ -251,7 +251,7 @@ func TestExplicitLimitCompatibility(t *testing.T) {
 			if tc.want > 0 {
 				wire = append(wire, limitHeader(false, 0x82, size+1)...)
 			}
-			c := NewConn(&memoryConn{Reader: bytes.NewReader(wire)}, ConnConfig{MaxMessageSize: tc.limit})
+			c := newTestConn(&memoryConn{Reader: bytes.NewReader(wire)}, ConnConfig{MaxMessageSize: tc.limit})
 			if c.maxBytes != tc.want {
 				t.Fatalf("limit %d want %d", c.maxBytes, tc.want)
 			}

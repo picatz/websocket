@@ -17,9 +17,9 @@ import (
 // separate coverage). PMD inputs are independent, unfragmented messages without
 // context takeover; this does not assert support for compressed fragmentation
 // or retained compression history.
-func defaultLimitPMD(t *testing.T, server bool) Extension {
+func defaultLimitPMD(t *testing.T, server bool) frameExtension {
 	t.Helper()
-	pmd := NewPerMessageDeflateExtension(WithClientNoContextTakeover(), WithServerNoContextTakeover()).(*perMessageDeflate)
+	pmd := newPerMessageDeflate(withClientNoContextTakeover(), withServerNoContextTakeover()).(*perMessageDeflate)
 	pmd.server = server
 	if err := pmd.Negotiate("permessage-deflate; client_no_context_takeover; server_no_context_takeover"); err != nil {
 		t.Fatal(err)
@@ -137,7 +137,7 @@ func TestHighLevelDefaultPMDBoundaries(t *testing.T) {
 		for _, tc := range cases {
 			t.Run(fmt.Sprintf("server=%v/%s", server, tc.name), func(t *testing.T) {
 				c, raw := highLevelReader(t, server, limitWire(server, 0xc2, tc.encoded))
-				c.extensions = []Extension{defaultLimitPMD(t, server)}
+				c.extensions = []frameExtension{defaultLimitPMD(t, server)}
 				if c.maxBytes != n {
 					t.Fatalf("constructor limit = %d, want %d", c.maxBytes, n)
 				}
@@ -150,7 +150,7 @@ func TestHighLevelDefaultPMDBoundaries(t *testing.T) {
 					// An explicit larger limit proves this rejected input was
 					// valid independently of the constructor's default budget.
 					c, _ = highLevelReader(t, server, limitWire(server, 0xc2, tc.encoded), n+1)
-					c.extensions = []Extension{defaultLimitPMD(t, server)}
+					c.extensions = []frameExtension{defaultLimitPMD(t, server)}
 					op, p, err = c.ReadMessage()
 				}
 				if err != nil || op != BinaryMessage || !bytes.Equal(p, tc.want) {
@@ -180,13 +180,13 @@ func TestHighLevelDefaultPMDIncompressibleBoundary(t *testing.T) {
 	for _, server := range []bool{false, true} {
 		t.Run(fmt.Sprintf("server=%v", server), func(t *testing.T) {
 			c, raw := highLevelReader(t, server, limitWire(server, 0xc2, encoded))
-			c.extensions = []Extension{defaultLimitPMD(t, server)}
+			c.extensions = []frameExtension{defaultLimitPMD(t, server)}
 			if _, p, err := c.ReadMessage(); !errors.Is(err, ErrPayloadTooLarge) || p != nil {
 				t.Fatalf("payload %d, error %v", len(p), err)
 			}
 			requireDefaultExtensionTerminal(t, c, raw, 1009)
 			c, _ = highLevelReader(t, server, limitWire(server, 0xc2, encoded), len(encoded))
-			c.extensions = []Extension{defaultLimitPMD(t, server)}
+			c.extensions = []frameExtension{defaultLimitPMD(t, server)}
 			if op, p, err := c.ReadMessage(); err != nil || op != BinaryMessage || !bytes.Equal(p, payload) {
 				t.Fatalf("with encoded headroom: opcode %v, payload %d, error %v", op, len(p), err)
 			}
@@ -205,7 +205,7 @@ func TestHighLevelDefaultPMDInvalidStreams(t *testing.T) {
 					encoded = []byte{0x00, 0x20, 0x00, 0xdf, 0xff, 'x'}
 				}
 				c, raw := highLevelReader(t, server, limitWire(server, 0xc2, encoded))
-				c.extensions = []Extension{defaultLimitPMD(t, server)}
+				c.extensions = []frameExtension{defaultLimitPMD(t, server)}
 				_, p, err := c.ReadMessage()
 				if p != nil || err == nil || errors.Is(err, ErrPayloadTooLarge) {
 					t.Fatalf("payload %d, error %v", len(p), err)
@@ -227,7 +227,7 @@ func TestHighLevelDefaultPMDInvalidStreams(t *testing.T) {
 }
 
 type defaultLimitExtension struct {
-	process            func(*Frame) error
+	process            func(*wireFrame) error
 	incoming, outgoing int
 }
 
@@ -235,11 +235,11 @@ func (*defaultLimitExtension) Name() string           { return "default-limit-te
 func (*defaultLimitExtension) Offer() string          { return "default-limit-test" }
 func (*defaultLimitExtension) Negotiate(string) error { return nil }
 func (*defaultLimitExtension) IsEnabled() bool        { return true }
-func (e *defaultLimitExtension) ProcessIncomingFrame(f *Frame) error {
+func (e *defaultLimitExtension) ProcessIncomingFrame(f *wireFrame) error {
 	e.incoming++
 	return e.process(f)
 }
-func (e *defaultLimitExtension) ProcessOutgoingFrame(*Frame) error {
+func (e *defaultLimitExtension) ProcessOutgoingFrame(*wireFrame) error {
 	e.outgoing++
 	return errors.New("automatic failure must not invoke a custom encoder")
 }
@@ -250,11 +250,11 @@ func TestHighLevelDefaultExtensionHeaderLimit(t *testing.T) {
 			for _, size := range []int{DefaultMaxMessageSize + 1, int(^uint(0) >> 1)} {
 				t.Run(fmt.Sprintf("server=%v/custom=%v/size=%d", server, custom, size), func(t *testing.T) {
 					c, raw := highLevelReader(t, server, nil)
-					ext := &defaultLimitExtension{process: func(f *Frame) error { f.Payload = nil; return nil }}
-					c.extensions = []Extension{defaultLimitPMD(t, server)}
+					ext := &defaultLimitExtension{process: func(f *wireFrame) error { f.Payload = nil; return nil }}
+					c.extensions = []frameExtension{defaultLimitPMD(t, server)}
 					code := uint16(1009)
 					if custom {
-						c.extensions, code = []Extension{ext}, 0
+						c.extensions, code = []frameExtension{ext}, 0
 					}
 					// Instrument only post-handshake input. A declaration must
 					// reject before reading a body or even the client's mask,
@@ -281,15 +281,15 @@ func TestHighLevelDefaultCustomExtensionOutput(t *testing.T) {
 				// Custom extensions retain ownership of opcode, FIN, reserved
 				// bits and intermediate storage. Only their final message output
 				// is bounded; their own allocations remain their responsibility.
-				ext := &defaultLimitExtension{process: func(f *Frame) error {
+				ext := &defaultLimitExtension{process: func(f *wireFrame) error {
 					f.Final, f.Opcode = true, BinaryMessage
 					f.Rsv1, f.Rsv2, f.Rsv3 = false, false, false
 					f.Payload = bytes.Repeat([]byte{'x'}, DefaultMaxMessageSize+1)
 					return nil
 				}}
 				c, raw := highLevelReader(t, server, limitWire(server, 0x70, []byte("x")))
-				c.extensions = []Extension{ext}
-				trim := &defaultLimitExtension{process: func(f *Frame) error {
+				c.extensions = []frameExtension{ext}
+				trim := &defaultLimitExtension{process: func(f *wireFrame) error {
 					f.Payload = f.Payload[:DefaultMaxMessageSize]
 					return nil
 				}}
@@ -319,11 +319,11 @@ func TestHighLevelDefaultCustomExtensionError(t *testing.T) {
 	for _, server := range []bool{false, true} {
 		for _, cause := range []error{io.EOF, ErrPayloadTooLarge} {
 			t.Run(fmt.Sprintf("server=%v/%v", server, cause), func(t *testing.T) {
-				ext := &defaultLimitExtension{process: func(*Frame) error { return fmt.Errorf("custom cause: %w", cause) }}
+				ext := &defaultLimitExtension{process: func(*wireFrame) error { return fmt.Errorf("custom cause: %w", cause) }}
 				wire := limitWire(server, 0x82, []byte("first"))
 				wire = append(wire, limitWire(server, 0x82, []byte("later"))...)
 				c, raw := highLevelReader(t, server, wire)
-				c.extensions = []Extension{ext}
+				c.extensions = []frameExtension{ext}
 				_, p, err := c.ReadMessage()
 				want := "extension default-limit-test failed to process incoming frame: custom cause: " + cause.Error()
 				if !errors.Is(err, cause) || err.Error() != want || p != nil {

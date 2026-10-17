@@ -92,11 +92,11 @@ type negotiationExtension struct {
 	err                   error
 }
 
-func (e *negotiationExtension) Name() string                      { return e.name }
-func (e *negotiationExtension) Offer() string                     { return e.offer }
-func (e *negotiationExtension) IsEnabled() bool                   { return e.enabled }
-func (e *negotiationExtension) ProcessOutgoingFrame(*Frame) error { return nil }
-func (e *negotiationExtension) ProcessIncomingFrame(*Frame) error { return nil }
+func (e *negotiationExtension) Name() string                          { return e.name }
+func (e *negotiationExtension) Offer() string                         { return e.offer }
+func (e *negotiationExtension) IsEnabled() bool                       { return e.enabled }
+func (e *negotiationExtension) ProcessOutgoingFrame(*wireFrame) error { return nil }
+func (e *negotiationExtension) ProcessIncomingFrame(*wireFrame) error { return nil }
 func (e *negotiationExtension) Negotiate(header string) error {
 	e.received = header
 	e.calls++
@@ -170,17 +170,17 @@ func TestDialExtensionSelection(t *testing.T) {
 				peerClosed <- err
 			}))
 			defer srv.Close()
-			var extensions []Extension
+			var extensions []frameExtension
 			for _, offer := range tc.offers {
 				if tc.builtin {
-					extensions = append(extensions, NewPerMessageDeflateExtension())
+					extensions = append(extensions, newPerMessageDeflate())
 					continue
 				}
 				extensions = append(extensions, &negotiationExtension{name: "synthetic", offer: offer, err: tc.callback})
 			}
 			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 			defer cancel()
-			conn, resp, err := (&Dialer{NewExtensions: func() []Extension { return extensions }}).Dial(ctx, "ws"+srv.URL[4:])
+			conn, resp, err := (&Dialer{newExtensions: func() []frameExtension { return extensions }}).Dial(ctx, "ws"+srv.URL[4:])
 			if conn != nil {
 				defer conn.conn.Close()
 			}
@@ -240,7 +240,7 @@ func TestDialRejectsInvalidExtensionOfferBeforeConnect(t *testing.T) {
 	defer func() { listener.Close(); <-done }()
 	for _, offer := range []string{"", "example;", "example\r\nInjected: true", `example; option="a,b"`} {
 		ext := &negotiationExtension{name: "example", offer: offer}
-		conn, resp, err := (&Dialer{NewExtensions: func() []Extension { return []Extension{ext} }}).Dial(t.Context(), "ws://"+listener.Addr().String())
+		conn, resp, err := (&Dialer{newExtensions: func() []frameExtension { return []frameExtension{ext} }}).Dial(t.Context(), "ws://"+listener.Addr().String())
 		if conn != nil || resp != nil || !errors.Is(err, ErrInvalidExtension) || !errors.Is(err, ErrInvalidHandshakeHeader) || connects.Load() != 0 || ext.calls != 0 {
 			t.Fatalf("offer %q: Dial = %v, %v, %v; connects = %d, callbacks = %d", offer, conn, resp, err, connects.Load(), ext.calls)
 		}
@@ -309,7 +309,7 @@ func TestUpgradeExtensionSelection(t *testing.T) {
 			ext := &negotiationExtension{name: "example", offer: tc.selection, enabled: true, err: tc.callback}
 			raw := &memoryConn{Reader: bytes.NewReader(nil)}
 			w := &extensionHijacker{hijackResponse: &hijackResponse{httptest.NewRecorder(), raw, bufio.NewReadWriter(bufio.NewReader(raw), bufio.NewWriter(raw))}}
-			conn, err := (&Upgrader{NewExtensions: func() []Extension { return []Extension{ext} }}).Upgrade(w, r)
+			conn, err := (&Upgrader{newExtensions: func() []frameExtension { return []frameExtension{ext} }}).Upgrade(w, r)
 			if (err == nil) != tc.valid {
 				t.Fatalf("Upgrade = %v, %v; valid = %v", conn, err, tc.valid)
 			}

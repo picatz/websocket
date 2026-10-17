@@ -10,13 +10,13 @@ import (
 )
 
 var (
-	// ErrUnsupportedExtensionComposition identifies more than one enabled
+	// errUnsupportedExtensionComposition identifies more than one enabled
 	// built-in PMD instance, or a custom extension that changes RSV1 while
 	// built-in PMD is enabled. RFC 7692 section 5 gives RSV1 to one PMCE.
-	ErrUnsupportedExtensionComposition = errors.New("websocket: unsupported enabled extension composition")
-	// ErrFragmentedCompression identifies direct PMD frame callbacks that do
+	errUnsupportedExtensionComposition = errors.New("websocket: unsupported enabled extension composition")
+	// errFragmentedCompression identifies direct PMD frame callbacks that do
 	// not contain one complete message. Conn handles fragmentation internally.
-	ErrFragmentedCompression = errors.New("websocket: direct compression callbacks require a complete message")
+	errFragmentedCompression = errors.New("websocket: direct compression callbacks require a complete message")
 	// ErrInvalidCompressedPayload identifies malformed DEFLATE message data.
 	ErrInvalidCompressedPayload = errors.New("websocket: invalid compressed payload")
 )
@@ -32,8 +32,8 @@ func (e *compressedPayloadError) Is(target error) bool { return target == ErrInv
 
 // messageCompression returns the enabled built-in PMD extension, if any. It
 // calls IsEnabled once per extension and rejects multiple built-in instances.
-func messageCompression(extensions []Extension) (*perMessageDeflate, error) {
-	var buf [4]Extension
+func messageCompression(extensions []frameExtension) (*perMessageDeflate, error) {
+	var buf [4]frameExtension
 	enabled, err := enabledExtensions(extensions, buf[:0])
 	if err != nil || len(enabled) == 0 {
 		return nil, err
@@ -46,7 +46,7 @@ func messageCompression(extensions []Extension) (*perMessageDeflate, error) {
 // IsEnabled exactly once on each. At most one built-in PMD may be enabled: RFC
 // 7692 section 5 gives RSV1 to a single PMCE. Custom frame extensions may be
 // combined with it (see Conn's composition order).
-func enabledExtensions(extensions, dst []Extension) ([]Extension, error) {
+func enabledExtensions(extensions, dst []frameExtension) ([]frameExtension, error) {
 	var pmd bool
 	for _, ext := range extensions {
 		if ext == nil {
@@ -57,7 +57,7 @@ func enabledExtensions(extensions, dst []Extension) ([]Extension, error) {
 		}
 		if _, ok := ext.(*perMessageDeflate); ok {
 			if pmd {
-				return nil, fmt.Errorf("%w: multiple permessage-deflate owners", ErrUnsupportedExtensionComposition)
+				return nil, fmt.Errorf("%w: multiple permessage-deflate owners", errUnsupportedExtensionComposition)
 			}
 			pmd = true
 		}
@@ -207,16 +207,16 @@ func (r *deflateMessageInput) closedByPeer() bool { return r.peerClosed != nil &
 // extensions apply outside compression in both directions.
 type deflateFrameReader struct {
 	c          *Conn
-	frame      Frame // The current frame; a copy, so callers' frames stay on their stacks.
+	frame      wireFrame // The current frame; a copy, so callers' frames stay on their stacks.
 	remaining  uint64
 	phase      uint64
 	peerClosed *bool
-	frameExts  []Extension // Enabled custom extensions; frames are buffered.
-	buf        []byte      // Remaining extension-processed payload.
-	first      bool        // The current frame starts the message.
+	frameExts  []frameExtension // Enabled custom extensions; frames are buffered.
+	buf        []byte           // Remaining extension-processed payload.
+	first      bool             // The current frame starts the message.
 }
 
-func (r *deflateFrameReader) start(frame *Frame, n uint64) error {
+func (r *deflateFrameReader) start(frame *wireFrame, n uint64) error {
 	r.frame, r.remaining, r.phase = *frame, n, 0
 	if len(r.frameExts) > 0 {
 		return r.startBuffered(&r.frame, n)
@@ -232,7 +232,7 @@ func (r *deflateFrameReader) start(frame *Frame, n uint64) error {
 // startBuffered reads a whole frame and applies the custom extensions. They
 // must consume their own reserved bits and leave RSV1, the opcode and the
 // message state to permessage-deflate.
-func (r *deflateFrameReader) startBuffered(frame *Frame, n uint64) error {
+func (r *deflateFrameReader) startBuffered(frame *wireFrame, n uint64) error {
 	opcode, rsv1 := frame.Opcode, frame.Rsv1
 	if err := r.c.readFrameBody(frame, n); err != nil {
 		return err
@@ -246,7 +246,7 @@ func (r *deflateFrameReader) startBuffered(frame *Frame, n uint64) error {
 	case frame.Opcode != opcode:
 		return failWith(StatusProtocolError, ErrUnexpectedFrame)
 	case frame.Rsv1 != rsv1:
-		return fmt.Errorf("%w: an extension changed RSV1 owned by permessage-deflate", ErrUnsupportedExtensionComposition)
+		return fmt.Errorf("%w: an extension changed RSV1 owned by permessage-deflate", errUnsupportedExtensionComposition)
 	case frame.Rsv1 != r.first || frame.Rsv2 || frame.Rsv3:
 		// RFC 7692 section 6.1: RSV1 only on a message's first frame.
 		return failWith(StatusProtocolError, ErrUnsupportedExtensions)
@@ -264,7 +264,7 @@ func (r *deflateFrameReader) advance() error {
 		if r.frame.Final {
 			return io.EOF
 		}
-		var f Frame
+		var f wireFrame
 		n, err := r.c.readFrameHeader(&f)
 		if err == io.EOF {
 			return io.ErrUnexpectedEOF
@@ -562,12 +562,12 @@ func (p *perMessageDeflate) decodeMessage(input *deflateMessageInput, limit int,
 	return out, nil
 }
 
-func (p *perMessageDeflate) processIncomingFrame(frame *Frame, limit int) error {
+func (p *perMessageDeflate) processIncomingFrame(frame *wireFrame, limit int) error {
 	if !p.enabled {
 		return nil
 	}
 	if frame.Opcode == ContinuationFrame || ((frame.Opcode == TextMessage || frame.Opcode == BinaryMessage) && !frame.Final) {
-		return ErrFragmentedCompression
+		return errFragmentedCompression
 	}
 	if frame.Opcode != TextMessage && frame.Opcode != BinaryMessage || !frame.Rsv1 {
 		return nil
@@ -582,7 +582,7 @@ func (p *perMessageDeflate) processIncomingFrame(frame *Frame, limit int) error 
 
 // handleControl is shared by the legacy frame path and PMD's logical reader.
 // Handlers run synchronously with neither the handler nor PMD lifetime lock held.
-func (c *Conn) handleControl(frame *Frame) (peerClosed bool, err error) {
+func (c *Conn) handleControl(frame *wireFrame) (peerClosed bool, err error) {
 	switch frame.Opcode {
 	case CloseMessage:
 		if err := validateIncomingClosePayload(frame.Payload); err != nil {

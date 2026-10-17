@@ -27,10 +27,10 @@ func (c *headerOnlyConn) Read(p []byte) (int, error) {
 	return c.Reader.Read(p)
 }
 
-func requireHeaderRejection(t *testing.T, wire []byte, server bool, limit int, extensions []Extension, want error) {
+func requireHeaderRejection(t *testing.T, wire []byte, server bool, limit int, extensions []frameExtension, want error) {
 	t.Helper()
 	raw := &headerOnlyConn{memoryConn: memoryConn{Reader: bytes.NewReader(wire)}}
-	c := NewConn(raw, ConnConfig{Server: server, Extensions: extensions, MaxMessageSize: limit})
+	c := newTestConn(raw, ConnConfig{Server: server, extensions: extensions, MaxMessageSize: limit})
 	_, _, err := c.ReadMessage()
 	if !errors.Is(err, want) || raw.bodyReads != 0 {
 		t.Fatalf("ReadMessage = %v, reads after header = %d; want %v without reading a body", err, raw.bodyReads, want)
@@ -160,95 +160,95 @@ func TestReadMessageControlsAtLimit(t *testing.T) {
 // Incoming extensions are trusted transforms; even Opcode and Payload may
 // change. Header-only rejection must not guess their decoded representation.
 type headerTransformExtension struct {
-	Extension
+	frameExtension
 	enabled bool
-	process func(*Frame) error
+	process func(*wireFrame) error
 }
 
-func (*headerTransformExtension) Name() string                          { return "header-transform" }
-func (e *headerTransformExtension) IsEnabled() bool                     { return e.enabled }
-func (e *headerTransformExtension) ProcessIncomingFrame(f *Frame) error { return e.process(f) }
+func (*headerTransformExtension) Name() string                              { return "header-transform" }
+func (e *headerTransformExtension) IsEnabled() bool                         { return e.enabled }
+func (e *headerTransformExtension) ProcessIncomingFrame(f *wireFrame) error { return e.process(f) }
 
 func TestReadMessageCustomHeaderTransforms(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		wire    []byte
-		process func(*Frame) error
+		process func(*wireFrame) error
 		want    string
 		wantErr error
 	}{
-		{"shrinking continuation", []byte{0x02, 2, 'a', 'b', 0x80, 2, 'c', 'd'}, func(f *Frame) error {
+		{"shrinking continuation", []byte{0x02, 2, 'a', 'b', 0x80, 2, 'c', 'd'}, func(f *wireFrame) error {
 			if f.Opcode == ContinuationFrame {
 				f.Payload = nil
 			}
 			return nil
 		}, "ab", nil},
-		{"shrinking first fragment", []byte{0x02, 2, 'a', 'b', 0x80, 2, 'c', 'd'}, func(f *Frame) error {
+		{"shrinking first fragment", []byte{0x02, 2, 'a', 'b', 0x80, 2, 'c', 'd'}, func(f *wireFrame) error {
 			if f.Opcode == BinaryMessage {
 				f.Payload = nil
 			}
 			return nil
 		}, "cd", nil},
-		{"normalize fragmented opcode", []byte{0x02, 0, 0x82, 1, 'x'}, func(f *Frame) error {
+		{"normalize fragmented opcode", []byte{0x02, 0, 0x82, 1, 'x'}, func(f *wireFrame) error {
 			if f.Final {
 				f.Opcode = ContinuationFrame
 			}
 			return nil
 		}, "x", nil},
-		{"noop new message", []byte{0x02, 0, 0x82, 1, 'x'}, func(*Frame) error { return nil }, "", ErrUnexpectedFrame},
-		{"reserved bits", []byte{0xf2, 1, 'x'}, func(f *Frame) error {
+		{"noop new message", []byte{0x02, 0, 0x82, 1, 'x'}, func(*wireFrame) error { return nil }, "", ErrUnexpectedFrame},
+		{"reserved bits", []byte{0xf2, 1, 'x'}, func(f *wireFrame) error {
 			f.Rsv1, f.Rsv2, f.Rsv3 = false, false, false
 			return nil
 		}, "x", nil},
-		{"normalize opcode", []byte{0x80, 1, 'x'}, func(f *Frame) error {
+		{"normalize opcode", []byte{0x80, 1, 'x'}, func(f *wireFrame) error {
 			f.Opcode = BinaryMessage
 			return nil
 		}, "x", nil},
-		{"normalize close", []byte{0x88, 1, 'x'}, func(f *Frame) error {
+		{"normalize close", []byte{0x88, 1, 'x'}, func(f *wireFrame) error {
 			f.Opcode = BinaryMessage
 			return nil
 		}, "x", nil},
-		{"decoded overflow", []byte{0x82, 1, 'x'}, func(f *Frame) error {
+		{"decoded overflow", []byte{0x82, 1, 'x'}, func(f *wireFrame) error {
 			f.Payload = []byte("abc")
 			return nil
 		}, "", ErrPayloadTooLarge},
-		{"noop overflow", []byte{0x02, 2, 'a', 'b', 0x80, 1, 'c'}, func(*Frame) error { return nil }, "", ErrPayloadTooLarge},
-		{"noop continuation", []byte{0x80, 1, 'x'}, func(*Frame) error { return nil }, "", ErrUnexpectedContinuation},
-		{"noop reserved bit", []byte{0xc2, 1, 'x'}, func(*Frame) error { return nil }, "", ErrUnsupportedExtensions},
+		{"noop overflow", []byte{0x02, 2, 'a', 'b', 0x80, 1, 'c'}, func(*wireFrame) error { return nil }, "", ErrPayloadTooLarge},
+		{"noop continuation", []byte{0x80, 1, 'x'}, func(*wireFrame) error { return nil }, "", ErrUnexpectedContinuation},
+		{"noop reserved bit", []byte{0xc2, 1, 'x'}, func(*wireFrame) error { return nil }, "", ErrUnsupportedExtensions},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := frameConn(tc.wire, false, 2)
-			c.extensions = []Extension{&headerTransformExtension{enabled: true, process: tc.process}}
+			c.extensions = []frameExtension{&headerTransformExtension{enabled: true, process: tc.process}}
 			_, data, err := c.ReadMessage()
 			if !errors.Is(err, tc.wantErr) || string(data) != tc.want {
 				t.Fatalf("message = %q, %v; want %q, %v", data, err, tc.want, tc.wantErr)
 			}
 		})
 	}
-	disabled := []Extension{&headerTransformExtension{process: func(*Frame) error { t.Fatal("disabled extension invoked"); return nil }}}
+	disabled := []frameExtension{&headerTransformExtension{process: func(*wireFrame) error { t.Fatal("disabled extension invoked"); return nil }}}
 	requireHeaderRejection(t, []byte{0xc2, 125}, false, 0, disabled, ErrUnsupportedExtensions)
 	requireHeaderRejection(t, []byte{0x02, 2, 'a', 'b', 0x80, 1}, false, 2, disabled, ErrPayloadTooLarge)
 }
 
 func TestReadMessageBuiltinReservedBits(t *testing.T) {
-	pmd := NewPerMessageDeflateExtension()
+	pmd := newPerMessageDeflate()
 	if err := pmd.Negotiate("permessage-deflate"); err != nil {
 		t.Fatal(err)
 	}
 	for _, b0 := range []byte{0xa2, 0x92, 0xe2, 0xf2, 0xc0, 0xc8, 0xc9, 0xca} {
-		requireHeaderRejection(t, []byte{b0, 125}, false, 0, []Extension{pmd}, ErrUnsupportedExtensions)
+		requireHeaderRejection(t, []byte{b0, 125}, false, 0, []frameExtension{pmd}, ErrUnsupportedExtensions)
 	}
 	// A custom frame extension composed with PMD owns RSV2 in either order,
 	// for uncompressed and compressed (RSV1) messages alike.
 	for _, first := range []bool{false, true} {
 		for _, wire := range [][]byte{{0xa2, 1, 'x'}, {0xe2, 3, 0xaa, 0x00, 0x00}} {
 			// Earlier rejections closed pmd's receive state; use a fresh one.
-			pmd := NewPerMessageDeflateExtension()
+			pmd := newPerMessageDeflate()
 			if err := pmd.Negotiate("permessage-deflate"); err != nil {
 				t.Fatal(err)
 			}
-			custom := &headerTransformExtension{enabled: true, process: func(f *Frame) error { f.Rsv2 = false; return nil }}
-			extensions := []Extension{pmd, custom}
+			custom := &headerTransformExtension{enabled: true, process: func(f *wireFrame) error { f.Rsv2 = false; return nil }}
+			extensions := []frameExtension{pmd, custom}
 			if first {
 				extensions[0], extensions[1] = extensions[1], extensions[0]
 			}
@@ -260,7 +260,7 @@ func TestReadMessageBuiltinReservedBits(t *testing.T) {
 		}
 	}
 	// Uncompressed continuations still consume the aggregate message budget.
-	requireHeaderRejection(t, []byte{0x02, 2, 'a', 'b', 0x80, 1}, false, 2, []Extension{pmd}, ErrPayloadTooLarge)
+	requireHeaderRejection(t, []byte{0x02, 2, 'a', 'b', 0x80, 1}, false, 2, []frameExtension{pmd}, ErrPayloadTooLarge)
 }
 
 func TestReadMessageAtLimitStillRequiresFinalFrame(t *testing.T) {
@@ -316,7 +316,7 @@ func TestCloseInterruptsFrameReadStages(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			raw := &stalledFrameConn{memoryConn: memoryConn{Reader: bytes.NewReader(tc.wire)}, waiting: make(chan struct{}), closed: make(chan struct{})}
 			defer raw.Close()
-			c := NewConn(raw, ConnConfig{Server: tc.server, MaxMessageSize: 2})
+			c := newTestConn(raw, ConnConfig{Server: tc.server, MaxMessageSize: 2})
 			result := make(chan error, 1)
 			go func() { _, _, err := c.ReadMessage(); result <- err }()
 			select {

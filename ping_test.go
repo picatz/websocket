@@ -118,7 +118,7 @@ func TestPingReturnsWhenConnectionCloses(t *testing.T) {
 func TestPingAfterClose(t *testing.T) {
 	a, b := net.Pipe()
 	defer b.Close()
-	closed := websocket.NewConn(a, websocket.ConnConfig{})
+	closed := mustNewConn(a, websocket.ConnConfig{})
 	go io.Copy(io.Discard, b)
 	if err := closed.Close(); err != nil {
 		t.Fatal(err)

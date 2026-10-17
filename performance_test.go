@@ -160,7 +160,7 @@ func BenchmarkReadMessage(b *testing.B) {
 					payload := benchmarkPayload(size)
 					wire := benchmarkWire(payload, masked, fragments)
 					r := bytes.NewReader(wire)
-					c := NewConn(&benchmarkConn{reader: r, writer: io.Discard}, ConnConfig{Server: masked})
+					c := newTestConn(&benchmarkConn{reader: r, writer: io.Discard}, ConnConfig{Server: masked})
 					kind, got, err := c.ReadMessage()
 					if err != nil || kind != BinaryMessage || !bytes.Equal(got, payload) {
 						b.Fatalf("invalid fixture: kind=%v bytes=%d err=%v", kind, len(got), err)
@@ -186,7 +186,7 @@ func BenchmarkWriteMessage(b *testing.B) {
 		for _, server := range []bool{false, true} {
 			b.Run(fmt.Sprintf("bytes=%d/server=%t", size, server), func(b *testing.B) {
 				payload := benchmarkPayload(size)
-				c := NewConn(&benchmarkConn{writer: io.Discard}, ConnConfig{Server: server})
+				c := newTestConn(&benchmarkConn{writer: io.Discard}, ConnConfig{Server: server})
 				// Exclude one-time crypto/rand initialization from steady-state results.
 				if err := c.WriteMessage(BinaryMessage, payload); err != nil {
 					b.Fatal(err)
@@ -239,7 +239,7 @@ func BenchmarkTransport(b *testing.B) {
 					if err := receiver.SetDeadline(deadline); err != nil {
 						b.Fatal(err)
 					}
-					writer, reader := NewConn(sender, ConnConfig{Server: server}), NewConn(receiver, ConnConfig{Server: !server})
+					writer, reader := newTestConn(sender, ConnConfig{Server: server}), newTestConn(receiver, ConnConfig{Server: !server})
 					payload := benchmarkPayload(size)
 					done := make(chan error, 1)
 					finished := make(chan struct{})
@@ -285,7 +285,7 @@ func TestBenchmarkWire(t *testing.T) {
 				payload := benchmarkPayload(size)
 				wire := benchmarkWire(payload, masked, fragments)
 				r := bytes.NewReader(wire)
-				c := NewConn(&benchmarkConn{reader: r, writer: io.Discard}, ConnConfig{Server: masked})
+				c := newTestConn(&benchmarkConn{reader: r, writer: io.Discard}, ConnConfig{Server: masked})
 				kind, got, err := c.ReadMessage()
 				if err != nil || kind != BinaryMessage || !bytes.Equal(got, payload) {
 					t.Fatalf("%d/%t/%d: %v, %v", size, masked, fragments, kind, err)
@@ -328,7 +328,7 @@ func TestBenchmarkWriteWire(t *testing.T) {
 			payload := benchmarkPayload(size)
 			original := bytes.Clone(payload)
 			var wire bytes.Buffer
-			c := NewConn(&benchmarkConn{writer: &wire}, ConnConfig{Server: server})
+			c := newTestConn(&benchmarkConn{writer: &wire}, ConnConfig{Server: server})
 			if err := c.WriteMessage(BinaryMessage, payload); err != nil {
 				t.Fatal(err)
 			}

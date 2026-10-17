@@ -54,7 +54,7 @@ func TestWriteMessagePreservesTimeoutCause(t *testing.T) {
 			if err := raw.SetWriteDeadline(time.Now().Add(-time.Second)); err != nil {
 				t.Fatal(err)
 			}
-			err := NewConn(raw, ConnConfig{Server: true}).WriteMessage(BinaryMessage, bytes.Repeat([]byte{'x'}, size))
+			err := newTestConn(raw, ConnConfig{Server: true}).WriteMessage(BinaryMessage, bytes.Repeat([]byte{'x'}, size))
 			if !errors.Is(err, ErrWriteFailed) {
 				t.Fatalf("error = %v, want ErrWriteFailed", err)
 			}
@@ -75,7 +75,7 @@ func TestWriteErrorsPreserveClosedPipeCause(t *testing.T) {
 			raw, peer := net.Pipe()
 			defer raw.Close()
 			peer.Close()
-			conn := NewConn(raw, ConnConfig{Server: true})
+			conn := newTestConn(raw, ConnConfig{Server: true})
 			var err error
 			if control {
 				err = conn.WriteControlFrame(PingMessage, []byte("ping"))
@@ -118,13 +118,13 @@ func TestReadMessageEOFAtMessageBoundaries(t *testing.T) {
 
 // An extension failure is not a transport EOF, even if it wraps one.
 type continuationErrorExtension struct {
-	Extension
+	frameExtension
 	err error
 }
 
 func (*continuationErrorExtension) IsEnabled() bool { return true }
 func (*continuationErrorExtension) Name() string    { return "continuation-error" }
-func (e *continuationErrorExtension) ProcessIncomingFrame(f *Frame) error {
+func (e *continuationErrorExtension) ProcessIncomingFrame(f *wireFrame) error {
 	if f.Opcode == ContinuationFrame {
 		return e.err
 	}
@@ -133,7 +133,7 @@ func (e *continuationErrorExtension) ProcessIncomingFrame(f *Frame) error {
 func TestReadMessagePreservesExtensionEOFCause(t *testing.T) {
 	cause := fmt.Errorf("extension failed: %w", io.EOF)
 	conn := frameConn([]byte{0x02, 1, 'a', 0x80, 1, 'b'}, false, 0)
-	conn.extensions = []Extension{&continuationErrorExtension{err: cause}}
+	conn.extensions = []frameExtension{&continuationErrorExtension{err: cause}}
 	_, _, err := conn.ReadMessage()
 	if !errors.Is(err, cause) || errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Fatalf("error = %v, want extension cause", err)

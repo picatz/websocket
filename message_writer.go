@@ -29,7 +29,7 @@ type messageWriter struct {
 	opcode    Opcode             // The next frame's opcode: the message type, then ContinuationFrame.
 	pmd       *perMessageDeflate // Compression extension, or nil.
 	compress  bool               // Compression decided and started for this message.
-	frameExts []Extension        // Enabled custom extensions, applied to each frame in order.
+	frameExts []frameExtension   // Enabled custom extensions, applied to each frame in order.
 	buf       []byte             // Encoded (or raw, before a decision) bytes not yet framed.
 	sent      bool               // At least one frame was handed to the transport.
 	err       error
@@ -37,7 +37,7 @@ type messageWriter struct {
 
 // newMessageWriter starts a message. enabled holds the connection's enabled
 // extensions, as resolved once for this message.
-func (c *Conn) newMessageWriter(opcode Opcode, enabled []Extension) *messageWriter {
+func (c *Conn) newMessageWriter(opcode Opcode, enabled []frameExtension) *messageWriter {
 	w := &messageWriter{c: c, opcode: opcode, buf: c.writeBuf[:0]}
 	for _, ext := range enabled {
 		if pmd, ok := ext.(*perMessageDeflate); ok {
@@ -110,7 +110,7 @@ func (w *messageWriter) Close() error {
 
 // frame passes one frame through the custom extensions and writes it.
 func (w *messageWriter) frame(final bool, payload []byte) error {
-	frame := &Frame{
+	frame := &wireFrame{
 		Final:   final,
 		Opcode:  w.opcode,
 		Payload: payload,
@@ -125,7 +125,7 @@ func (w *messageWriter) frame(final bool, payload []byte) error {
 	}
 	// RFC 7692 section 5: permessage-deflate owns RSV1 for data frames.
 	if w.pmd != nil && frame.Rsv1 != rsv1 {
-		return w.fail(fmt.Errorf("%w: an extension changed RSV1 owned by permessage-deflate", ErrUnsupportedExtensionComposition))
+		return w.fail(fmt.Errorf("%w: an extension changed RSV1 owned by permessage-deflate", errUnsupportedExtensionComposition))
 	}
 	w.opcode = ContinuationFrame
 	w.sent = true
