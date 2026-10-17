@@ -412,7 +412,9 @@ time; use transport deadlines for untrusted peers.
 `NetConn(ctx, conn, websocket.BinaryMessage)` wraps a connection as a
 `net.Conn`, so stream protocols such as gRPC, SSH or HTTP/2 can run over a
 WebSocket. Each `Write` sends one message and `Read` returns the payloads back
-to back. A peer close reads as `io.EOF`, and use after `Close` matches
+to back. A normal or going-away close reads as `io.EOF`; any other close status
+is returned as the peer's `*CloseError`, so `io.Copy` doesn't mistake an
+aborted stream for a complete one. Use after `Close` matches
 `net.ErrClosed`. Ending `ctx` aborts the connection.
 
 ```go

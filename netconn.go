@@ -23,7 +23,10 @@ import (
 // When ctx ends, the connection is aborted as described for ReadMessageContext
 // and blocked calls return. Close stops watching ctx and closes c.
 //
-// Read returns io.EOF once the peer closes the WebSocket. A message of another
+// Read returns io.EOF once the peer closes the WebSocket with
+// StatusNormalClosure, StatusGoingAway or no status. Any other close status is
+// returned as the peer's *CloseError, so io.Copy reports a stream the peer
+// ended abnormally instead of accepting it as complete. A message of another
 // type fails the connection with StatusUnsupportedData. Read and Write may be
 // called concurrently with each other and with Close, as net.Conn requires;
 // concurrent Reads are serialized, as are concurrent Writes. After Close, or
@@ -99,19 +102,23 @@ func (nc *netConn) Close() error {
 	return nc.c.Close()
 }
 
-func (nc *netConn) LocalAddr() net.Addr                { return nc.c.conn.LocalAddr() }
-func (nc *netConn) RemoteAddr() net.Addr               { return nc.c.conn.RemoteAddr() }
+func (nc *netConn) LocalAddr() net.Addr                { return nc.c.LocalAddr() }
+func (nc *netConn) RemoteAddr() net.Addr               { return nc.c.RemoteAddr() }
 func (nc *netConn) SetDeadline(t time.Time) error      { return nc.c.SetDeadline(t) }
 func (nc *netConn) SetReadDeadline(t time.Time) error  { return nc.c.SetReadDeadline(t) }
 func (nc *netConn) SetWriteDeadline(t time.Time) error { return nc.c.SetWriteDeadline(t) }
 
-// netConnError maps Conn errors onto net.Conn conventions: a peer's
-// CloseError becomes the bare io.EOF that stream readers such as io.Copy
-// compare against with ==, and a closed connection matches net.ErrClosed.
-// Other errors, including timeouts, are unchanged.
+// netConnError maps Conn errors onto net.Conn conventions: a peer's clean
+// close becomes the bare io.EOF that stream readers such as io.Copy compare
+// against with ==, and a closed connection matches net.ErrClosed. Other
+// errors, including abnormal closes and timeouts, are unchanged.
 func netConnError(err error) error {
-	if _, ok := errors.AsType[*CloseError](err); ok {
-		return io.EOF
+	if ce, ok := errors.AsType[*CloseError](err); ok {
+		switch ce.Code {
+		case StatusNormalClosure, StatusGoingAway, StatusNoStatusReceived:
+			return io.EOF
+		}
+		return err
 	}
 	if errors.Is(err, io.ErrClosedPipe) {
 		return fmt.Errorf("%w: %w", net.ErrClosed, err)

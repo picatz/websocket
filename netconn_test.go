@@ -235,3 +235,21 @@ func TestNetConnPeerCloseEndsIOCopy(t *testing.T) {
 		t.Fatalf("io.Copy = %d, %v (%q)", n, err, got.String())
 	}
 }
+
+// An abnormal close must not read as a clean end of stream.
+func TestNetConnAbnormalCloseFailsIOCopy(t *testing.T) {
+	server, client := pipeConns(t)
+	sn := NetConn(t.Context(), server, BinaryMessage)
+	go func() {
+		_ = client.WriteMessage(BinaryMessage, []byte("partial"))
+		_ = client.CloseWithStatus(StatusInternalServerError, "crashed")
+	}()
+	var got bytes.Buffer
+	n, err := io.Copy(&got, sn)
+	if n != 7 || CloseStatus(err) != StatusInternalServerError || !errors.Is(err, io.EOF) {
+		t.Fatalf("io.Copy = %d, %v; want 7 bytes and a 1011 CloseError", n, err)
+	}
+	if _, err := sn.Read(make([]byte, 1)); CloseStatus(err) != StatusInternalServerError {
+		t.Fatalf("Read after abnormal close = %v", err)
+	}
+}
