@@ -9,7 +9,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -37,15 +36,21 @@ func TestPingRoundTrip(t *testing.T) {
 	readLoop(server) // the server's reads answer Pings automatically
 	readLoop(client) // the client's reads deliver the Pongs
 
-	var pongs atomic.Int32
-	client.SetPongHandler(func(string) error { pongs.Add(1); return nil })
+	// Ping returns once its Pong is matched, which happens before the read
+	// loop calls the pong handler, so wait for the handler separately.
+	pongs := make(chan struct{}, 3)
+	client.SetPongHandler(func(string) error { pongs <- struct{}{}; return nil })
 	for range 3 {
 		if err := client.Ping(t.Context()); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if got := pongs.Load(); got != 3 {
-		t.Fatalf("pong handler saw %d pongs, want 3", got)
+	for i := range 3 {
+		select {
+		case <-pongs:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("pong handler saw %d pongs, want 3", i)
+		}
 	}
 }
 

@@ -1,6 +1,6 @@
 module github.com/picatz/websocket/benchmarks
 
-go 1.27.0
+go 1.26.0
 
 replace github.com/picatz/websocket => ../
 

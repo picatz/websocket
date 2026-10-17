@@ -183,11 +183,13 @@ func (c *Conn) CloseWithStatus(code StatusCode, reason string) error {
 // Close frame arrives, which also lets the server be the first to close the
 // TCP connection, as RFC 6455 Section 7.1.1 recommends.
 //
-// After the Close frame is sent, writes fail with an error matching
-// net.ErrClosed. If another goroutine is blocked in ReadMessage when Shutdown
-// starts, it keeps receiving the messages that arrive before the peer's Close
-// frame, and then the *CloseError. Otherwise Shutdown reads and discards them
-// itself, so a read loop that is between calls may lose them to Shutdown.
+// Shutdown ends both directions at once. After the Close frame is sent,
+// writes fail with an error matching net.ErrClosed, and data messages that
+// ReadMessage has not yet returned are read and discarded, whichever
+// goroutine reads them. A concurrent read loop therefore receives no more
+// messages once Shutdown starts; its ReadMessage returns the peer's
+// *CloseError, or an error matching net.ErrClosed if Shutdown read the
+// peer's Close frame first.
 //
 // ctx bounds the whole call, including any wait for a concurrent writer, so
 // give it a deadline. Shutdown always leaves the connection closed. If ctx
@@ -215,6 +217,7 @@ func (c *Conn) Shutdown(ctx context.Context, code StatusCode, reason string) err
 	stop := context.AfterFunc(ctx, c.cancelIO)
 	defer stop()
 
+	c.shuttingDown.Store(true)
 	if err := c.WriteControlFrame(CloseMessage, payload); err != nil {
 		switch {
 		case ctx.Err() != nil, errors.Is(err, ErrWriteFailed), !errors.Is(err, net.ErrClosed):
@@ -227,16 +230,11 @@ func (c *Conn) Shutdown(ctx context.Context, code StatusCode, reason string) err
 		// handshake is under way: wait for the peer's answer.
 	}
 
-	// Leave the reading to a concurrent read loop when there is one, so it
-	// keeps the messages that arrive before the peer's Close frame.
-	if c.readMu.TryLock() {
-		c.readMu.Unlock()
-		for {
-			if _, _, err := c.ReadMessage(); err != nil {
-				break
-			}
-		}
-	}
+	// ReadMessage discards data messages while shutting down, so it returns
+	// only once the peer's Close frame arrives or the connection fails. A
+	// concurrent read loop may get there first; then this call waits for it
+	// and returns as soon as the connection is closed.
+	_, _, _ = c.ReadMessage()
 	<-c.doneChan()
 	if c.peerClosed.Load() {
 		return nil

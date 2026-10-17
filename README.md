@@ -3,7 +3,7 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/picatz/websocket.svg)](https://pkg.go.dev/github.com/picatz/websocket)
 [![Test](https://github.com/picatz/websocket/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/picatz/websocket/actions/workflows/test.yml)
  
-This package provides a small, standard-library-only [WebSocket] client and server implementation for Go 1.27 and later.
+This package provides a small, standard-library-only [WebSocket] client and server implementation for Go 1.26 and later.
 It supports text and binary messages, ping/pong/close frames, message fragmentation, and
 optional [`permessage-deflate`](#compression) compression with context takeover and every window size.
 
