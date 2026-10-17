@@ -368,6 +368,23 @@ Text is checked as UTF-8 across writes, including a rune split between two
 `Write` calls. A failure ends the writer. If part of the message was already
 sent, the connection can't continue, so close it.
 
+`NextReader()` is the reading side. It returns the next data message's type and
+an `io.Reader` that ends with `io.EOF`. Uncompressed messages stream frame by
+frame, with UTF-8 and the message size limit checked as data arrives, so raise
+`MaxMessageSize` for large streams. Compressed messages are still decoded
+whole before the first byte is returned.
+
+```go
+typ, r, err := conn.NextReader()
+if err != nil {
+	return err
+}
+_, err = io.Copy(file, r)
+```
+
+Calling `NextReader` or `ReadMessage` again drops whatever is left of the
+previous message.
+
 ## Compression
 
 `permessage-deflate` ([RFC 7692]) is opt-in: set `Compression` on a `Dialer` or

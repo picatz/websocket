@@ -39,7 +39,8 @@
 //
 // Conn.NextWriter streams one message of unknown length through an
 // io.WriteCloser: other data messages wait for its Close, while control
-// frames may go out between its frames.
+// frames may go out between its frames. Conn.NextReader is its reading
+// counterpart, returning each message's payload as an io.Reader.
 //
 // Every error from ReadMessage is terminal: return from the read loop. A write
 // error that reached the transport is terminal too, because a partially

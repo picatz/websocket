@@ -611,6 +611,44 @@ func ExampleConn_NextWriter() {
 	// Output: 307200
 }
 
+// A large message can be consumed as it arrives instead of held in memory.
+// MaxMessageSize still bounds the whole message.
+func ExampleConn_NextReader() {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Upgrade(w, r)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		mw, err := conn.NextWriter(websocket.BinaryMessage)
+		if err != nil {
+			return
+		}
+		_, _ = io.Copy(mw, io.LimitReader(zeros{}, 8<<20))
+		_ = mw.Close()
+		_, _, _ = conn.ReadMessage()
+	}))
+	defer srv.Close()
+
+	d := &websocket.Dialer{MaxMessageSize: 64 << 20}
+	conn, _, err := d.Dial(context.Background(), wsURL(srv))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer conn.Close()
+
+	_, r, err := conn.NextReader()
+	if err != nil {
+		log.Fatal(err)
+	}
+	n, err := io.Copy(io.Discard, r)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(n)
+	// Output: 8388608
+}
+
 // zeros is an endless reader of zero bytes.
 type zeros struct{}
 
