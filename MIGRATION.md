@@ -536,6 +536,22 @@ connection is aborted and the reader or writer returns an error matching the
 context's cause. Deadlines are unchanged and still apply to the transport.
 `browser.Conn` follows the same signatures.
 
+## TLS state on the response
+
+`Conn.ConnectionState` is removed. As with `net/http`, the client reads the
+TLS state from the response Dial returns, and a server reads it from the
+request:
+
+```go
+// Before
+state, ok := conn.ConnectionState()
+// After, on the client
+conn, resp, err := websocket.Dial(ctx, "wss://example.com/socket")
+state := resp.TLS // nil for ws
+// After, on the server
+state := r.TLS
+```
+
 ## Verification scope
 
 Default-policy tests exercise omitted options separately from configured protocol

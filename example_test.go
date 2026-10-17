@@ -471,10 +471,10 @@ func ExampleConn_Shutdown_server() {
 	// server: <nil>
 }
 
-// ConnectionState reports the TLS state of a wss connection, on the client
-// and on a server upgraded from HTTPS, for example to read the peer's
-// certificates.
-func ExampleConn_ConnectionState() {
+// As with net/http, Dial's response carries the TLS state of a wss
+// connection, for example to read the server's certificates. A server reads
+// the client's from the request's TLS field.
+func ExampleDial_tls() {
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := websocket.Upgrade(w, r)
 		if err != nil {
@@ -488,14 +488,14 @@ func ExampleConn_ConnectionState() {
 	dialer := &websocket.Dialer{
 		TLSClientConfig: srv.Client().Transport.(*http.Transport).TLSClientConfig,
 	}
-	conn, _, err := dialer.Dial(context.Background(), wsURL(srv))
+	conn, resp, err := dialer.Dial(context.Background(), wsURL(srv))
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer conn.Close()
 
-	state, ok := conn.ConnectionState()
-	fmt.Println(ok, tls.VersionName(state.Version), len(state.PeerCertificates) > 0)
+	state := resp.TLS
+	fmt.Println(state != nil, tls.VersionName(state.Version), len(state.PeerCertificates) > 0)
 	// Output: true TLS 1.3 true
 }
 

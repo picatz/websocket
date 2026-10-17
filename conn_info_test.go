@@ -13,8 +13,7 @@ func TestConnInfo(t *testing.T) {
 	for _, secure := range []bool{false, true} {
 		t.Run(map[bool]string{false: "ws", true: "wss"}[secure], func(t *testing.T) {
 			type info struct {
-				state tls.ConnectionState
-				ok    bool
+				tls   *tls.ConnectionState
 				local string
 			}
 			serverInfo := make(chan info, 1)
@@ -25,8 +24,7 @@ func TestConnInfo(t *testing.T) {
 					return
 				}
 				defer conn.Close()
-				state, ok := conn.ConnectionState()
-				serverInfo <- info{state, ok, conn.LocalAddr().String()}
+				serverInfo <- info{r.TLS, conn.LocalAddr().String()}
 				if got := conn.RemoteAddr().String(); got != r.RemoteAddr {
 					t.Errorf("server RemoteAddr = %s, want %s", got, r.RemoteAddr)
 				}
@@ -47,19 +45,20 @@ func TestConnInfo(t *testing.T) {
 
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			defer cancel()
-			conn, _, err := d.Dial(ctx, url)
+			conn, resp, err := d.Dial(ctx, url)
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer conn.Close()
 
-			state, ok := conn.ConnectionState()
-			if ok != secure || (secure && (!state.HandshakeComplete || state.NegotiatedProtocol != "http/1.1")) {
-				t.Fatalf("client ConnectionState = %+v, %v", state, ok)
+			// The client reads TLS state from Dial's response, the server
+			// from the request, as with net/http.
+			if state := resp.TLS; (state != nil) != secure || (secure && (!state.HandshakeComplete || state.NegotiatedProtocol != "http/1.1")) {
+				t.Fatalf("client resp.TLS = %+v", state)
 			}
 			got := <-serverInfo
-			if got.ok != secure || (secure && !got.state.HandshakeComplete) {
-				t.Fatalf("server ConnectionState = %+v, %v", got.state, got.ok)
+			if (got.tls != nil) != secure || (secure && !got.tls.HandshakeComplete) {
+				t.Fatalf("server r.TLS = %+v", got.tls)
 			}
 			if conn.RemoteAddr().String() != got.local || conn.RemoteAddr().String() != srv.Listener.Addr().String() {
 				t.Fatalf("client RemoteAddr = %s, server LocalAddr = %s", conn.RemoteAddr(), got.local)

@@ -108,9 +108,9 @@ func TestEndToEndTLSWithHTTP2(t *testing.T) {
 	}
 	defer c.Close()
 
-	state, ok := c.ConnectionState()
-	if !ok {
-		t.Fatal("ConnectionState reports no TLS")
+	state := resp.TLS
+	if state == nil {
+		t.Fatal("Dial's response has no TLS state")
 	}
 	// httptest's listener lists only h2, so ALPN agrees on nothing here;
 	// http.Server.ServeTLS would add and select http/1.1.

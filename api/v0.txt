@@ -68,8 +68,6 @@ func (c *Conn) CloseWithStatus(code StatusCode, reason string) error
 
 func (c *Conn) CloseWrite(code StatusCode, reason string) error
 
-func (c *Conn) ConnectionState() (tls.ConnectionState, bool)
-
 func (c *Conn) LocalAddr() net.Addr
 
 func (c *Conn) NextReader(ctx context.Context) (messageType MessageType, r io.Reader, err error)
