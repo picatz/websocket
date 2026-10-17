@@ -129,3 +129,216 @@ func connectProxy(ctx context.Context, conn net.Conn, proxyURL *url.URL, target 
 	}
 	return conn, nil
 }
+
+// dialOptions is a Dialer resolved for one Dial: defaults applied, the
+// subprotocol list detached and extensions created for this connection.
+type dialOptions struct {
+	extensions             []frameExtension
+	header                 http.Header
+	tlsConfig              *tls.Config
+	maxBytes               int
+	maxResponseHeaderBytes int64
+	netDialContext         func(ctx context.Context, network, addr string) (net.Conn, error)
+	proxy                  func(*http.Request) (*url.URL, error)
+	subprotocols           []string
+}
+
+// dial performs the client handshake for a resolved Dialer.
+func dial(ctx context.Context, urlStr string, opts *dialOptions) (ws *Conn, response *http.Response, err error) {
+	if err := validateHandshakeHeaders(opts.header, false); err != nil {
+		return nil, nil, err
+	}
+	if opts.subprotocols != nil {
+		if err := validateSubprotocolOption(opts.subprotocols, opts.header); err != nil {
+			return nil, nil, fmt.Errorf("%w: %w", errInvalidHandshakeHeader, err)
+		}
+		// Clone so the caller's header map is never modified.
+		opts.header = opts.header.Clone()
+		if opts.header == nil {
+			opts.header = make(http.Header, 1)
+		}
+		opts.header.Set("Sec-WebSocket-Protocol", strings.Join(opts.subprotocols, ", "))
+	}
+
+	offered, err := parseSubprotocolOffers(opts.header)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: %w", errInvalidHandshakeHeader, err)
+	}
+
+	extOffer, offeredExtensions, err := extensionOffers(opts.extensions)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: %w", errInvalidHandshakeHeader, err)
+	}
+
+	u, err := url.Parse(urlStr)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: invalid URL: %w", ErrInvalidConfig, err)
+	}
+	if (u.Scheme != "ws" && u.Scheme != "wss") || u.Hostname() == "" || u.User != nil || u.Fragment != "" {
+		return nil, nil, fmt.Errorf("%w: URL must use ws or wss, with a host and no user info or fragment", ErrInvalidConfig)
+	}
+	port := u.Port()
+	if port == "" {
+		if u.Scheme == "wss" {
+			port = "443"
+		} else {
+			port = "80"
+		}
+	}
+	host := net.JoinHostPort(u.Hostname(), port)
+
+	// Establish the network connection, directly or to the selected proxy.
+	conn, proxyURL, err := dialTransport(ctx, opts, u, host)
+	if err != nil {
+		return nil, nil, err
+	}
+	// Closing the raw transport interrupts blocked HTTP reads/writes as well
+	// as TLS. Join the callback before returning so it cannot close a live
+	// connection after a successful handshake has been handed to the caller.
+	rawConn := conn
+	// Deferred first so that it runs last, after the callback is joined.
+	defer func() {
+		if ctx.Err() != nil {
+			rawConn.Close()
+			ws = nil
+			err = fmt.Errorf("%w: %w", ErrBadHandshake, context.Cause(ctx))
+		}
+	}()
+	if ctx.Done() != nil {
+		// A context that can never be canceled needs no callback.
+		canceled := make(chan struct{})
+		stopCancel := context.AfterFunc(ctx, func() {
+			rawConn.Close()
+			close(canceled)
+		})
+		defer func() {
+			if !stopCancel() {
+				<-canceled
+			}
+		}()
+	}
+
+	// Tunnel through the proxy before any end-to-end TLS. The cancellation
+	// callback above closes the raw transport, interrupting this exchange too.
+	if proxyURL != nil {
+		if conn, err = connectProxy(ctx, conn, proxyURL, host, opts); err != nil {
+			rawConn.Close()
+			return nil, nil, err
+		}
+	}
+
+	// If using TLS, perform the handshake
+	if u.Scheme == "wss" {
+		config := &tls.Config{}
+		if opts.tlsConfig != nil {
+			config = opts.tlsConfig.Clone()
+		}
+		if config.ServerName == "" {
+			config.ServerName = u.Hostname()
+		}
+		config.NextProtos = []string{"http/1.1"}
+		tlsConn := tls.Client(conn, config)
+		if err := tlsConn.HandshakeContext(ctx); err != nil {
+			conn.Close()
+			return nil, nil, fmt.Errorf("%w: failed to perform TLS handshake: %w", ErrBadHandshake, err)
+		}
+		conn = tlsConn
+	}
+
+	key := generateKey()
+
+	// Build the request. Offers were validated before connecting, including
+	// extension-produced values.
+	req := make([]byte, 0, 512)
+	req = append(req, "GET "...)
+	req = append(req, u.RequestURI()...)
+	req = append(req, " HTTP/1.1\r\nHost: "...)
+	req = append(req, u.Host...)
+	req = append(req, "\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: "...)
+	req = append(req, key[:]...)
+	req = append(req, "\r\nSec-WebSocket-Version: 13\r\n"...)
+	if extOffer != "" {
+		req = append(req, "Sec-WebSocket-Extensions: "...)
+		req = append(req, extOffer...)
+		req = append(req, "\r\n"...)
+	}
+	for k, vs := range opts.header {
+		for _, v := range vs {
+			req = append(req, k...)
+			req = append(req, ": "...)
+			req = append(req, v...)
+			req = append(req, "\r\n"...)
+		}
+	}
+	req = append(req, "\r\n"...)
+
+	// Send the request
+	if _, err = conn.Write(req); err != nil {
+		conn.Close()
+		return nil, nil, fmt.Errorf("%w: failed to send handshake request: %w", ErrBadHandshake, err)
+	}
+
+	// Read the response
+	resp, br, err := readHandshakeResponse(conn, opts.maxResponseHeaderBytes)
+	if err != nil {
+		conn.Close()
+		return nil, nil, fmt.Errorf("%w: failed to read handshake response: %w", ErrBadHandshake, err)
+	}
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		keepRejectedBody(conn, resp)
+		conn.Close()
+		return nil, resp, fmt.Errorf("%w: unexpected status code %d", ErrBadHandshake, resp.StatusCode)
+	}
+	if !headerContains(resp.Header, "Connection", "Upgrade") {
+		conn.Close()
+		return nil, resp, errInvalidConnectionHeader
+	}
+	if !headerContains(resp.Header, "Upgrade", "websocket") {
+		conn.Close()
+		return nil, resp, errInvalidUpgradeHeader
+	}
+	accept := resp.Header["Sec-Websocket-Accept"]
+	if len(accept) != 1 {
+		conn.Close()
+		return nil, resp, errInvalidSecAccept
+	}
+	if expected := acceptKey(key[:]); accept[0] != string(expected[:]) {
+		conn.Close()
+		return nil, resp, errInvalidSecAccept
+	}
+
+	subprotocol, err := validateSubprotocolSelection(resp.Header, offered)
+	if err != nil {
+		conn.Close()
+		return nil, resp, err
+	}
+
+	// Validate the complete selection before calling any extension. In
+	// particular, no configured extensions means no selections are allowed.
+	extValues := extensionValues(resp.Header)
+	selectedExtensions, err := parseExtensions(extValues)
+	if err == nil {
+		err = validateExtensionSelection(selectedExtensions, offeredExtensions)
+	}
+	if err != nil {
+		conn.Close()
+		return nil, resp, err
+	}
+	extHeader := strings.Join(extValues, ", ")
+	for _, ext := range opts.extensions {
+		if err := ext.Negotiate(extHeader); err != nil {
+			conn.Close()
+			return nil, resp, fmt.Errorf("%w: extension %s: %w", errInvalidExtension, ext.Name(), err)
+		}
+	}
+
+	if _, err := messageCompression(opts.extensions); err != nil {
+		conn.Close()
+		return nil, resp, fmt.Errorf("%w: %w", errInvalidExtension, err)
+	}
+
+	ws = newConn(conn, br, false, opts.extensions, opts.maxBytes)
+	ws.subprotocol = subprotocol
+	ws.abortConn = rawConn
+	return ws, resp, nil
+}
