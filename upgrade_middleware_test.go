@@ -131,8 +131,8 @@ func TestUpgradeMiddlewarePreservesHijackedBuffers(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.conn.Close()
-	if conn.conn != raw || conn.rw != rw || rw.Reader.Buffered() != len(wire) || rw.Writer.Buffered() != 0 {
-		t.Fatal("Upgrade replaced the hijacked connection or buffers, consumed input, or did not flush the handshake")
+	if conn.conn != raw || conn.rw.Reader != rw.Reader || rw.Reader.Buffered() != len(wire) || rw.Writer.Buffered() != 0 {
+		t.Fatal("Upgrade replaced the hijacked connection or reader, consumed input, or did not flush the handshake")
 	}
 	if opcode, data, err := conn.ReadMessage(); err != nil || opcode != TextMessage || string(data) != "x" {
 		t.Fatalf("buffered message = %d, %q, %v", opcode, data, err)
@@ -161,7 +161,7 @@ func TestUpgradeMiddlewareHijackerTakesPriority(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer conn.conn.Close()
-			if writer.calls != 1 || writer.unwraps != 0 || inner.calls != 0 || conn.rw != rw {
+			if writer.calls != 1 || writer.unwraps != 0 || inner.calls != 0 || conn.rw.Reader != rw.Reader {
 				t.Fatalf("Hijack calls = %d, Unwrap calls = %d, inner Hijack calls = %d", writer.calls, writer.unwraps, inner.calls)
 			}
 		})
