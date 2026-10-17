@@ -151,6 +151,33 @@ conn.SetPongHandler(func(appData string) error {
 })
 ```
 
+`Ping` sends a Ping and waits for the matching Pong, for keepalives and
+liveness checks. Pongs are processed by `ReadMessage`, so keep a read loop
+running; custom pong handlers still see every Pong:
+
+```go
+go func() {
+	for {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+	}
+}()
+
+ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+defer cancel()
+if err := conn.Ping(ctx); err != nil {
+	conn.Close() // the peer did not answer in time
+}
+```
+
+Each call uses a distinct payload, so concurrent pings are matched
+independently. A context that ends while the Ping frame is being written aborts
+the connection, like `WriteMessageContext`; one that ends while waiting for the
+Pong only returns its error, leaving the decision to close to the caller. A
+connection that closes first makes `Ping` return an error matching
+`io.ErrClosedPipe`.
+
 ## Limits and connection lifetime
 
 `Dial` and `Upgrade` default to `DefaultMaxMessageSize`, 1 MiB (1,048,576 bytes).

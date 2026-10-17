@@ -16,12 +16,13 @@ func contextPipe(t *testing.T) (client, server *websocket.Conn) {
 	a, b := net.Pipe()
 	client = websocket.NewConn(a, false, nil)
 	server = websocket.NewConn(b, true, nil)
-	// Close both ends concurrently, so neither waits on an unread close frame.
+	// Close the raw pipes first: on a synchronous pipe, two Close calls would
+	// otherwise each wait out the one-second close-notification bound.
 	t.Cleanup(func() {
-		done := make(chan struct{})
-		go func() { server.Close(); close(done) }()
+		a.Close()
+		b.Close()
 		client.Close()
-		<-done
+		server.Close()
 	})
 	return client, server
 }
@@ -145,7 +146,8 @@ func TestContextMessagesRoundTrip(t *testing.T) {
 			t.Fatalf("data = %q, want %q", data, payload)
 		}
 	}
-	// Completed operations leave no cancellation armed.
+	// Completed operations leave no cancellation armed: a normal Close works.
+	go server.ReadMessage() // consume the close frame
 	if err := client.Close(); err != nil {
 		t.Fatalf("Close = %v", err)
 	}

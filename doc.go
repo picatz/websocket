@@ -78,6 +78,8 @@
 // competing updates to the shared transport deadlines. WriteMessage does not
 // modify the caller's payload. Ping and pong
 // handlers run synchronously from ReadMessage and must not call it recursively.
+// Conn.Ping waits for the matching Pong, which only a concurrent ReadMessage
+// loop can deliver.
 // An extension instance must not be shared between connections.
 //
 // # Extension negotiation
