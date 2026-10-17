@@ -252,7 +252,7 @@ func TestFailureTLSConcurrentCloseCancelsNotification(t *testing.T) {
 	start := time.Now()
 	closeDone := make(chan error, 1)
 	wg.Go(func() { closeDone <- c.Close() })
-	if err := failureTLSWaitError(t, closeDone, "concurrent Close"); err != ErrAlreadyClosed {
+	if err := failureTLSWaitError(t, closeDone, "concurrent Close"); err != errAlreadyClosed {
 		t.Fatal(err)
 	}
 	if err := failureTLSWaitError(t, readDone, "canceled read failure"); err != errInvalidFrame {

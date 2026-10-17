@@ -54,7 +54,7 @@ func enabledExtensions(extensions, dst []frameExtension) ([]frameExtension, erro
 	var pmd bool
 	for _, ext := range extensions {
 		if ext == nil {
-			return nil, fmt.Errorf("%w: nil extension", ErrInvalidExtension)
+			return nil, fmt.Errorf("%w: nil extension", errInvalidExtension)
 		}
 		if !ext.IsEnabled() {
 			continue

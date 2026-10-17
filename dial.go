@@ -36,7 +36,7 @@ func dialTransport(ctx context.Context, opts *dialOptions, u *url.URL, target st
 		req = req.WithContext(ctx)
 		selected, err := opts.proxy(req)
 		if err != nil {
-			return nil, nil, fmt.Errorf("%w: %w: select proxy: %w", ErrBadHandshake, ErrProxy, err)
+			return nil, nil, fmt.Errorf("%w: %w: select proxy: %w", ErrBadHandshake, errProxy, err)
 		}
 		if selected != nil {
 			if err := validateProxyURL(selected); err != nil {
@@ -53,7 +53,7 @@ func dialTransport(ctx context.Context, opts *dialOptions, u *url.URL, target st
 	conn, err := dial(ctx, "tcp", addr)
 	if err != nil {
 		if proxyURL != nil {
-			return nil, nil, fmt.Errorf("%w: %w: failed to dial proxy: %w", ErrBadHandshake, ErrProxy, err)
+			return nil, nil, fmt.Errorf("%w: %w: failed to dial proxy: %w", ErrBadHandshake, errProxy, err)
 		}
 		return nil, nil, fmt.Errorf("%w: failed to dial: %w", ErrBadHandshake, err)
 	}
@@ -66,7 +66,7 @@ func dialTransport(ctx context.Context, opts *dialOptions, u *url.URL, target st
 func validateProxyURL(u *url.URL) error {
 	if (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
 		// Never format the URL itself: it may carry credentials.
-		return fmt.Errorf("%w: %w: proxy URL must use http or https with a host, got scheme %q", ErrBadHandshake, ErrProxy, u.Scheme)
+		return fmt.Errorf("%w: %w: proxy URL must use http or https with a host, got scheme %q", ErrBadHandshake, errProxy, u.Scheme)
 	}
 	return nil
 }
@@ -96,7 +96,7 @@ func connectProxy(ctx context.Context, conn net.Conn, proxyURL *url.URL, target 
 		config.NextProtos = []string{"http/1.1"}
 		tlsConn := tls.Client(conn, config)
 		if err := tlsConn.HandshakeContext(ctx); err != nil {
-			return nil, fmt.Errorf("%w: %w: TLS handshake with proxy: %w", ErrBadHandshake, ErrProxy, err)
+			return nil, fmt.Errorf("%w: %w: TLS handshake with proxy: %w", ErrBadHandshake, errProxy, err)
 		}
 		conn = tlsConn
 	}
@@ -112,20 +112,20 @@ func connectProxy(ctx context.Context, conn net.Conn, proxyURL *url.URL, target 
 	}
 	req.WriteString("\r\n")
 	if _, err := conn.Write([]byte(req.String())); err != nil {
-		return nil, fmt.Errorf("%w: %w: send CONNECT request: %w", ErrBadHandshake, ErrProxy, err)
+		return nil, fmt.Errorf("%w: %w: send CONNECT request: %w", ErrBadHandshake, errProxy, err)
 	}
 
 	resp, br, err := readHandshakeResponse(conn, opts.maxResponseHeaderBytes)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w: read CONNECT response: %w", ErrBadHandshake, ErrProxy, err)
+		return nil, fmt.Errorf("%w: %w: read CONNECT response: %w", ErrBadHandshake, errProxy, err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%w: %w: CONNECT returned status %d", ErrBadHandshake, ErrProxy, resp.StatusCode)
+		return nil, fmt.Errorf("%w: %w: CONNECT returned status %d", ErrBadHandshake, errProxy, resp.StatusCode)
 	}
 	// A proxy must not send tunnel bytes before the client speaks. Discarding
 	// them would corrupt the stream, so treat early data as a protocol error.
 	if br.Buffered() > 0 {
-		return nil, fmt.Errorf("%w: %w: proxy sent data before the tunnel was used", ErrBadHandshake, ErrProxy)
+		return nil, fmt.Errorf("%w: %w: proxy sent data before the tunnel was used", ErrBadHandshake, errProxy)
 	}
 	return conn, nil
 }

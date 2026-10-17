@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -42,7 +43,7 @@ type Dialer struct {
 	// host, matching [http.Transport]. User info in the proxy URL is sent only
 	// to the proxy as Basic Proxy-Authorization. The CONNECT response head
 	// counts against MaxResponseHeaderBytes, and any status other than 200
-	// fails with an error matching ErrBadHandshake and ErrProxy. SOCKS proxies
+	// fails with an error matching ErrBadHandshake that names the proxy. SOCKS proxies
 	// are not supported; supply a SOCKS dialer as NetDialContext instead.
 	//
 	// [RFC 9110, Section 9.3.6]: https://www.rfc-editor.org/rfc/rfc9110.html#section-9.3.6
@@ -67,7 +68,7 @@ type Dialer struct {
 	// Subprotocols are the application subprotocols to offer, in order of
 	// preference. Each must be a unique, case-sensitive HTTP token. The server
 	// selects at most one; Conn.Subprotocol reports it, and Dial rejects a
-	// selection that was not offered with ErrInvalidSubprotocol.
+	// selection that was not offered with an error matching ErrBadHandshake.
 	//
 	// https://datatracker.ietf.org/doc/html/rfc6455#section-4.1
 	Subprotocols []string
@@ -87,8 +88,8 @@ type Dialer struct {
 	// decrypted bytes, not TLS overhead, bodies or frames, and is not a time
 	// limit; use Dial's context for that. Zero means
 	// DefaultMaxResponseHeaderBytes; a negative value means no limit. An
-	// exceeded limit returns an error matching both ErrBadHandshake and
-	// ErrResponseHeaderTooLarge, with a nil connection and response.
+	// exceeded limit returns an error matching ErrBadHandshake, with a nil
+	// connection and response.
 	MaxResponseHeaderBytes int64
 }
 
@@ -112,7 +113,7 @@ func (d *Dialer) dial(ctx context.Context, urlStr string, extra []frameExtension
 	if err != nil {
 		return nil, nil, err
 	}
-	return dial(ctx, urlStr, &dialOptions{
+	conn, resp, err := dial(ctx, urlStr, &dialOptions{
 		extensions:             extensions,
 		header:                 d.Header,
 		tlsConfig:              d.TLSClientConfig,
@@ -122,6 +123,11 @@ func (d *Dialer) dial(ctx context.Context, urlStr string, extra []frameExtension
 		proxy:                  d.Proxy,
 		subprotocols:           cloneSubprotocols(d.Subprotocols),
 	})
+	if err != nil && resp != nil && !errors.Is(err, ErrBadHandshake) {
+		// The server answered, but not with a valid 101 response.
+		err = fmt.Errorf("%w: %w", ErrBadHandshake, err)
+	}
+	return conn, resp, err
 }
 
 // Dial connects to the WebSocket server at urlStr with a zero Dialer.
@@ -199,13 +205,14 @@ type Upgrader struct {
 //
 //   - ErrOriginNotAllowed: 403 Forbidden.
 //   - ErrBadHandshake: the client's request was at fault. A non-GET request
-//     (ErrInvalidMethod) gets 405 Method Not Allowed with Allow: GET, an
+//     gets 405 Method Not Allowed with Allow: GET, an
 //     unsupported version (ErrUnsupportedVersion) 426 Upgrade Required with
 //     Sec-WebSocket-Version: 13 (RFC 6455 section 4.4), and any other
 //     malformed request 400 Bad Request.
 //   - ErrNotHijacker, or an invalid Upgrader (ErrInvalidConfig):
 //     500 Internal Server Error.
-//   - ErrHandshakeFailed: nothing, as the transport may already be hijacked.
+//   - ErrBadHandshake after the connection was taken over: nothing, as the
+//     transport may already be hijacked.
 //
 // Upgrade requires an HTTP/1.1 connection with hijacking support. Middleware
 // may implement http.Hijacker directly or expose the underlying
@@ -305,9 +312,9 @@ type ConnConfig struct {
 // read-error cleanup close the transport. Callers must not read or write
 // framed bytes directly on conn.
 //
-// NewConn fails with ErrInvalidExtension when cfg.Extensions is malformed or
-// names an extension other than permessage-deflate, and with ErrInvalidConfig
-// for an invalid cfg.Compression.
+// NewConn fails with an error matching ErrInvalidConfig when cfg.Extensions
+// is malformed or names an extension other than permessage-deflate, or when
+// cfg.Compression is invalid.
 func NewConn(conn net.Conn, cfg ConnConfig) (*Conn, error) {
 	return newConfiguredConn(conn, cfg, nil)
 }
@@ -318,6 +325,9 @@ func newConfiguredConn(conn net.Conn, cfg ConnConfig, extensions []frameExtensio
 	if cfg.Extensions != "" {
 		pmd, err := agreedCompression(cfg.Extensions, cfg.Compression, cfg.Server)
 		if err != nil {
+			if !errors.Is(err, ErrInvalidConfig) {
+				err = fmt.Errorf("%w: %w", ErrInvalidConfig, err)
+			}
 			return nil, err
 		}
 		extensions = append([]frameExtension{pmd}, extensions...)
@@ -335,7 +345,7 @@ func agreedCompression(agreement string, c *Compression, server bool) (*perMessa
 		return nil, err
 	}
 	if len(offers) != 1 || offers[0].name != "permessage-deflate" {
-		return nil, fmt.Errorf("%w: NewConn supports exactly one permessage-deflate agreement, got %q", ErrInvalidExtension, agreement)
+		return nil, fmt.Errorf("%w: NewConn supports exactly one permessage-deflate agreement, got %q", errInvalidExtension, agreement)
 	}
 	// A response gives every window parameter a value (RFC 7692 section 7.1.2).
 	params, err := parsePMDParameters(offers[0].params, false)

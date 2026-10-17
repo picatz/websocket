@@ -80,14 +80,14 @@ func TestSubprotocolOfferValidation(t *testing.T) {
 			if !tc.valid {
 				// An invalid URL must not mask caller-header validation, which runs before dialing.
 				conn, resp, err := (&Dialer{Header: tc.header}).Dial(t.Context(), ":invalid")
-				if conn != nil || resp != nil || !errors.Is(err, ErrInvalidSubprotocol) || !errors.Is(err, ErrInvalidHandshakeHeader) {
+				if conn != nil || resp != nil || !errors.Is(err, errInvalidSubprotocol) || !errors.Is(err, errInvalidHandshakeHeader) {
 					t.Fatalf("Dial = %v, %v, %v", conn, resp, err)
 				}
 				r := upgradeRequest()
 				r.Header = mergeHeaders(r.Header, tc.header)
 				w := &countingHijacker{ResponseRecorder: httptest.NewRecorder()}
 				conn, err = Upgrade(w, r)
-				if conn != nil || !errors.Is(err, ErrInvalidSubprotocol) || w.calls != 0 {
+				if conn != nil || !errors.Is(err, errInvalidSubprotocol) || w.calls != 0 {
 					t.Fatalf("Upgrade = %v, %v, hijacks %d", conn, err, w.calls)
 				}
 			}
@@ -136,7 +136,7 @@ func TestSubprotocolSelectionHandshake(t *testing.T) {
 			if conn != nil {
 				conn.conn.Close()
 			}
-			if !tc.valid && (!errors.Is(err, ErrInvalidSubprotocol) || !errors.Is(err, ErrInvalidHandshakeHeader) || raw.written.Len() != 0) {
+			if !tc.valid && (!errors.Is(err, errInvalidSubprotocol) || !errors.Is(err, errInvalidHandshakeHeader) || raw.written.Len() != 0) {
 				t.Fatalf("Upgrade error %v, wrote %q", err, raw.written.String())
 			}
 			peerClosed := make(chan error, 1)
@@ -175,7 +175,7 @@ func TestSubprotocolSelectionHandshake(t *testing.T) {
 				}
 				conn.conn.Close()
 			}
-			if !tc.valid && (conn != nil || !errors.Is(err, ErrInvalidSubprotocol)) {
+			if !tc.valid && (conn != nil || !errors.Is(err, errInvalidSubprotocol)) {
 				t.Fatalf("rejected Dial = %v, %v", conn, err)
 			}
 			if err := <-peerClosed; err != io.EOF {

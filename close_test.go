@@ -36,7 +36,7 @@ func TestCloseWithStatusWire(t *testing.T) {
 			if ce := newCloseError(got); ce.Code != tt.code || ce.Reason != tt.reason {
 				t.Fatalf("server=%v: wire close %v %q, want %v %q", server, ce.Code, ce.Reason, tt.code, tt.reason)
 			}
-			if err := c.CloseWithStatus(tt.code, tt.reason); !errors.Is(err, ErrAlreadyClosed) {
+			if err := c.CloseWithStatus(tt.code, tt.reason); !errors.Is(err, errAlreadyClosed) {
 				t.Fatalf("second close: %v", err)
 			}
 		}

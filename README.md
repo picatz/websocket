@@ -263,7 +263,7 @@ sets both directions. The setters return the underlying transport error unchange
 does not bound that write; set an appropriate write deadline too, or use
 `SetDeadline` for a shared transport budget. Any read error, including a timeout,
 is terminal: clearing the deadline afterward does not make the connection
-reusable. A write timeout preserves `ErrWriteFailed` and its underlying cause;
+reusable. A write timeout wraps its underlying cause, such as `os.ErrDeadlineExceeded`;
 close the connection afterward, because a partial frame cannot be retried safely.
 
 Deadlines are transport controls, not per-call contexts or whole-method timeouts.
@@ -282,7 +282,7 @@ no other writer is active, then closes the transport. That notification replaces
 any caller write deadline with a one-second deadline, so an earlier deadline is
 not a strict bound on graceful `Close`. Read-failure cleanup instead preserves
 caller deadlines. `Close` does not wait for the peer's closing handshake.
-A second call returns `ErrAlreadyClosed`.
+A second call returns an error matching `net.ErrClosed`.
 
 `CloseWithStatus(code, reason)` is `Close` with a chosen status code and a
 reason of at most 123 bytes of UTF-8. It rejects codes that may not be sent,
@@ -477,7 +477,7 @@ is verified with a clone of `Dialer.TLSClientConfig` whose `ServerName` is the p
 Proxy URL credentials are sent only to the proxy as Basic `Proxy-Authorization`
 and are never included in errors. The `CONNECT` response head shares the
 `Dialer.MaxResponseHeaderBytes` budget; a non-200 status, or data sent before the
-tunnel is used, fails with an error matching `ErrBadHandshake` and `ErrProxy`.
+tunnel is used, fails with an error matching `ErrBadHandshake` whose text names the proxy.
 
 `Dialer.NetDialContext` replaces the TCP dialer used to reach the server or proxy,
 for example to use a SOCKS dialer, a Unix socket, or an in-memory test transport.
@@ -514,8 +514,9 @@ Origin, 405 with `Allow: GET` for another method, 426 with
 `Sec-WebSocket-Version: 13` for an unsupported version, 500 when hijacking is
 unavailable or the `Upgrader` is invalid, and 400 for any other malformed
 handshake. The 400, 405 and 426 errors match `ErrBadHandshake`, so a handler can
-tell a bad client from a rejected origin or its own misconfiguration. After
-`ErrHandshakeFailed` the transport may have been hijacked, so nothing is written.
+tell a bad client from a rejected origin or its own misconfiguration. If the
+connection fails after `Upgrade` took it over, the error also matches
+`ErrBadHandshake` and nothing is written.
 Set `Upgrader.Error` to write a different body, for example JSON; the required
 `Allow` and `Sec-WebSocket-Version` fields are already set when it runs.
 

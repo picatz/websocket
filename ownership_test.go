@@ -284,7 +284,7 @@ func ownershipRequireTerminal(t *testing.T, c *Conn, raw *memoryConn, server boo
 	if err := c.WriteMessage(BinaryMessage, nil); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("terminal write: %v", err)
 	}
-	if err := c.Close(); err != ErrAlreadyClosed {
+	if err := c.Close(); err != errAlreadyClosed {
 		t.Fatalf("terminal Close: %v", err)
 	}
 	if !bytes.Equal(raw.written.Bytes(), before) {

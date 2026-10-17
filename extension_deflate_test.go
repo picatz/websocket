@@ -47,7 +47,7 @@ func TestPerMessageDeflateExactSelection(t *testing.T) {
 		t.Run(tc.header, func(t *testing.T) {
 			pmd := newPerMessageDeflate().(*perMessageDeflate)
 			err := pmd.Negotiate(tc.header)
-			if (err != nil) != tc.invalid || pmd.enabled != tc.enabled || err != nil && !errors.Is(err, ErrInvalidExtension) {
+			if (err != nil) != tc.invalid || pmd.enabled != tc.enabled || err != nil && !errors.Is(err, errInvalidExtension) {
 				t.Fatalf("Negotiate(%q) = %v, enabled = %v", tc.header, err, pmd.enabled)
 			}
 			if tc.header == "other; server_max_window_bits=8, permessage-deflate" && pmd.negotiated.serverMaxWindowBits != 0 {
@@ -131,7 +131,7 @@ func FuzzExtensionNegotiation(f *testing.F) {
 	f.Fuzz(func(t *testing.T, first, second string) {
 		parsed, err := parseExtensions([]string{first, second})
 		if err != nil {
-			if !errors.Is(err, ErrInvalidExtension) {
+			if !errors.Is(err, errInvalidExtension) {
 				t.Fatal(err)
 			}
 			return

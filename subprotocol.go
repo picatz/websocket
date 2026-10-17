@@ -26,14 +26,14 @@ func cloneSubprotocols(protocols []string) []string {
 // rejects a raw Sec-WebSocket-Protocol field in header, which the option owns.
 func validateSubprotocolOption(protocols []string, header http.Header) error {
 	if len(subprotocolValues(header)) != 0 {
-		return fmt.Errorf("%w: Sec-WebSocket-Protocol is set by both a header and the subprotocols option", ErrInvalidSubprotocol)
+		return fmt.Errorf("%w: Sec-WebSocket-Protocol is set by both a header and the subprotocols option", errInvalidSubprotocol)
 	}
 	for i, protocol := range protocols {
 		if !isHTTPToken(protocol) {
-			return fmt.Errorf("%w: %q is not an HTTP token", ErrInvalidSubprotocol, protocol)
+			return fmt.Errorf("%w: %q is not an HTTP token", errInvalidSubprotocol, protocol)
 		}
 		if slices.Contains(protocols[:i], protocol) {
-			return fmt.Errorf("%w: %q is listed twice", ErrInvalidSubprotocol, protocol)
+			return fmt.Errorf("%w: %q is listed twice", errInvalidSubprotocol, protocol)
 		}
 	}
 	return nil

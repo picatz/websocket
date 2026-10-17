@@ -10,22 +10,22 @@ import (
 // it writes nothing:
 //
 //   - ErrOriginNotAllowed: 403 Forbidden.
-//   - ErrInvalidMethod: 405 Method Not Allowed, with Allow: GET.
+//   - errInvalidMethod: 405 Method Not Allowed, with Allow: GET.
 //   - ErrUnsupportedVersion: 426 Upgrade Required, with
 //     Sec-WebSocket-Version: 13 (RFC 6455 section 4.4).
 //   - ErrNotHijacker, and an invalid Upgrader (ErrInvalidConfig, which
-//     ErrInvalidHandshakeHeader also matches): 500 Internal Server Error.
-//   - ErrHandshakeFailed: 0. The transport may already be hijacked.
+//     errInvalidHandshakeHeader also matches): 500 Internal Server Error.
+//   - errHandshakeFailed: 0. The transport may already be hijacked.
 //   - Any other error, which is a malformed client handshake: 400 Bad Request.
 //
 // https://datatracker.ietf.org/doc/html/rfc6455#section-4.2.1
 func upgradeErrorStatus(err error) int {
 	switch {
-	case err == nil, errors.Is(err, ErrHandshakeFailed):
+	case err == nil, errors.Is(err, errHandshakeFailed):
 		return 0
 	case errors.Is(err, ErrOriginNotAllowed):
 		return http.StatusForbidden
-	case errors.Is(err, ErrInvalidMethod):
+	case errors.Is(err, errInvalidMethod):
 		return http.StatusMethodNotAllowed
 	case errors.Is(err, ErrUnsupportedVersion):
 		return http.StatusUpgradeRequired

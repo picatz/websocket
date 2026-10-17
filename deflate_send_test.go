@@ -518,7 +518,7 @@ func TestPMDCompositionRejectsRSV1Changes(t *testing.T) {
 		t.Fatalf("RSV1 change = %v, wire %x", err, raw.written.Bytes())
 	}
 	// Compression consumed input into the takeover context: writes stay poisoned.
-	if err := c.WriteMessage(BinaryMessage, []byte("again")); !errors.Is(err, ErrWriteFailed) {
+	if err := c.WriteMessage(BinaryMessage, []byte("again")); !errors.Is(err, errWriteFailed) {
 		t.Fatalf("later write = %v", err)
 	}
 }

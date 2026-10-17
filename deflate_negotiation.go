@@ -74,7 +74,7 @@ func (pmd *perMessageDeflate) negotiate(extensions []extensionOffer, server bool
 	for _, ext := range extensions {
 		if ext.name == pmd.Name() {
 			if selected && !server {
-				return fmt.Errorf("%w: repeated permessage-deflate selection", ErrInvalidExtension)
+				return fmt.Errorf("%w: repeated permessage-deflate selection", errInvalidExtension)
 			}
 			selected = true
 		}
@@ -108,13 +108,13 @@ func parsePMDParameters(params []extensionParameter, offer bool) (pmdParameters,
 	seen := make(map[string]bool, len(params))
 	for _, param := range params {
 		if seen[param.name] {
-			return pmdParameters{}, fmt.Errorf("%w: repeated permessage-deflate parameter %q", ErrInvalidExtension, param.name)
+			return pmdParameters{}, fmt.Errorf("%w: repeated permessage-deflate parameter %q", errInvalidExtension, param.name)
 		}
 		seen[param.name] = true
 		switch param.name {
 		case "client_no_context_takeover", "server_no_context_takeover":
 			if param.hasValue {
-				return pmdParameters{}, fmt.Errorf("%w: permessage-deflate flag %q has a value", ErrInvalidExtension, param.name)
+				return pmdParameters{}, fmt.Errorf("%w: permessage-deflate flag %q has a value", errInvalidExtension, param.name)
 			}
 			if param.name == "client_no_context_takeover" {
 				p.clientNoContextTakeover = true
@@ -127,7 +127,7 @@ func parsePMDParameters(params []extensionParameter, offer bool) (pmdParameters,
 				var err error
 				bits, err = strconv.Atoi(param.value)
 				if !param.hasValue || err != nil || bits < 8 || bits > 15 || strconv.Itoa(bits) != param.value {
-					return pmdParameters{}, fmt.Errorf("%w: invalid permessage-deflate parameter %q", ErrInvalidExtension, param.name)
+					return pmdParameters{}, fmt.Errorf("%w: invalid permessage-deflate parameter %q", errInvalidExtension, param.name)
 				}
 			}
 			if param.name == "client_max_window_bits" {
@@ -136,7 +136,7 @@ func parsePMDParameters(params []extensionParameter, offer bool) (pmdParameters,
 				p.serverMaxWindowBits = bits
 			}
 		default:
-			return pmdParameters{}, fmt.Errorf("%w: unknown permessage-deflate parameter %q", ErrInvalidExtension, param.name)
+			return pmdParameters{}, fmt.Errorf("%w: unknown permessage-deflate parameter %q", errInvalidExtension, param.name)
 		}
 	}
 	return p, nil
@@ -147,13 +147,13 @@ func parsePMDParameters(params []extensionParameter, offer bool) (pmdParameters,
 // RFC 7692 sections 7.1.1, 7.1.2 and 7.2.1 deliberately make these asymmetric.
 func validatePMDResponse(response, offer pmdParameters) error {
 	if response.clientMaxWindowBits != 0 && offer.clientMaxWindowBits == 0 {
-		return fmt.Errorf("%w: unoffered client_max_window_bits", ErrInvalidExtension)
+		return fmt.Errorf("%w: unoffered client_max_window_bits", errInvalidExtension)
 	}
 	if offer.serverMaxWindowBits != 0 && (response.serverMaxWindowBits == 0 || response.serverMaxWindowBits > offer.serverMaxWindowBits) {
-		return fmt.Errorf("%w: missing or exceeded server_max_window_bits constraint", ErrInvalidExtension)
+		return fmt.Errorf("%w: missing or exceeded server_max_window_bits constraint", errInvalidExtension)
 	}
 	if offer.serverNoContextTakeover && !response.serverNoContextTakeover {
-		return fmt.Errorf("%w: missing server_no_context_takeover constraint", ErrInvalidExtension)
+		return fmt.Errorf("%w: missing server_no_context_takeover constraint", errInvalidExtension)
 	}
 	return nil
 }
@@ -239,7 +239,7 @@ func (pmd *perMessageDeflate) selectParameters(offer pmdParameters) (pmdParamete
 		// A configured peer bound below 15 needs the client's permission to
 		// include this parameter. Decline this alternative if it is missing.
 		if p.clientMaxWindowBits != 0 && p.clientMaxWindowBits != 15 {
-			return pmdParameters{}, fmt.Errorf("%w: client_max_window_bits constraint was not offered", ErrInvalidExtension)
+			return pmdParameters{}, fmt.Errorf("%w: client_max_window_bits constraint was not offered", errInvalidExtension)
 		}
 		p.clientMaxWindowBits = 0
 	}

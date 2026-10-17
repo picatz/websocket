@@ -111,7 +111,7 @@ func TestDialResponseHeadLimits(t *testing.T) {
 			d.MaxMessageSize, d.MaxResponseHeaderBytes = tc.messageSize, tc.headLimit
 			c, resp, err := responseDial(t, url, d)
 			if tc.wantSizeError {
-				if c != nil || resp != nil || !errors.Is(err, ErrBadHandshake) || !errors.Is(err, ErrResponseHeaderTooLarge) || errors.Is(err, ErrMessageTooLarge) {
+				if c != nil || resp != nil || !errors.Is(err, ErrBadHandshake) || !errors.Is(err, errResponseHeaderTooLarge) || errors.Is(err, ErrMessageTooLarge) {
 					t.Fatalf("connection=%v response=%v error=%v", c, resp, err)
 				}
 			} else {
@@ -150,7 +150,7 @@ func TestDialResponseHeadTCPAndTLSBoundaries(t *testing.T) {
 					d.MaxResponseHeaderBytes = int64(size + offset)
 					c, resp, err := responseDial(t, url, d)
 					if offset < 0 {
-						if c != nil || resp != nil || !errors.Is(err, ErrBadHandshake) || !errors.Is(err, ErrResponseHeaderTooLarge) {
+						if c != nil || resp != nil || !errors.Is(err, ErrBadHandshake) || !errors.Is(err, errResponseHeaderTooLarge) {
 							t.Fatalf("connection=%v response=%v error=%v", c, resp, err)
 						}
 					} else {
@@ -205,7 +205,7 @@ func TestDialResponseHeadCountsStatusAndFields(t *testing.T) {
 				d.MaxResponseHeaderBytes, d.MaxMessageSize = int64(len(sample)+offset), 1
 				c, resp, err := responseDial(t, url, d)
 				if offset < 0 {
-					if c != nil || resp != nil || !errors.Is(err, ErrResponseHeaderTooLarge) {
+					if c != nil || resp != nil || !errors.Is(err, errResponseHeaderTooLarge) {
 						t.Fatalf("response=%v error=%v", resp, err)
 					}
 				} else {
@@ -228,20 +228,20 @@ func TestDialResponseHeadValidationAndOwnership(t *testing.T) {
 		want   error
 		status int
 	}{
-		{"connection", func(s string) string { return strings.Replace(s, "Connection: Upgrade", "Connection: close", 1) }, ErrInvalidConnectionHeader, 101},
-		{"upgrade", func(s string) string { return strings.Replace(s, "Upgrade: websocket", "Upgrade: http", 1) }, ErrInvalidUpgradeHeader, 101},
+		{"connection", func(s string) string { return strings.Replace(s, "Connection: Upgrade", "Connection: close", 1) }, errInvalidConnectionHeader, 101},
+		{"upgrade", func(s string) string { return strings.Replace(s, "Upgrade: websocket", "Upgrade: http", 1) }, errInvalidUpgradeHeader, 101},
 		{"accept", func(s string) string {
 			return strings.Replace(s, "Sec-WebSocket-Accept:", "Sec-WebSocket-Accept: invalid", 1)
-		}, ErrInvalidSecAccept, 101},
+		}, errInvalidSecAccept, 101},
 		{"duplicate_accept", func(s string) string {
 			return strings.Replace(s, "\r\n\r\n", "\r\nSec-WebSocket-Accept: duplicate\r\n\r\n", 1)
-		}, ErrInvalidSecAccept, 101},
+		}, errInvalidSecAccept, 101},
 		{"subprotocol", func(s string) string {
 			return strings.Replace(s, "\r\n\r\n", "\r\nSec-WebSocket-Protocol: unoffered\r\n\r\n", 1)
-		}, ErrInvalidSubprotocol, 101},
+		}, errInvalidSubprotocol, 101},
 		{"extension", func(s string) string {
 			return strings.Replace(s, "\r\n\r\n", "\r\nSec-WebSocket-Extensions: unoffered\r\n\r\n", 1)
-		}, ErrInvalidExtension, 101},
+		}, errInvalidExtension, 101},
 		{"non101", func(s string) string {
 			return "HTTP/1.1 403 Forbidden\r\nX: one\r\nx: two\r\nContent-Length: 6\r\n\r\n"
 		}, ErrBadHandshake, 403},
@@ -258,11 +258,11 @@ func TestDialResponseHeadValidationAndOwnership(t *testing.T) {
 					t.Fatal("rejected handshake returned connection")
 				}
 				if offset < 0 {
-					if resp != nil || !errors.Is(err, ErrBadHandshake) || !errors.Is(err, ErrResponseHeaderTooLarge) {
+					if resp != nil || !errors.Is(err, ErrBadHandshake) || !errors.Is(err, errResponseHeaderTooLarge) {
 						t.Fatalf("response=%v error=%v", resp, err)
 					}
 				} else {
-					if resp == nil || resp.StatusCode != tc.status || !errors.Is(err, tc.want) || errors.Is(err, ErrResponseHeaderTooLarge) {
+					if resp == nil || resp.StatusCode != tc.status || !errors.Is(err, tc.want) || errors.Is(err, errResponseHeaderTooLarge) {
 						t.Fatalf("response=%v error=%v", resp, err)
 					}
 					if tc.status == 101 && resp.Body != http.NoBody {
@@ -275,7 +275,7 @@ func TestDialResponseHeadValidationAndOwnership(t *testing.T) {
 						// Dial closes non-101 transports; only prefetched body bytes may survive.
 						// Do not assert complete streaming error bodies after this existing closure.
 						b, bodyErr := io.ReadAll(resp.Body)
-						if len(b) > 6 || errors.Is(bodyErr, ErrResponseHeaderTooLarge) {
+						if len(b) > 6 || errors.Is(bodyErr, errResponseHeaderTooLarge) {
 							t.Fatalf("body=%q error=%v", b, bodyErr)
 						}
 					}
@@ -309,7 +309,7 @@ func TestDialResponseHeadCancellation(t *testing.T) {
 				responseWait(t, sent)
 				cancel()
 				got := responseWait(t, done)
-				if got.c != nil || got.r != nil || !errors.Is(got.err, ErrBadHandshake) || !errors.Is(got.err, context.Canceled) || errors.Is(got.err, ErrResponseHeaderTooLarge) {
+				if got.c != nil || got.r != nil || !errors.Is(got.err, ErrBadHandshake) || !errors.Is(got.err, context.Canceled) || errors.Is(got.err, errResponseHeaderTooLarge) {
 					t.Fatalf("result=%+v", got)
 				}
 				responsePeerClosed(t, closed, false)

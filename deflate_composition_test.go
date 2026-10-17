@@ -222,7 +222,7 @@ func TestPMDEntryDialComposition(t *testing.T) {
 				if tc.reject || tc.invalid {
 					want := errUnsupportedExtensionComposition
 					if tc.invalid {
-						want = ErrInvalidExtension
+						want = errInvalidExtension
 					}
 					if conn != nil || !errors.Is(err, want) {
 						t.Fatalf("Dial = %v, %v; want %v", conn, err, want)
@@ -324,7 +324,7 @@ func TestPMDEntryManualCompositionBeforeIO(t *testing.T) {
 					if _, data, err := conn.ReadMessage(); err == nil || len(data) != 0 {
 						t.Fatalf("read after rejection=%q, %v", data, err)
 					}
-					if err := conn.Close(); !errors.Is(err, ErrAlreadyClosed) {
+					if err := conn.Close(); !errors.Is(err, errAlreadyClosed) {
 						t.Fatalf("repeated Close=%v", err)
 					}
 					if raw.reads != 0 || raw.writes != 0 || raw.closes != 1 || custom.incoming != 0 || custom.outgoing != 0 {

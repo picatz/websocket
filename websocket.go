@@ -475,7 +475,7 @@ func (c *Conn) SetWriteDeadline(t time.Time) error {
 // any write deadline set by the caller. It does not wait for the peer's closing
 // handshake. Reads, writes and Pings after Close, including calls it
 // interrupts, return errors matching net.ErrClosed; repeated calls to Close
-// return ErrAlreadyClosed, which matches it too. Custom transport Close
+// return one too. Custom transport Close
 // implementations can still block.
 //
 // Use CloseWithStatus to send another status code or a reason, and Shutdown
@@ -495,7 +495,7 @@ func (c *Conn) closeWithPayload(payload []byte) error {
 		if failed {
 			c.abort()
 		}
-		return ErrAlreadyClosed
+		return errAlreadyClosed
 	}
 	c.closeMu.Unlock()
 
@@ -830,8 +830,8 @@ func validUTF8Prefix(p []byte) (int, bool) {
 	return n, utf8.Valid(p[:n])
 }
 
-// WriteMessage writes a WebSocket message. Transport errors match ErrWriteFailed
-// and wrap the underlying error for errors.Is and errors.As. Close the connection
+// WriteMessage writes a WebSocket message. Transport errors wrap the
+// underlying error for errors.Is and errors.As. Close the connection
 // after a transport error; the transport is not closed automatically, and clearing
 // a write deadline cannot make a partially written message safe to retry. Later
 // writes fail with the original cause without calling outgoing extensions again,
@@ -858,7 +858,7 @@ func (c *Conn) WriteMessage(messageType MessageType, data []byte) error {
 	}
 
 	if c.writeErr != nil {
-		return fmt.Errorf("%w: failed to write frame header: %w", ErrWriteFailed, c.writeErr)
+		return fmt.Errorf("%w: failed to write frame header: %w", errWriteFailed, c.writeErr)
 	}
 	var buf [4]frameExtension
 	enabled, err := enabledExtensions(c.extensions, buf[:0])
@@ -891,8 +891,7 @@ func (c *Conn) WriteMessage(messageType MessageType, data []byte) error {
 // Close to release the transport if the peer does not respond; this method
 // does not impose a handshake timeout.
 //
-// Transport errors match ErrWriteFailed and wrap the underlying error for
-// errors.Is and errors.As. Close after a transport error; the transport is not
+// Transport errors wrap the underlying error for errors.Is and errors.As. Close after a transport error; the transport is not
 // closed automatically, and clearing a write deadline cannot make the frame
 // stream reusable. Later writes fail with the original cause without calling
 // outgoing extensions again, unless argument validation or the closing state
@@ -1367,7 +1366,7 @@ func validateIncomingClosePayload(payload []byte) error {
 // writeFrame writes a WebSocket frame to the connection. writeMu must be held.
 func (c *Conn) writeFrame(frame *wireFrame) error {
 	if c.writeErr != nil {
-		return fmt.Errorf("%w: failed to write frame header: %w", ErrWriteFailed, c.writeErr)
+		return fmt.Errorf("%w: failed to write frame header: %w", errWriteFailed, c.writeErr)
 	}
 	// Ask each extension once whether it is enabled. An unsupported composition
 	// is terminal and performs no I/O; a write after a transport failure returns
@@ -1458,7 +1457,7 @@ func (c *Conn) writeFrameTo(w *bufio.Writer, frame *wireFrame, owned bool) error
 		header = append(header, 0, 0, 0, 0)
 		key := header[len(header)-4:]
 		if _, err := rand.Read(key); err != nil {
-			return fmt.Errorf("%w: failed to generate masking key: %v", ErrWriteFailed, err)
+			return fmt.Errorf("%w: failed to generate masking key: %v", errWriteFailed, err)
 		}
 		frame.MaskKey = [4]byte(key)
 	}
@@ -1482,13 +1481,13 @@ func (c *Conn) writeFrameTo(w *bufio.Writer, frame *wireFrame, owned bool) error
 	}
 	if err != nil {
 		c.writeErr = err
-		return fmt.Errorf("%w: failed to write frame payload: %w", ErrWriteFailed, err)
+		return fmt.Errorf("%w: failed to write frame payload: %w", errWriteFailed, err)
 	}
 
 	// Flush the buffer to ensure the data is sent
 	if err := w.Flush(); err != nil {
 		c.writeErr = err
-		return fmt.Errorf("%w: failed to flush data: %w", ErrWriteFailed, err)
+		return fmt.Errorf("%w: failed to flush data: %w", errWriteFailed, err)
 	}
 
 	return nil
@@ -1550,7 +1549,7 @@ func dial(ctx context.Context, urlStr string, opts *dialOptions) (ws *Conn, resp
 	}
 	if opts.subprotocols != nil {
 		if err := validateSubprotocolOption(opts.subprotocols, opts.header); err != nil {
-			return nil, nil, fmt.Errorf("%w: %w", ErrInvalidHandshakeHeader, err)
+			return nil, nil, fmt.Errorf("%w: %w", errInvalidHandshakeHeader, err)
 		}
 		// Clone so the caller's header map is never modified.
 		opts.header = opts.header.Clone()
@@ -1562,12 +1561,12 @@ func dial(ctx context.Context, urlStr string, opts *dialOptions) (ws *Conn, resp
 
 	offered, err := parseSubprotocolOffers(opts.header)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w: %w", ErrInvalidHandshakeHeader, err)
+		return nil, nil, fmt.Errorf("%w: %w", errInvalidHandshakeHeader, err)
 	}
 
 	extOffer, offeredExtensions, err := extensionOffers(opts.extensions)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w: %w", ErrInvalidHandshakeHeader, err)
+		return nil, nil, fmt.Errorf("%w: %w", errInvalidHandshakeHeader, err)
 	}
 
 	u, err := url.Parse(urlStr)
@@ -1642,7 +1641,7 @@ func dial(ctx context.Context, urlStr string, opts *dialOptions) (ws *Conn, resp
 	key, err := generateKey()
 	if err != nil {
 		conn.Close()
-		return nil, nil, fmt.Errorf("%w: %w", ErrFailedToGenerateKey, err)
+		return nil, nil, fmt.Errorf("%w: %w", errFailedToGenerateKey, err)
 	}
 
 	// Build the request
@@ -1693,21 +1692,21 @@ func dial(ctx context.Context, urlStr string, opts *dialOptions) (ws *Conn, resp
 	}
 	if !headerContains(resp.Header, "Connection", "Upgrade") {
 		conn.Close()
-		return nil, resp, ErrInvalidConnectionHeader
+		return nil, resp, errInvalidConnectionHeader
 	}
 	if !headerContains(resp.Header, "Upgrade", "websocket") {
 		conn.Close()
-		return nil, resp, ErrInvalidUpgradeHeader
+		return nil, resp, errInvalidUpgradeHeader
 	}
 	accept := resp.Header.Get("Sec-WebSocket-Accept")
 	if accept == "" || len(resp.Header.Values("Sec-WebSocket-Accept")) != 1 {
 		conn.Close()
-		return nil, resp, ErrInvalidSecAccept
+		return nil, resp, errInvalidSecAccept
 	}
 	expectedAccept := computeAcceptKey(key)
 	if accept != expectedAccept {
 		conn.Close()
-		return nil, resp, ErrInvalidSecAccept
+		return nil, resp, errInvalidSecAccept
 	}
 
 	subprotocol, err := validateSubprotocolSelection(resp.Header, offered)
@@ -1731,13 +1730,13 @@ func dial(ctx context.Context, urlStr string, opts *dialOptions) (ws *Conn, resp
 	for _, ext := range opts.extensions {
 		if err := ext.Negotiate(extHeader); err != nil {
 			conn.Close()
-			return nil, resp, fmt.Errorf("%w: extension %s: %w", ErrInvalidExtension, ext.Name(), err)
+			return nil, resp, fmt.Errorf("%w: extension %s: %w", errInvalidExtension, ext.Name(), err)
 		}
 	}
 
 	if _, err := messageCompression(opts.extensions); err != nil {
 		conn.Close()
-		return nil, resp, fmt.Errorf("%w: %w", ErrInvalidExtension, err)
+		return nil, resp, fmt.Errorf("%w: %w", errInvalidExtension, err)
 	}
 
 	ws = newConn(conn, br, false, opts.extensions, opts.maxBytes)
@@ -1780,7 +1779,7 @@ func upgrade(w http.ResponseWriter, r *http.Request, opts *upgradeOptions) (*Con
 		if !ok && errors.Is(err, http.ErrNotSupported) {
 			return nil, ErrNotHijacker
 		}
-		return nil, fmt.Errorf("%w: %w", ErrHandshakeFailed, err)
+		return nil, fmt.Errorf("%w: %w", errHandshakeFailed, err)
 	}
 	if err := writeUpgradeResponse(bufrw.Writer, acceptKey, responseHeader); err != nil {
 		conn.Close()
@@ -1806,13 +1805,13 @@ func checkUpgradeRequest(r *http.Request, opts *upgradeOptions) (string, string,
 	}
 
 	if !headerContains(r.Header, "Connection", "Upgrade") {
-		return "", "", ErrInvalidConnectionHeader
+		return "", "", errInvalidConnectionHeader
 	}
 	if !headerContains(r.Header, "Upgrade", "websocket") {
-		return "", "", ErrInvalidUpgradeHeader
+		return "", "", errInvalidUpgradeHeader
 	}
 	if r.Method != http.MethodGet {
-		return "", "", ErrInvalidMethod
+		return "", "", errInvalidMethod
 	}
 	if !r.ProtoAtLeast(1, 1) {
 		return "", "", ErrBadHandshake
@@ -1822,11 +1821,11 @@ func checkUpgradeRequest(r *http.Request, opts *upgradeOptions) (string, string,
 	}
 	key := r.Header.Get("Sec-WebSocket-Key")
 	if key == "" {
-		return "", "", ErrMissingSecKey
+		return "", "", errMissingSecKey
 	}
 	decodedKey, err := base64.StdEncoding.DecodeString(key)
 	if err != nil || len(decodedKey) != 16 || len(r.Header.Values("Sec-WebSocket-Key")) != 1 {
-		return "", "", ErrInvalidSecKey
+		return "", "", errInvalidSecKey
 	}
 	offered, err := parseSubprotocolOffers(r.Header)
 	if err != nil {
@@ -1834,12 +1833,12 @@ func checkUpgradeRequest(r *http.Request, opts *upgradeOptions) (string, string,
 	}
 	if opts.subprotocols != nil {
 		if err := validateSubprotocolOption(opts.subprotocols, opts.responseHeader); err != nil {
-			return "", "", fmt.Errorf("%w: %w", ErrInvalidHandshakeHeader, err)
+			return "", "", fmt.Errorf("%w: %w", errInvalidHandshakeHeader, err)
 		}
 	}
 	subprotocol, err := validateSubprotocolSelection(opts.responseHeader, offered)
 	if err != nil {
-		return "", "", fmt.Errorf("%w: %w", ErrInvalidHandshakeHeader, err)
+		return "", "", fmt.Errorf("%w: %w", errInvalidHandshakeHeader, err)
 	}
 	if subprotocol == "" {
 		subprotocol = selectSubprotocol(opts.subprotocols, offered)
@@ -1872,7 +1871,7 @@ func negotiateUpgradeExtensions(r *http.Request, opts *upgradeOptions, subprotoc
 	var acceptedExtensions []frameExtension
 	for _, ext := range opts.extensions {
 		if ext == nil {
-			return nil, fmt.Errorf("%w: nil extension", ErrInvalidExtension)
+			return nil, fmt.Errorf("%w: nil extension", errInvalidExtension)
 		}
 		var err error
 		if pmd, ok := ext.(*perMessageDeflate); ok {
@@ -1881,21 +1880,21 @@ func negotiateUpgradeExtensions(r *http.Request, opts *upgradeOptions, subprotoc
 			err = ext.Negotiate(extHeader)
 		}
 		if err != nil {
-			return nil, fmt.Errorf("%w: extension %s: %w", ErrInvalidExtension, ext.Name(), err)
+			return nil, fmt.Errorf("%w: extension %s: %w", errInvalidExtension, ext.Name(), err)
 		}
 		if ext.IsEnabled() {
 			acceptedExtensions = append(acceptedExtensions, ext)
 		}
 	}
 	if _, err := messageCompression(opts.extensions); err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrInvalidExtension, err)
+		return nil, fmt.Errorf("%w: %w", errInvalidExtension, err)
 	}
 	selection, selectedExtensions, err := extensionOffers(acceptedExtensions)
 	if err == nil {
 		err = validateExtensionSelection(selectedExtensions, offeredExtensions)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrInvalidHandshakeHeader, err)
+		return nil, fmt.Errorf("%w: %w", errInvalidHandshakeHeader, err)
 	}
 	if selection != "" {
 		responseHeader.Set("Sec-WebSocket-Extensions", selection)
@@ -1926,10 +1925,10 @@ func writeUpgradeResponse(w *bufio.Writer, acceptKey string, responseHeader http
 	// A bufio.Writer keeps its first error, so checking the last write
 	// covers them all.
 	if _, err := w.WriteString("\r\n"); err != nil {
-		return fmt.Errorf("%w: failed to write handshake response: %w", ErrHandshakeFailed, err)
+		return fmt.Errorf("%w: failed to write handshake response: %w", errHandshakeFailed, err)
 	}
 	if err := w.Flush(); err != nil {
-		return fmt.Errorf("%w: failed to flush handshake response: %w", ErrHandshakeFailed, err)
+		return fmt.Errorf("%w: failed to flush handshake response: %w", errHandshakeFailed, err)
 	}
 	return nil
 }
@@ -1941,7 +1940,7 @@ func writeUpgradeResponse(w *bufio.Writer, acceptKey string, responseHeader http
 func validateHandshakeHeaders(header http.Header, response bool) error {
 	for name, values := range header {
 		if !isHTTPToken(name) {
-			return fmt.Errorf("%w: invalid field name %q", ErrInvalidHandshakeHeader, name)
+			return fmt.Errorf("%w: invalid field name %q", errInvalidHandshakeHeader, name)
 		}
 		reserved := false
 		switch strings.ToLower(name) {
@@ -1953,13 +1952,13 @@ func validateHandshakeHeaders(header http.Header, response bool) error {
 			reserved = response
 		}
 		if reserved {
-			return fmt.Errorf("%w: reserved field %q", ErrInvalidHandshakeHeader, name)
+			return fmt.Errorf("%w: reserved field %q", errInvalidHandshakeHeader, name)
 		}
 		for _, value := range values {
 			for i := 0; i < len(value); i++ {
 				c := value[i]
 				if (c < ' ' && c != '\t') || c == 0x7f {
-					return fmt.Errorf("%w: invalid value for field %q", ErrInvalidHandshakeHeader, name)
+					return fmt.Errorf("%w: invalid value for field %q", errInvalidHandshakeHeader, name)
 				}
 			}
 		}
@@ -2006,16 +2005,16 @@ func parseSubprotocolOffers(header http.Header) (map[string]struct{}, error) {
 				continue
 			}
 			if !isHTTPToken(token) {
-				return nil, ErrInvalidSubprotocol
+				return nil, errInvalidSubprotocol
 			}
 			if _, duplicate := offered[token]; duplicate {
-				return nil, ErrInvalidSubprotocol
+				return nil, errInvalidSubprotocol
 			}
 			offered[token] = struct{}{}
 		}
 	}
 	if len(values) != 0 && len(offered) == 0 {
-		return nil, ErrInvalidSubprotocol
+		return nil, errInvalidSubprotocol
 	}
 	return offered, nil
 }
@@ -2029,14 +2028,14 @@ func validateSubprotocolSelection(header http.Header, offered map[string]struct{
 		return "", nil
 	}
 	if len(values) != 1 {
-		return "", ErrInvalidSubprotocol
+		return "", errInvalidSubprotocol
 	}
 	selected := strings.Trim(values[0], " \t")
 	if !isHTTPToken(selected) {
-		return "", ErrInvalidSubprotocol
+		return "", errInvalidSubprotocol
 	}
 	if _, ok := offered[selected]; !ok {
-		return "", ErrInvalidSubprotocol
+		return "", errInvalidSubprotocol
 	}
 	return selected, nil
 }
@@ -2053,7 +2052,7 @@ func computeAcceptKey(challengeKey string) string {
 func generateKey() (string, error) {
 	key := make([]byte, 16)
 	if _, err := io.ReadFull(rand.Reader, key); err != nil {
-		return "", fmt.Errorf("%w: %w", ErrFailedToGenerateKey, err)
+		return "", fmt.Errorf("%w: %w", errFailedToGenerateKey, err)
 	}
 	return base64.StdEncoding.EncodeToString(key), nil
 }

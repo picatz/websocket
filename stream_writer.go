@@ -49,7 +49,7 @@ func (c *Conn) NextWriter(messageType MessageType) (io.WriteCloser, error) {
 	}
 	if c.writeErr != nil {
 		c.releaseData()
-		return nil, fmt.Errorf("%w: failed to write frame header: %w", ErrWriteFailed, c.writeErr)
+		return nil, fmt.Errorf("%w: failed to write frame header: %w", errWriteFailed, c.writeErr)
 	}
 	var buf [4]frameExtension
 	enabled, err := enabledExtensions(c.extensions, buf[:0])
@@ -113,7 +113,7 @@ func (s *streamWriter) writable() error {
 	case s.c.closed.Load() || s.c.closeSent:
 		return s.w.fail(errClosed)
 	case s.c.writeErr != nil && s.w.err == nil:
-		return s.w.fail(fmt.Errorf("%w: failed to write frame header: %w", ErrWriteFailed, s.c.writeErr))
+		return s.w.fail(fmt.Errorf("%w: failed to write frame header: %w", errWriteFailed, s.c.writeErr))
 	}
 	return nil
 }

@@ -59,8 +59,8 @@ func TestClosedErrorsMatchNetErrClosed(t *testing.T) {
 			t.Errorf("%s: err = %v, want a match for net.ErrClosed", name, err)
 		}
 	}
-	if err := c.Close(); !errors.Is(err, websocket.ErrAlreadyClosed) {
-		t.Errorf("second Close: err = %v, want ErrAlreadyClosed", err)
+	if err := c.Close(); !errors.Is(err, net.ErrClosed) {
+		t.Errorf("second Close: err = %v, want net.ErrClosed", err)
 	}
 }
 

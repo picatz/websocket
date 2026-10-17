@@ -18,16 +18,16 @@ func TestUpgradeErrorStatus(t *testing.T) {
 		want int
 	}{
 		{nil, 0},
-		{ErrHandshakeFailed, 0},
-		{fmt.Errorf("%w: hijack: broken", ErrHandshakeFailed), 0},
+		{errHandshakeFailed, 0},
+		{fmt.Errorf("%w: hijack: broken", errHandshakeFailed), 0},
 		{ErrOriginNotAllowed, http.StatusForbidden},
 		{ErrUnsupportedVersion, http.StatusUpgradeRequired},
 		{ErrNotHijacker, http.StatusInternalServerError},
-		{fmt.Errorf("%w: %w", ErrInvalidHandshakeHeader, ErrInvalidSubprotocol), http.StatusInternalServerError},
-		{ErrInvalidSubprotocol, http.StatusBadRequest}, // from the client's offer
-		{ErrInvalidMethod, http.StatusMethodNotAllowed},
-		{ErrMissingSecKey, http.StatusBadRequest},
-		{ErrInvalidExtension, http.StatusBadRequest},
+		{fmt.Errorf("%w: %w", errInvalidHandshakeHeader, errInvalidSubprotocol), http.StatusInternalServerError},
+		{errInvalidSubprotocol, http.StatusBadRequest}, // from the client's offer
+		{errInvalidMethod, http.StatusMethodNotAllowed},
+		{errMissingSecKey, http.StatusBadRequest},
+		{errInvalidExtension, http.StatusBadRequest},
 		{errors.New("other"), http.StatusBadRequest},
 	} {
 		if got := upgradeErrorStatus(tt.err); got != tt.want {
@@ -111,8 +111,8 @@ func TestUpgradeHijackErrorIsWrapped(t *testing.T) {
 	cause := errors.New("hijack broke")
 	w := failingHijacker{httptest.NewRecorder(), cause}
 	conn, err := Upgrade(w, upgradeRequest())
-	if conn != nil || !errors.Is(err, ErrHandshakeFailed) || !errors.Is(err, cause) {
-		t.Fatalf("Upgrade = %v, %v; want ErrHandshakeFailed wrapping the cause", conn, err)
+	if conn != nil || !errors.Is(err, errHandshakeFailed) || !errors.Is(err, cause) {
+		t.Fatalf("Upgrade = %v, %v; want errHandshakeFailed wrapping the cause", conn, err)
 	}
 	if w.Body.Len() != 0 || w.Code != http.StatusOK {
 		t.Fatalf("wrote %d %q after a hijack failure", w.Code, w.Body.String())
@@ -149,7 +149,7 @@ func TestUpgraderErrorHook(t *testing.T) {
 
 	// The hook is not called when nothing is written.
 	gotStatus = 0
-	if _, err := u.Upgrade(failingHijacker{httptest.NewRecorder(), errors.New("broke")}, upgradeRequest()); !errors.Is(err, ErrHandshakeFailed) || gotStatus != 0 {
+	if _, err := u.Upgrade(failingHijacker{httptest.NewRecorder(), errors.New("broke")}, upgradeRequest()); !errors.Is(err, errHandshakeFailed) || gotStatus != 0 {
 		t.Fatalf("hook called with %d for %v", gotStatus, err)
 	}
 }
