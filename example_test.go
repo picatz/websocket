@@ -569,3 +569,52 @@ func ExampleNetConn() {
 	// HELLO
 	// STREAM
 }
+
+// NextWriter streams one message of unknown length, such as a file, without
+// holding it in memory. Close sends the final frame.
+func ExampleConn_NextWriter() {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Upgrade(w, r)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, data, err := conn.ReadMessage()
+		if err != nil {
+			return
+		}
+		_ = conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprint(len(data))))
+	}))
+	defer srv.Close()
+
+	conn, _, err := websocket.Dial(context.Background(), wsURL(srv))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer conn.Close()
+
+	w, err := conn.NextWriter(websocket.BinaryMessage)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if _, err := io.Copy(w, io.LimitReader(zeros{}, 300<<10)); err != nil {
+		log.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		log.Fatal(err)
+	}
+	_, data, err := conn.ReadMessage()
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(string(data))
+	// Output: 307200
+}
+
+// zeros is an endless reader of zero bytes.
+type zeros struct{}
+
+func (zeros) Read(p []byte) (int, error) {
+	clear(p)
+	return len(p), nil
+}

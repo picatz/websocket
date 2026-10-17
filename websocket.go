@@ -372,6 +372,11 @@ type Conn struct {
 	// Reusable buffers for compressed messages. Protected by writeMu.
 	writeBuf, writeScratch []byte
 
+	// dataSlot admits one data message at a time, from WriteMessage or for a
+	// NextWriter's whole lifetime. It is taken before writeMu.
+	dataOnce sync.Once
+	dataSlot chan struct{}
+
 	// Ping bookkeeping. done is created lazily and closed, under closeMu, once
 	// the connection becomes terminal; pings maps outstanding Ping payloads to
 	// the channel their matching Pong closes.
@@ -846,6 +851,10 @@ func (c *Conn) WriteMessage(messageType Opcode, data []byte) error {
 	if c.closed.Load() {
 		return errClosed
 	}
+	if err := c.acquireData(); err != nil {
+		return err
+	}
+	defer c.releaseData()
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 	if c.closed.Load() || c.closeSent {

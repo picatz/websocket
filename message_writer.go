@@ -10,8 +10,9 @@ import (
 const writeFragmentSize = 64 << 10
 
 // messageWriter frames one outgoing data message as one or more frames
-// (RFC 6455 section 5.4). The caller holds writeMu for the writer's whole
-// lifetime. Write may emit complete frames; Close emits the final frame.
+// (RFC 6455 section 5.4). The caller holds the data slot for the writer's
+// whole lifetime and writeMu during each call. Write may emit complete frames;
+// Close emits the final frame.
 //
 // With built-in compression, the first frame carries RSV1 and every frame
 // carries part of a single DEFLATE stream (RFC 7692 section 6). A message
@@ -19,8 +20,8 @@ const writeFragmentSize = 64 << 10
 // section 6 also permits; the decision is made once that much input is
 // buffered, or at Close.
 //
-// WriteMessage drives a messageWriter with a single Write. It is also the seam
-// for a streaming writer that returns it to applications as an io.WriteCloser.
+// WriteMessage drives a messageWriter with a single Write; NextWriter returns
+// one to applications as an io.WriteCloser.
 //
 // https://www.rfc-editor.org/rfc/rfc6455#section-5.4
 // https://www.rfc-editor.org/rfc/rfc7692#section-6

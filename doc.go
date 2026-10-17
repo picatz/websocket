@@ -37,6 +37,10 @@
 // bounded queue drained by a single writer, and drop a peer whose queue fills
 // instead of blocking every other sender on it.
 //
+// Conn.NextWriter streams one message of unknown length through an
+// io.WriteCloser: other data messages wait for its Close, while control
+// frames may go out between its frames.
+//
 // Every error from ReadMessage is terminal: return from the read loop. A write
 // error that reached the transport is terminal too, because a partially
 // written frame cannot be retried.

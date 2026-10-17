@@ -346,6 +346,28 @@ Protocols are case-sensitive HTTP tokens and must be unique. Setting
 `Sec-WebSocket-Protocol` through `Dialer.Header` or `Upgrader.Header` still
 works, but combining it with `Subprotocols` is an error.
 
+## Streaming large messages
+
+`NextWriter(messageType)` returns an `io.WriteCloser` for one message, so a large
+payload can be sent without holding it in memory. Each `Write` may send complete
+frames, and `Close` sends the final one. Until `Close`, other data messages wait;
+pings and pongs can still go out between the message's frames.
+
+```go
+w, err := conn.NextWriter(websocket.BinaryMessage)
+if err != nil {
+	return err
+}
+if _, err := io.Copy(w, file); err != nil {
+	return err
+}
+return w.Close()
+```
+
+Text is checked as UTF-8 across writes, including a rune split between two
+`Write` calls. A failure ends the writer. If part of the message was already
+sent, the connection can't continue, so close it.
+
 ## Compression
 
 `permessage-deflate` ([RFC 7692]) is opt-in: set `Compression` on a `Dialer` or
