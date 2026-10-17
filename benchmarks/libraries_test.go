@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"time"
 
 	coder "github.com/coder/websocket"
 	"github.com/gobwas/ws"
@@ -13,13 +14,18 @@ import (
 	picatz "github.com/picatz/websocket"
 )
 
-// readLimit is the incoming message limit configured for every library, so
-// that no library rejects a benchmark payload. It matches
-// picatz.DefaultMaxMessageSize.
+// readLimit is the incoming size limit configured for every library, so that
+// each one does the same bounds checks and none rejects a benchmark payload.
+// It matches picatz.DefaultMaxMessageSize. gobwas/ws can only bound a frame,
+// not a message, which is the same thing for these single-frame payloads.
 const readLimit = 1 << 20
 
 // library adapts one WebSocket implementation to the workloads. Each adapter
 // uses the library's documented, idiomatic message API with compression off.
+// A client's close sends a Close frame and closes the TCP connection without
+// waiting for the reply, except coder's: coder/websocket can either wait for
+// the closing handshake or close without a Close frame (CloseNow), and the
+// adapter does the latter.
 type library struct {
 	name string
 	// echo is a server handler that echoes binary messages until the
@@ -130,7 +136,7 @@ var libraries = []library{
 			}
 			defer conn.Close()
 			for {
-				p, op, err := wsutil.ReadClientData(conn)
+				p, op, err := gobwasRead(conn, ws.StateServerSide)
 				if err != nil {
 					return
 				}
@@ -180,7 +186,11 @@ func (c coderClient) read() ([]byte, error) {
 type gorillaClient struct{ c *gorilla.Conn }
 
 func (c gorillaClient) write(p []byte) error { return c.c.WriteMessage(gorilla.BinaryMessage, p) }
-func (c gorillaClient) close() error         { return c.c.Close() }
+func (c gorillaClient) close() error {
+	msg := gorilla.FormatCloseMessage(gorilla.CloseNormalClosure, "")
+	_ = c.c.WriteControl(gorilla.CloseMessage, msg, time.Now().Add(time.Second))
+	return c.c.Close()
+}
 func (c gorillaClient) read() ([]byte, error) {
 	_, p, err := c.c.ReadMessage()
 	return p, err
@@ -193,7 +203,39 @@ type gobwasClient struct {
 }
 
 func (c *gobwasClient) write(p []byte) error { return wsutil.WriteClientBinary(c.conn, p) }
-func (c *gobwasClient) close() error         { return c.conn.Close() }
+func (c *gobwasClient) close() error {
+	_ = wsutil.WriteClientMessage(c.conn, ws.OpClose, ws.NewCloseFrameBody(ws.StatusNormalClosure, ""))
+	return c.conn.Close()
+}
 func (c *gobwasClient) read() ([]byte, error) {
-	return wsutil.ReadServerBinary(c.r)
+	p, _, err := gobwasRead(c.r, ws.StateClientSide)
+	return p, err
+}
+
+// gobwasRead is wsutil.ReadData with a frame size limit, which wsutil's
+// helpers do not set. Like them, it answers control frames and checks text
+// for UTF-8.
+func gobwasRead(rw io.ReadWriter, state ws.State) ([]byte, ws.OpCode, error) {
+	control := wsutil.ControlFrameHandler(rw, state)
+	rd := wsutil.Reader{
+		Source:         rw,
+		State:          state,
+		CheckUTF8:      true,
+		MaxFrameSize:   readLimit,
+		OnIntermediate: control,
+	}
+	for {
+		hdr, err := rd.NextFrame()
+		if err != nil {
+			return nil, 0, err
+		}
+		if hdr.OpCode.IsControl() {
+			if err := control(hdr, &rd); err != nil {
+				return nil, 0, err
+			}
+			continue
+		}
+		p, err := io.ReadAll(&rd)
+		return p, hdr.OpCode, err
+	}
 }
