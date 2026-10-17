@@ -144,8 +144,6 @@ Two subpackages build on the core:
   client for programs compiled with `GOOS=js GOARCH=wasm`. It drives the
   host's own `WebSocket` object with the same message API.
 
-[MIGRATION.md](MIGRATION.md) lists the API changes made while the API settled.
-
 ## Conformance
 
 The [Autobahn TestSuite](https://github.com/crossbario/autobahn-testsuite) is
