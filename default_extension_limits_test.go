@@ -126,7 +126,9 @@ func TestHighLevelDefaultPMDBoundaries(t *testing.T) {
 		// RFC 7692 section 7.2.3.1, independently specified "Hello" example.
 		{"RFC Hello", []byte{0xf2, 0x48, 0xcd, 0xc9, 0xc9, 0x07, 0x00}, []byte("Hello"), false},
 		{"encoded at limit", defaultStoredDeflate(storedAt), storedAt, false},
-		{"encoded n+1 decoded below n", defaultStoredDeflate(storedOver), storedOver, true},
+		// Deflate may expand a message on the wire; only its decoded size
+		// counts against the limit.
+		{"encoded n+1 decoded below n", defaultStoredDeflate(storedOver), storedOver, false},
 		{"decoded at limit", defaultRepeatedDeflate(n), bytes.Repeat([]byte{'a'}, n), false},
 		{"decoded n+1 encoded below n", defaultRepeatedDeflate(n + 1), bytes.Repeat([]byte{'a'}, n+1), true},
 	}
@@ -163,9 +165,10 @@ func TestHighLevelDefaultPMDBoundaries(t *testing.T) {
 
 func TestHighLevelDefaultPMDIncompressibleBoundary(t *testing.T) {
 	// A fixed-seed xorshift stream supplies reproducible, high-entropy bytes.
-	// Stored DEFLATE exposes the framing overhead explicitly: decoded data at
-	// exactly 1 MiB can still exceed the independent encoded-frame limit.
-	payload := make([]byte, DefaultMaxMessageSize)
+	// Stored DEFLATE exposes the framing overhead explicitly: an incompressible
+	// message of exactly the limit is larger than the limit on the wire, and
+	// must still be accepted, while one byte more is refused.
+	payload := make([]byte, DefaultMaxMessageSize+1)
 	state := uint32(0x6d2b79f5)
 	for i := range payload {
 		state ^= state << 13
@@ -173,23 +176,24 @@ func TestHighLevelDefaultPMDIncompressibleBoundary(t *testing.T) {
 		state ^= state << 5
 		payload[i] = byte(state)
 	}
-	encoded := defaultStoredDeflate(payload)
-	if len(encoded) <= DefaultMaxMessageSize {
+	at := defaultStoredDeflate(payload[:DefaultMaxMessageSize])
+	if len(at) <= DefaultMaxMessageSize {
 		t.Fatal("stored DEFLATE must include framing overhead")
 	}
+	over := defaultStoredDeflate(payload)
 	for _, server := range []bool{false, true} {
 		t.Run(fmt.Sprintf("server=%v", server), func(t *testing.T) {
-			c, raw := highLevelReader(t, server, limitWire(server, 0xc2, encoded))
+			c, _ := highLevelReader(t, server, limitWire(server, 0xc2, at))
+			c.extensions = []frameExtension{defaultLimitPMD(t, server)}
+			if op, p, err := c.ReadMessage(); err != nil || op != BinaryMessage || !bytes.Equal(p, payload[:DefaultMaxMessageSize]) {
+				t.Fatalf("at limit: opcode %v, payload %d, error %v", op, len(p), err)
+			}
+			c, raw := highLevelReader(t, server, limitWire(server, 0xc2, over))
 			c.extensions = []frameExtension{defaultLimitPMD(t, server)}
 			if _, p, err := c.ReadMessage(); !errors.Is(err, ErrMessageTooLarge) || p != nil {
-				t.Fatalf("payload %d, error %v", len(p), err)
+				t.Fatalf("over limit: payload %d, error %v", len(p), err)
 			}
 			requireDefaultExtensionTerminal(t, c, raw, 1009)
-			c, _ = highLevelReader(t, server, limitWire(server, 0xc2, encoded), len(encoded))
-			c.extensions = []frameExtension{defaultLimitPMD(t, server)}
-			if op, p, err := c.ReadMessage(); err != nil || op != BinaryMessage || !bytes.Equal(p, payload) {
-				t.Fatalf("with encoded headroom: opcode %v, payload %d, error %v", op, len(p), err)
-			}
 		})
 	}
 }
@@ -255,6 +259,10 @@ func TestHighLevelDefaultExtensionHeaderLimit(t *testing.T) {
 					code := uint16(1009)
 					if custom {
 						c.extensions, code = []frameExtension{ext}, 0
+					} else if size == DefaultMaxMessageSize+1 {
+						// Compressed frames have room for deflate's expansion;
+						// declare one byte more than that.
+						size = int(c.frameLimit()) + 1
 					}
 					// Instrument only post-handshake input. A declaration must
 					// reject before reading a body or even the client's mask,
