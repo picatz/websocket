@@ -90,7 +90,9 @@ func TestWriteFailureWritePoisonPreventsWireReuse(t *testing.T) {
 					c := newTestConn(raw, ConnConfig{Server: server}, []frameExtension{ext}...)
 					data := []byte("outbound")
 					if stage == "payload" {
-						data = bytes.Repeat([]byte{'x'}, 8192)
+						// Larger than any pooled write buffer, so the
+						// payload reaches the transport before the flush.
+						data = bytes.Repeat([]byte{'x'}, 2*maskedWriteBufferSize)
 					}
 					err := c.WriteMessage(BinaryMessage, data)
 					requireWriteCause(t, err, cause)

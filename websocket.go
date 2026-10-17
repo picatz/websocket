@@ -1414,10 +1414,14 @@ func (c *Conn) writeFrameBuffer(frame *wireFrame, owned bool) error {
 	// Every frame is flushed, so no frame leaves bytes behind and the write
 	// buffer is borrowed from a pool for one frame instead of being held by
 	// every idle connection.
-	w := writerPool.Get().(*bufio.Writer)
+	pool := &writerPool
+	if frame.Masked && !owned && len(frame.Payload) > writeBufferSize {
+		pool = &maskedWriterPool
+	}
+	w := pool.Get().(*bufio.Writer)
 	w.Reset(c.conn)
 	err := c.writeFrameTo(w, frame, owned)
-	releaseWriter(w)
+	releaseWriter(pool, w)
 	return err
 }
 
@@ -1499,13 +1503,25 @@ func (c *Conn) writeFrameTo(w *bufio.Writer, frame *wireFrame, owned bool) error
 
 // writerPool holds the write buffers connections borrow for one frame at a
 // time.
-var writerPool = sync.Pool{New: func() any { return bufio.NewWriter(nil) }}
+var writerPool = sync.Pool{New: func() any { return bufio.NewWriterSize(nil, writeBufferSize) }}
 
-// releaseWriter returns w to writerPool, discarding anything a failed write
-// left buffered and dropping its reference to the connection.
-func releaseWriter(w *bufio.Writer) {
+// writeBufferSize is the size of the buffers in writerPool.
+const writeBufferSize = 4 << 10
+
+// maskedWriteBufferSize is the size of the buffers in maskedWriterPool.
+const maskedWriteBufferSize = 32 << 10
+
+// maskedWriterPool holds larger write buffers for masking a payload the
+// connection does not own and that does not fit writerPool's buffers.
+// writeMasked copies such a payload through the buffer, so a 1 MiB client
+// message takes 32 writes to the transport instead of 256.
+var maskedWriterPool = sync.Pool{New: func() any { return bufio.NewWriterSize(nil, maskedWriteBufferSize) }}
+
+// releaseWriter returns w to pool, discarding anything a failed write left
+// buffered and dropping its reference to the connection.
+func releaseWriter(pool *sync.Pool, w *bufio.Writer) {
 	w.Reset(nil)
-	writerPool.Put(w)
+	pool.Put(w)
 }
 
 // writeMasked writes p masked with key, copying it through w's buffer one
