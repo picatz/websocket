@@ -207,7 +207,7 @@ func (r *deflateMessageInput) closedByPeer() bool { return r.peerClosed != nil &
 // extensions apply outside compression in both directions.
 type deflateFrameReader struct {
 	c          *Conn
-	frame      *Frame
+	frame      Frame // The current frame; a copy, so callers' frames stay on their stacks.
 	remaining  uint64
 	phase      uint64
 	peerClosed *bool
@@ -217,12 +217,12 @@ type deflateFrameReader struct {
 }
 
 func (r *deflateFrameReader) start(frame *Frame, n uint64) error {
-	r.frame, r.remaining, r.phase = frame, n, 0
+	r.frame, r.remaining, r.phase = *frame, n, 0
 	if len(r.frameExts) > 0 {
-		return r.startBuffered(frame, n)
+		return r.startBuffered(&r.frame, n)
 	}
-	if frame.Masked {
-		if _, err := io.ReadFull(r.c.rw, frame.MaskKey[:]); err != nil {
+	if r.frame.Masked {
+		if err := readSmall(r.c.rw.Reader, r.frame.MaskKey[:]); err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 				return io.ErrUnexpectedEOF
 			}
@@ -241,7 +241,7 @@ func (r *deflateFrameReader) startBuffered(frame *Frame, n uint64) error {
 		return err
 	}
 	for _, ext := range r.frameExts {
-		if err := ext.ProcessIncomingFrame(frame); err != nil {
+		if err := processIncomingFrame(ext, frame); err != nil {
 			return fmt.Errorf("extension %s failed to process incoming frame: %w", ext.Name(), err)
 		}
 	}
@@ -267,7 +267,8 @@ func (r *deflateFrameReader) advance() error {
 		if r.frame.Final {
 			return io.EOF
 		}
-		f, n, err := r.c.readFrameHeader()
+		var f Frame
+		n, err := r.c.readFrameHeader(&f)
 		if err == io.EOF {
 			return io.ErrUnexpectedEOF
 		}
@@ -275,13 +276,13 @@ func (r *deflateFrameReader) advance() error {
 			return err
 		}
 		if f.Opcode >= CloseMessage {
-			if err := r.c.validateMessageHeader(f, n, true, 0); err != nil {
+			if err := r.c.validateMessageHeader(&f, n, true, 0); err != nil {
 				return err
 			}
-			if err := r.c.readFramePayload(f, n); err != nil {
+			if err := r.c.readFramePayload(&f, n); err != nil {
 				return err
 			}
-			closed, err := r.c.handleControl(f)
+			closed, err := r.c.handleControl(&f)
 			if closed {
 				*r.peerClosed = true
 				return errDeflatePeerClose
@@ -296,7 +297,7 @@ func (r *deflateFrameReader) advance() error {
 		}
 		// readFrameHeader already rejects RSV1 on continuations and bounds each
 		// encoded frame. Its length must not spend the remaining decoded budget.
-		if err := r.start(f, n); err != nil {
+		if err := r.start(&f, n); err != nil {
 			return err
 		}
 	}

@@ -201,7 +201,7 @@ func (r *streamChunkReader) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-func TestTextPayloadReaderUTF8EveryBoundaryAndMaskPhase(t *testing.T) {
+func TestPayloadReaderUTF8EveryBoundaryAndMaskPhase(t *testing.T) {
 	text := []byte("\x00\x7f\u0080\u07ff\u0800\ud7ff\ue000\ufffd\uffff\U00010000\U0010ffff")
 	for _, masked := range []bool{false, true} {
 		for split := 0; split <= len(text); split++ {
@@ -214,7 +214,7 @@ func TestTextPayloadReaderUTF8EveryBoundaryAndMaskPhase(t *testing.T) {
 					}
 				}
 				source := &streamChunkReader{data: wire, sizes: []int{max(1, split), chunk}, tail: io.EOF}
-				rr := &textPayloadReader{r: bufio.NewReaderSize(source, 16), remaining: int64(len(wire)), key: key, masked: masked}
+				rr := &payloadReader{text: true, r: bufio.NewReaderSize(source, 16), remaining: int64(len(wire)), key: key, masked: masked}
 				got, err := io.ReadAll(rr)
 				if err != nil || !bytes.Equal(got, text) || rr.pending != 0 {
 					t.Fatalf("masked=%v split=%d chunk=%d got=%x pending=%d err=%v", masked, split, chunk, got, rr.pending, err)
@@ -224,13 +224,13 @@ func TestTextPayloadReaderUTF8EveryBoundaryAndMaskPhase(t *testing.T) {
 	}
 }
 
-func TestTextPayloadReaderCrossFrameCarryAndErrors(t *testing.T) {
+func TestPayloadReaderCrossFrameCarryAndErrors(t *testing.T) {
 	valid := []byte("a¢€𐀀�")
 	for a := 0; a <= len(valid); a++ {
 		for b := a; b <= len(valid); b++ {
 			var tail []byte
 			for _, p := range [][]byte{valid[:a], valid[a:b], nil, valid[b:]} {
-				rr := &textPayloadReader{r: bufio.NewReader(&streamChunkReader{data: p, sizes: []int{1}, tail: io.EOF}), remaining: int64(len(p))}
+				rr := &payloadReader{text: true, r: bufio.NewReader(&streamChunkReader{data: p, sizes: []int{1}, tail: io.EOF}), remaining: int64(len(p))}
 				rr.pending = byte(copy(rr.carry[:], tail))
 				got, err := io.ReadAll(rr)
 				if err != nil || !bytes.Equal(got, p) {
@@ -246,7 +246,7 @@ func TestTextPayloadReaderCrossFrameCarryAndErrors(t *testing.T) {
 	for _, tailErr := range []error{io.EOF, streamWithheld} {
 		for _, p := range [][]byte{{'a'}, {0xf4}, {0xf4, 0x90}} {
 			source := &streamChunkReader{data: p, sizes: []int{512}, tail: tailErr, endWithData: true}
-			rr := &textPayloadReader{r: bufio.NewReaderSize(source, 16), remaining: 512}
+			rr := &payloadReader{text: true, r: bufio.NewReaderSize(source, 16), remaining: 512}
 			got, err := io.ReadAll(rr)
 			if source.dataReadSize <= 16 {
 				t.Fatalf("test did not exercise direct buffered read: %d", source.dataReadSize)
@@ -263,7 +263,7 @@ func TestTextPayloadReaderCrossFrameCarryAndErrors(t *testing.T) {
 	}
 }
 
-func TestTextPayloadReaderRejectsBeforeWithheldSuffix(t *testing.T) {
+func TestPayloadReaderRejectsBeforeWithheldSuffix(t *testing.T) {
 	for _, masked := range []bool{false, true} {
 		for _, prefix := range [][]byte{{0x80}, {0xc0}, {0xc1}, {0xf5}, {0xf6}, {0xf7}, {0xf8}, {0xf9}, {0xfa}, {0xfb}, {0xfc}, {0xfd}, {0xfe}, {0xff}, {0xc2, 'x'}, {0xe0, 0x9f}, {0xed, 0xa0}, {0xf0, 0x8f}, {0xf4, 0x90}} {
 			for split := 0; split <= len(prefix); split++ {
@@ -276,7 +276,7 @@ func TestTextPayloadReaderRejectsBeforeWithheldSuffix(t *testing.T) {
 					}
 				}
 				raw := &streamChoppedConn{chunks: [][]byte{wire[:2+split], wire[2+split:]}, tailErr: streamWithheld}
-				rr := &textPayloadReader{r: bufio.NewReader(raw), remaining: int64(len(wire) + 100), key: key, masked: masked}
+				rr := &payloadReader{text: true, r: bufio.NewReader(raw), remaining: int64(len(wire) + 100), key: key, masked: masked}
 				_, err := io.ReadAll(rr)
 				failure, ok := err.(*readFailure)
 				if !ok || failure.code != 1007 || failure.cause != ErrInvalidFrame || raw.tailReads != 0 {
@@ -313,7 +313,7 @@ func TestReadMessagePreservesExtensionOwnership(t *testing.T) {
 	}
 }
 
-func TestTextPayloadReaderLargeChunkMaskOffsets(t *testing.T) {
+func TestPayloadReaderLargeChunkMaskOffsets(t *testing.T) {
 	payload := bytes.Repeat([]byte("a¢€𐀀"), 513)
 	key := [4]byte{0x9d, 0x62, 0xab, 0xc4}
 	for _, size := range []int{1, 2, 3, 4, 5, 7, 8, 9, 511, 512, 513, 4095, 4096, 4097} {
@@ -322,7 +322,7 @@ func TestTextPayloadReaderLargeChunkMaskOffsets(t *testing.T) {
 			wire[i] ^= key[i&3]
 		}
 		source := &streamChunkReader{data: wire, sizes: []int{size}, tail: io.EOF}
-		rr := &textPayloadReader{r: bufio.NewReaderSize(source, 16), remaining: int64(len(wire)), masked: true, key: key}
+		rr := &payloadReader{text: true, r: bufio.NewReaderSize(source, 16), remaining: int64(len(wire)), masked: true, key: key}
 		got, err := io.ReadAll(rr)
 		if err != nil || !bytes.Equal(got, payload) || rr.pending != 0 {
 			t.Fatalf("chunk=%d err=%v pending=%d", size, err, rr.pending)
@@ -330,13 +330,13 @@ func TestTextPayloadReaderLargeChunkMaskOffsets(t *testing.T) {
 	}
 }
 
-func TestTextPayloadReaderDoesNotConsumeNextFrame(t *testing.T) {
+func TestPayloadReaderDoesNotConsumeNextFrame(t *testing.T) {
 	for _, size := range []int{1, 511, 512, 513, 65536} {
 		payload := bytes.Repeat([]byte{'a'}, size)
 		next := []byte{0x81, 1, 'z'}
 		src := bytes.NewReader(append(payload, next...))
 		br := bufio.NewReader(src)
-		r := &textPayloadReader{r: br, remaining: int64(len(payload))}
+		r := &payloadReader{text: true, r: br, remaining: int64(len(payload))}
 		got, err := io.ReadAll(r)
 		if err != nil || !bytes.Equal(got, payload) {
 			t.Fatal(size, err)
@@ -348,10 +348,10 @@ func TestTextPayloadReaderDoesNotConsumeNextFrame(t *testing.T) {
 	}
 }
 
-func TestTextPayloadReaderCheckerAllocations(t *testing.T) {
+func TestPayloadReaderCheckerAllocations(t *testing.T) {
 	p := []byte("a¢€𐀀�")
 	if n := testing.AllocsPerRun(100, func() {
-		var r textPayloadReader
+		var r payloadReader
 		for _, c := range p {
 			q := [1]byte{c}
 			if !r.check(q[:]) {

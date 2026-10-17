@@ -2,7 +2,6 @@ package websocket
 
 import (
 	"bufio"
-	"bytes"
 	"compress/flate"
 	"context"
 	"crypto/rand"
@@ -658,22 +657,14 @@ func (c *Conn) ReadMessage() (messageType Opcode, data []byte, err error) {
 	var message []byte
 	var validated int // Complete UTF-8 bytes; at most three bytes remain pending.
 	var messageTypeSet bool
+	var frame Frame
 	for {
-		frame, payloadLen, err := c.readFrameHeader()
+		payloadLen, err := c.readFrameHeader(&frame)
 		if err == nil {
-			err = c.validateMessageHeader(frame, payloadLen, messageTypeSet, len(message))
+			err = c.validateMessageHeader(&frame, payloadLen, messageTypeSet, len(message))
 		}
 		if err == nil && pmd != nil && frame.Rsv1 && (frame.Opcode == TextMessage || frame.Opcode == BinaryMessage) {
-			source := &deflateFrameReader{c: c, peerClosed: &peerClosed, first: true}
-			for _, ext := range c.extensions {
-				if _, builtin := ext.(*perMessageDeflate); !builtin && ext.IsEnabled() {
-					source.frameExts = append(source.frameExts, ext)
-				}
-			}
-			if err = source.start(frame, payloadLen); err != nil {
-				return 0, nil, err
-			}
-			data, err = pmd.decodeMessage(&deflateMessageInput{source: source, peerClosed: &peerClosed}, c.maxBytes, frame.Opcode == TextMessage)
+			data, peerClosed, err = c.readCompressedMessage(pmd, &frame, payloadLen)
 			if peerClosed {
 				return 0, nil, c.peerClose
 			}
@@ -689,7 +680,7 @@ func (c *Conn) ReadMessage() (messageType Opcode, data []byte, err error) {
 			// disabled extensions keep the complete-frame, post-decode path.
 			checkedText = len(c.extensions) == 0 && (frame.Opcode == TextMessage ||
 				(frame.Opcode == ContinuationFrame && messageType == TextMessage))
-			pending, err = c.readFramePayloadText(frame, payloadLen, checkedText, message[validated:])
+			pending, err = c.readFramePayloadText(&frame, payloadLen, checkedText, message[validated:])
 		}
 		if err != nil {
 			if messageTypeSet && err == io.EOF {
@@ -760,7 +751,7 @@ func (c *Conn) ReadMessage() (messageType Opcode, data []byte, err error) {
 			}
 
 		case CloseMessage, PingMessage, PongMessage:
-			peerClosed, err = c.handleControl(frame)
+			peerClosed, err = c.handleControl(&frame)
 			if err != nil {
 				return 0, nil, err
 			}
@@ -772,6 +763,24 @@ func (c *Conn) ReadMessage() (messageType Opcode, data []byte, err error) {
 			return 0, nil, failWith(StatusProtocolError, fmt.Errorf("%w: %d", ErrInvalidOpcode, frame.Opcode))
 		}
 	}
+}
+
+// readCompressedMessage decodes a permessage-deflate message whose first
+// frame header has been read. It reports whether a peer Close interrupted it.
+// It is separate from ReadMessage so that the state the decoder shares stays
+// off ReadMessage's frame for uncompressed messages.
+func (c *Conn) readCompressedMessage(pmd *perMessageDeflate, frame *Frame, payloadLen uint64) (data []byte, peerClosed bool, err error) {
+	source := &deflateFrameReader{c: c, peerClosed: &peerClosed, first: true}
+	for _, ext := range c.extensions {
+		if _, builtin := ext.(*perMessageDeflate); !builtin && ext.IsEnabled() {
+			source.frameExts = append(source.frameExts, ext)
+		}
+	}
+	if err := source.start(frame, payloadLen); err != nil {
+		return nil, peerClosed, err
+	}
+	data, err = pmd.decodeMessage(&deflateMessageInput{source: source, peerClosed: &peerClosed}, c.maxBytes, frame.Opcode == TextMessage)
+	return data, peerClosed, err
 }
 
 // validUTF8Prefix validates p, allowing only a potentially valid incomplete rune
@@ -894,22 +903,24 @@ func (c *Conn) WriteControlFrame(opcode Opcode, data []byte) error {
 	return nil
 }
 
-// readFrameHeader validates lengths and frame structure before reading a body.
-func (c *Conn) readFrameHeader() (*Frame, uint64, error) {
+// readFrameHeader reads a frame header into frame, which it resets, and
+// validates lengths and frame structure before any body is read. It returns
+// the declared payload length. The masking key, if any, is read with the body.
+func (c *Conn) readFrameHeader(frame *Frame) (uint64, error) {
 	// Read the first two bytes of the frame header, which
 	// contains the FIN, RSV1, RSV2, RSV3, opcode, and mask bit.
 	var header [2]byte
-	if _, err := io.ReadFull(c.rw, header[:]); err != nil {
-		if errors.Is(err, io.EOF) {
-			return nil, 0, io.EOF
+	if err := readSmall(c.rw.Reader, header[:]); err != nil {
+		if err == io.EOF {
+			return 0, io.EOF
 		}
-		return nil, 0, fmt.Errorf("failed to read frame header: %w", err)
+		return 0, fmt.Errorf("failed to read frame header: %w", err)
 	}
 
 	b0 := header[0]
 	b1 := header[1]
 
-	frame := &Frame{
+	*frame = Frame{
 		Final:  (b0 & 0x80) != 0,
 		Opcode: Opcode(b0 & 0x0F),
 		Masked: (b1 & 0x80) != 0,
@@ -922,23 +933,23 @@ func (c *Conn) readFrameHeader() (*Frame, uint64, error) {
 	switch frame.Opcode {
 	case ContinuationFrame, TextMessage, BinaryMessage, CloseMessage, PingMessage, PongMessage:
 	default:
-		return nil, 0, failWith(StatusProtocolError, ErrInvalidOpcode)
+		return 0, failWith(StatusProtocolError, ErrInvalidOpcode)
 	}
 	if frame.Masked && !c.isServer {
-		return nil, 0, failWith(StatusProtocolError, ErrMaskedFrame)
+		return 0, failWith(StatusProtocolError, ErrMaskedFrame)
 	}
 	if !frame.Masked && c.isServer {
-		return nil, 0, failWith(StatusProtocolError, ErrUnmaskedFrame)
+		return 0, failWith(StatusProtocolError, ErrUnmaskedFrame)
 	}
 
 	// Control frames must not be fragmented
 	if !frame.Final && frame.Opcode >= 0x8 {
-		return nil, 0, failWith(StatusProtocolError, ErrControlFrameFragment)
+		return 0, failWith(StatusProtocolError, ErrControlFrameFragment)
 	}
 
 	// Control frames must have payload length <= 125
 	if frame.Opcode >= 0x8 && payloadLen > 125 {
-		return nil, 0, failWith(StatusProtocolError, fmt.Errorf("%w: control frame payload too large: %d", ErrPayloadTooLarge, payloadLen))
+		return 0, failWith(StatusProtocolError, fmt.Errorf("%w: control frame payload too large: %d", ErrPayloadTooLarge, payloadLen))
 	}
 
 	// Built-in compression can consume RSV1 only on data message frames.
@@ -957,44 +968,46 @@ func (c *Conn) readFrameHeader() (*Frame, uint64, error) {
 			}
 		}
 		if !consumable {
-			return nil, 0, failWith(StatusProtocolError, ErrUnsupportedExtensions)
+			return 0, failWith(StatusProtocolError, ErrUnsupportedExtensions)
 		}
 	}
 
 	// Read extended payload length if necessary
 	switch payloadLen {
 	case 126:
-		var extLen uint16
-		if err := binary.Read(c.rw, binary.BigEndian, &extLen); err != nil {
+		var ext [2]byte
+		if err := readSmall(c.rw.Reader, ext[:]); err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-				return nil, 0, io.ErrUnexpectedEOF
+				return 0, io.ErrUnexpectedEOF
 			}
-			return nil, 0, fmt.Errorf("failed to read extended payload length: %w", err)
+			return 0, fmt.Errorf("failed to read extended payload length: %w", err)
 		}
+		extLen := binary.BigEndian.Uint16(ext[:])
 		if extLen < 126 {
-			return nil, 0, failWith(StatusProtocolError, ErrInvalidFrame)
+			return 0, failWith(StatusProtocolError, ErrInvalidFrame)
 		}
 		payloadLen = uint64(extLen)
 	case 127:
-		var extLen uint64
-		if err := binary.Read(c.rw, binary.BigEndian, &extLen); err != nil {
+		var ext [8]byte
+		if err := readSmall(c.rw.Reader, ext[:]); err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-				return nil, 0, io.ErrUnexpectedEOF
+				return 0, io.ErrUnexpectedEOF
 			}
-			return nil, 0, fmt.Errorf("failed to read extended payload length: %w", err)
+			return 0, fmt.Errorf("failed to read extended payload length: %w", err)
 		}
+		extLen := binary.BigEndian.Uint64(ext[:])
 		if extLen >= (1<<63) || extLen < 65536 {
-			return nil, 0, failWith(StatusProtocolError, ErrInvalidFrame)
+			return 0, failWith(StatusProtocolError, ErrInvalidFrame)
 		}
 		payloadLen = extLen
 	}
 	// Validate lengths before converting to int or allocating payload storage.
 	if payloadLen > uint64(^uint(0)>>1) ||
 		(c.maxBytes > 0 && frame.Opcode < CloseMessage && payloadLen > uint64(c.maxBytes)) {
-		return nil, 0, failWith(StatusMessageTooBig, ErrPayloadTooLarge)
+		return 0, failWith(StatusMessageTooBig, ErrPayloadTooLarge)
 	}
 
-	return frame, payloadLen, nil
+	return payloadLen, nil
 }
 
 // validateMessageHeader rejects a frame before its payload is read whenever
@@ -1033,7 +1046,8 @@ func (c *Conn) validateMessageHeader(frame *Frame, payloadLen uint64, started bo
 
 // readFrame reads a single frame without reassembled-message state.
 func (c *Conn) readFrame() (*Frame, error) {
-	frame, payloadLen, err := c.readFrameHeader()
+	frame := new(Frame)
+	payloadLen, err := c.readFrameHeader(frame)
 	if err != nil {
 		return nil, err
 	}
@@ -1070,7 +1084,7 @@ func (c *Conn) readFrameBodyText(frame *Frame, payloadLen uint64, checkText bool
 	}
 	// Read masking key if necessary
 	if frame.Masked {
-		if _, err := io.ReadFull(c.rw, frame.MaskKey[:]); err != nil {
+		if err := readSmall(c.rw.Reader, frame.MaskKey[:]); err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 				return 0, io.ErrUnexpectedEOF
 			}
@@ -1080,16 +1094,12 @@ func (c *Conn) readFrameBodyText(frame *Frame, payloadLen uint64, checkText bool
 
 	// Read payload data
 	if payloadLen > 0 {
-		// Grow with bytes actually received, never with an untrusted length
-		// declaration alone, including when no application limit was set.
+		r := payloadReader{r: c.rw.Reader, remaining: int64(payloadLen), key: frame.MaskKey, masked: frame.Masked, text: checkText}
 		if checkText {
-			r := &textPayloadReader{r: c.rw.Reader, remaining: int64(payloadLen), key: frame.MaskKey, masked: frame.Masked}
 			r.pending = byte(copy(r.carry[:], tail))
-			frame.Payload, err = io.ReadAll(r)
-			pending = int(r.pending)
-		} else {
-			frame.Payload, err = io.ReadAll(io.LimitReader(c.rw, int64(payloadLen)))
 		}
+		frame.Payload, err = r.readAll()
+		pending = int(r.pending)
 		if err != nil {
 			// Preserve the typed protocol failure for failRead's close mapping.
 			if _, invalid := err.(*readFailure); invalid {
@@ -1100,13 +1110,22 @@ func (c *Conn) readFrameBodyText(frame *Frame, payloadLen uint64, checkText bool
 		if uint64(len(frame.Payload)) != payloadLen {
 			return 0, io.ErrUnexpectedEOF
 		}
-
-		// Unmask payload if necessary
-		if frame.Masked && !checkText {
-			xor(frame.MaskKey[:], frame.Payload)
-		}
 	}
 	return pending, nil
+}
+
+// readSmall fills p, which must be no larger than br's buffer, from br. It
+// returns io.EOF if no byte was available and io.ErrUnexpectedEOF if only
+// some were. Unlike io.ReadFull, it never hands p to an io.Reader, so a
+// stack-allocated p stays on the stack.
+func readSmall(br *bufio.Reader, p []byte) error {
+	b, err := br.Peek(len(p))
+	n := copy(p, b)
+	_, _ = br.Discard(n)
+	if err == io.EOF && n > 0 {
+		return io.ErrUnexpectedEOF
+	}
+	return err
 }
 
 // processIncomingFrame passes a complete frame through the enabled extensions
@@ -1120,7 +1139,7 @@ func (c *Conn) processIncomingFrame(frame *Frame) error {
 					err = pmd.processIncomingFrame(frame, c.maxBytes)
 				}
 			} else {
-				err = ext.ProcessIncomingFrame(frame)
+				err = processIncomingFrame(ext, frame)
 			}
 			if err != nil {
 				cause := fmt.Errorf("extension %s failed to process incoming frame: %w", ext.Name(), err)
@@ -1138,10 +1157,20 @@ func (c *Conn) processIncomingFrame(frame *Frame) error {
 	return nil
 }
 
-// textPayloadReader bounds a single frame without preallocating from its wire
-// length. Only newly received bytes are unmasked and validated. The mask phase
-// resets each frame, while carry bridges an incomplete rune across frames.
-type textPayloadReader struct {
+// processIncomingFrame calls a custom extension with a heap copy of frame,
+// so that frames the connection reads can stay on its stack.
+func processIncomingFrame(ext Extension, frame *Frame) error {
+	f := *frame
+	err := ext.ProcessIncomingFrame(&f)
+	*frame = f
+	return err
+}
+
+// payloadReader reads a single frame's payload without preallocating from its
+// wire length. Only newly received bytes are unmasked and, for text, validated.
+// The mask phase resets each frame, while carry bridges an incomplete rune
+// across frames.
+type payloadReader struct {
 	r         *bufio.Reader
 	remaining int64
 	key       [4]byte
@@ -1149,9 +1178,42 @@ type textPayloadReader struct {
 	phase     byte
 	pending   byte
 	masked    bool
+	text      bool // Validate UTF-8 as bytes arrive.
 }
 
-func (r *textPayloadReader) Read(p []byte) (int, error) {
+// minPayloadAlloc is the most payload storage readAll allocates before any of
+// a frame's bytes arrive. It matches the connection's read buffer, so a peer
+// that declares a large frame and then stalls costs at most twice the memory
+// of an idle connection.
+const minPayloadAlloc = 4096
+
+// readAll reads the rest of the payload. Storage grows with the bytes that
+// have actually arrived, never with the declared length alone: it starts at
+// minPayloadAlloc or what is already buffered, then doubles. The result's
+// capacity is its length, so the caller may keep it without trimming.
+func (r *payloadReader) readAll() ([]byte, error) {
+	n := int(r.remaining)
+	buf := make([]byte, min(n, max(minPayloadAlloc, r.r.Buffered())))
+	var read int
+	for read < n {
+		if read == len(buf) {
+			grown := make([]byte, min(n, 2*len(buf)))
+			copy(grown, buf)
+			buf = grown
+		}
+		m, err := r.Read(buf[read:])
+		read += m
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return buf[:read], err
+		}
+	}
+	return buf[:read], nil
+}
+
+func (r *payloadReader) Read(p []byte) (int, error) {
 	if r.remaining <= 0 {
 		return 0, io.EOF
 	}
@@ -1168,14 +1230,14 @@ func (r *textPayloadReader) Read(p []byte) (int, error) {
 		}
 		// Invalid bytes prove a protocol failure even if this read also
 		// delivered a transport error. Otherwise preserve that error.
-		if !r.check(p[:n]) {
+		if r.text && !r.check(p[:n]) {
 			return n, failWith(StatusInvalidFramePayloadData, ErrInvalidFrame)
 		}
 	}
 	return n, err
 }
 
-func (r *textPayloadReader) check(p []byte) bool {
+func (r *payloadReader) check(p []byte) bool {
 	// Complete the previous chunk's rune with at most three new bytes.
 	for r.pending > 0 && len(p) > 0 {
 		r.carry[r.pending] = p[0]
@@ -1242,13 +1304,18 @@ func (c *Conn) writeFrame(frame *Frame) error {
 // writeFrameExtensions passes frame through the already-resolved enabled
 // extensions, then writes it. writeMu must be held.
 func (c *Conn) writeFrameExtensions(frame *Frame, enabled []Extension) error {
+	if len(enabled) == 0 {
+		return c.writeFrameRaw(frame)
+	}
+	// Extensions get a heap copy, so that callers' frames can stay on their
+	// stacks when no extension is enabled.
+	f := *frame
 	for _, ext := range enabled {
-		if err := ext.ProcessOutgoingFrame(frame); err != nil {
+		if err := ext.ProcessOutgoingFrame(&f); err != nil {
 			return fmt.Errorf("extension %s failed to process outgoing frame: %v", ext.Name(), err)
 		}
 	}
-
-	return c.writeFrameRaw(frame)
+	return c.writeFrameRaw(&f)
 }
 
 // writeFrameRaw encodes a frame without calling extensions. writeMu must be
@@ -1279,67 +1346,99 @@ func (c *Conn) writeFrameBuffer(frame *Frame, owned bool) error {
 		b1 |= 0x80
 	}
 
-	payloadLen := len(frame.Payload)
-	var header [14]byte // Maximum header size
-
-	headerPos := 0
-	header[headerPos] = b0
-	headerPos++
-	header[headerPos] = b1
-	headerPos++
+	// Encode the header straight into the write buffer, which every frame
+	// flushes, so a whole small frame reaches the transport in one write.
+	w := c.rw.Writer
+	if w.Available() < maxFrameHeaderSize {
+		if err := w.Flush(); err != nil {
+			c.writeErr = err
+			return fmt.Errorf("%w: failed to write frame header: %w", ErrWriteFailed, err)
+		}
+	}
+	header := append(w.AvailableBuffer(), b0, b1)
 
 	// Extended payload length
+	payloadLen := len(frame.Payload)
 	if payloadLen <= 125 {
 		header[1] |= byte(payloadLen)
 	} else if payloadLen <= 65535 {
 		header[1] |= 126
-		binary.BigEndian.PutUint16(header[headerPos:], uint16(payloadLen))
-		headerPos += 2
+		header = binary.BigEndian.AppendUint16(header, uint16(payloadLen))
 	} else {
 		header[1] |= 127
-		binary.BigEndian.PutUint64(header[headerPos:], uint64(payloadLen))
-		headerPos += 8
+		header = binary.BigEndian.AppendUint64(header, uint64(payloadLen))
 	}
 
 	// Masking key
 	if frame.Masked {
-		if _, err := rand.Read(frame.MaskKey[:]); err != nil {
+		header = append(header, 0, 0, 0, 0)
+		key := header[len(header)-4:]
+		if _, err := rand.Read(key); err != nil {
 			return fmt.Errorf("%w: failed to generate masking key: %v", ErrWriteFailed, err)
 		}
-		copy(header[headerPos:], frame.MaskKey[:])
-		headerPos += 4
+		frame.MaskKey = [4]byte(key)
 	}
 
 	// Write header
-	if _, err := c.rw.Write(header[:headerPos]); err != nil {
+	if _, err := w.Write(header); err != nil {
 		c.writeErr = err
 		return fmt.Errorf("%w: failed to write frame header: %w", ErrWriteFailed, err)
 	}
 
-	// Mask payload if necessary
-	if frame.Masked && len(frame.Payload) > 0 {
+	// Write payload
+	var err error
+	switch {
+	case len(frame.Payload) == 0:
+	case !frame.Masked:
+		_, err = w.Write(frame.Payload)
+	case owned:
+		xor(frame.MaskKey[:], frame.Payload)
+		_, err = w.Write(frame.Payload)
+	default:
 		// Never mutate the caller's slice, even temporarily. It may be shared
 		// with another connection or being inspected by the application.
-		if !owned {
-			frame.Payload = bytes.Clone(frame.Payload)
-		}
-		xor(frame.MaskKey[:], frame.Payload)
+		err = writeMasked(w, frame.MaskKey, frame.Payload)
 	}
-
-	// Write payload
-	if len(frame.Payload) > 0 {
-		if _, err := c.rw.Write(frame.Payload); err != nil {
-			c.writeErr = err
-			return fmt.Errorf("%w: failed to write frame payload: %w", ErrWriteFailed, err)
-		}
+	if err != nil {
+		c.writeErr = err
+		return fmt.Errorf("%w: failed to write frame payload: %w", ErrWriteFailed, err)
 	}
 
 	// Flush the buffer to ensure the data is sent
-	if err := c.rw.Flush(); err != nil {
+	if err := w.Flush(); err != nil {
 		c.writeErr = err
 		return fmt.Errorf("%w: failed to flush data: %w", ErrWriteFailed, err)
 	}
 
+	return nil
+}
+
+// maxFrameHeaderSize is the largest frame header: two fixed bytes, an eight
+// byte extended length and a four byte masking key (RFC 6455 section 5.2).
+const maxFrameHeaderSize = 14
+
+// writeMasked writes p masked with key, copying it through w's buffer one
+// buffer at a time, so that masking needs no storage of its own.
+//
+// https://www.rfc-editor.org/rfc/rfc6455#section-5.3
+func writeMasked(w *bufio.Writer, key [4]byte, p []byte) error {
+	for len(p) > 0 {
+		if w.Available() == 0 {
+			if err := w.Flush(); err != nil {
+				return err
+			}
+		}
+		buf := w.AvailableBuffer()
+		n := min(len(p), cap(buf))
+		buf = append(buf, p[:n]...)
+		xor(key[:], buf)
+		if _, err := w.Write(buf); err != nil {
+			return err
+		}
+		p = p[n:]
+		// Continue the four-byte mask cycle where this chunk left it.
+		key = [4]byte{key[n&3], key[(n+1)&3], key[(n+2)&3], key[(n+3)&3]}
+	}
 	return nil
 }
 

@@ -62,7 +62,7 @@ go tool pprof -alloc_space -top mem.out
   assembly. It covers one or four frames, both masking directions, short and
   extended-length headers, and payload sizes up to 1 MiB. Independent fixtures
   and unit tests check their exact decoded bytes.
-- `WriteMessage`: framing, optional random mask generation, allocation, and
+- `WriteMessage`: framing, optional random mask generation, and
   masking on a reused connection writing to `io.Discard`. In particular,
   server/unmasked output can bypass payload copying and the sink does not touch
   its bytes. Reported MB/s is logical payload bytes per second, **not** network
@@ -201,7 +201,7 @@ go test -run '^$' -bench 'IdleConn' -benchtime=1x -count=10 | tee -a new.txt
 
 ### Indicative results
 
-These are medians of 5 runs on a shared 4-vCPU cloud VM (Intel Xeon @ 2.10GHz,
+These are medians of 5 runs on a shared 4-vCPU cloud VM (Intel Xeon @ 2.80GHz,
 linux/amd64, Go 1.27.0, coder v1.8.15, gorilla v1.5.3, gobwas v1.4.0), taken on
 2026-10-17. Raw output is in
 [`benchmarks/results`](benchmarks/results/2026-10-17-linux-amd64.txt). A shared VM
@@ -213,36 +213,37 @@ Echo round trip, time per op (lower is better):
 
 | Message | picatz | coder | gorilla | gobwas |
 | ---: | ---: | ---: | ---: | ---: |
-| 16 B | 7.5 µs | 8.4 µs | 7.0 µs | 13.9 µs |
-| 1 KiB | 11.3 µs | 11.6 µs | 10.1 µs | 20.9 µs |
-| 16 KiB | 65 µs | 72 µs | 60 µs | 66 µs |
-| 256 KiB | 775 µs | 894 µs | 1070 µs | 1115 µs |
+| 16 B | 15.0 µs | 20.2 µs | 16.8 µs | 32.7 µs |
+| 1 KiB | 17.1 µs | 23.2 µs | 21.1 µs | 40.2 µs |
+| 16 KiB | 98 µs | 136 µs | 113 µs | 125 µs |
+| 256 KiB | 1125 µs | 1390 µs | 1445 µs | 1225 µs |
 
 Echo round trip, allocations and bytes per op, both endpoints:
 
 | Message | picatz | coder | gorilla | gobwas |
 | ---: | ---: | ---: | ---: | ---: |
-| 16 B | 17 / 1.3 KiB | 2 / 1.0 KiB | 5 / 1.1 KiB | 11 / 1.5 KiB |
-| 1 KiB | 23 / 5.5 KiB | 8 / 4.3 KiB | 11 / 4.3 KiB | 16 / 4.7 KiB |
-| 16 KiB | 41 / 90 KiB | 26 / 74 KiB | 31 / 74 KiB | 34 / 75 KiB |
-| 256 KiB | 55 / 1.45 MiB | 40 / 1.20 MiB | 45 / 1.20 MiB | 49 / 1.45 MiB |
+| 16 B | 2 / 32 B | 2 / 1.0 KiB | 5 / 1.1 KiB | 11 / 1.5 KiB |
+| 1 KiB | 2 / 2.0 KiB | 8 / 4.3 KiB | 11 / 4.3 KiB | 16 / 4.7 KiB |
+| 16 KiB | 6 / 56 KiB | 26 / 74 KiB | 31 / 74 KiB | 34 / 75 KiB |
+| 256 KiB | 14 / 0.99 MiB | 40 / 1.20 MiB | 45 / 1.20 MiB | 49 / 1.45 MiB |
 
 Parallel echo (1 KiB), handshake and idle memory:
 
 | Workload | picatz | coder | gorilla | gobwas |
 | --- | ---: | ---: | ---: | ---: |
-| `EchoParallel` time/op | 10.7 µs | 11.1 µs | 10.4 µs | 15.1 µs |
-| `Handshake` time/op | 205 µs | 291 µs | 207 µs | 166 µs |
-| `Handshake` allocs/op | 131 | 231 | 121 | 75 |
-| `IdleConn` bytes/conn | 21.3 KiB | 23.7 KiB | 15.3 KiB | 14.5 KiB |
+| `EchoParallel` time/op | 14.2 µs | 17.6 µs | 16.7 µs | 23.7 µs |
+| `Handshake` time/op | 323 µs | 453 µs | 336 µs | 257 µs |
+| `Handshake` allocs/op | 123 | 231 | 121 | 75 |
+| `IdleConn` bytes/conn | 20.8 KiB | 23.0 KiB | 14.8 KiB | 13.8 KiB |
 
-The baseline for `IdleConn` was 14.7 KiB per connection.
+The baseline for `IdleConn` was 14.1 KiB per connection.
 
-On this machine the throughput is in the same range as the other libraries.
-The clear gap is allocations: this package allocates more objects per message
-than any of the three, about 15 more than coder on a 16-byte echo, and holds
-about 6 KiB more per idle connection than gorilla. Those are the places to
-work on.
+Without extensions, a message costs one allocation on each endpoint: the
+payload `ReadMessage` returns. Writes allocate nothing, including client
+masking. Messages larger than 4 KiB that have not fully arrived take a few more,
+because read storage grows with the bytes received rather than trusting the
+declared frame length. The remaining gap is idle memory: about 6 KiB more per
+connection than gorilla.
 
 [`coder/websocket`]: https://github.com/coder/websocket
 [`gorilla/websocket`]: https://github.com/gorilla/websocket
