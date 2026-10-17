@@ -1,0 +1,158 @@
+go version go1.27.0 linux/amd64
+goos: linux
+goarch: amd64
+pkg: github.com/picatz/websocket/benchmarks
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkEcho/size=16/lib=picatz-4         	  134749	      8315 ns/op	   1.92 MB/s	    1350 B/op	      17 allocs/op
+BenchmarkEcho/size=16/lib=picatz-4         	  157556	      8021 ns/op	   1.99 MB/s	    1350 B/op	      17 allocs/op
+BenchmarkEcho/size=16/lib=picatz-4         	  142044	      7506 ns/op	   2.13 MB/s	    1350 B/op	      17 allocs/op
+BenchmarkEcho/size=16/lib=picatz-4         	  170516	      7194 ns/op	   2.22 MB/s	    1350 B/op	      17 allocs/op
+BenchmarkEcho/size=16/lib=picatz-4         	  157928	      7485 ns/op	   2.14 MB/s	    1350 B/op	      17 allocs/op
+BenchmarkEcho/size=16/lib=coder-4          	  149428	      8266 ns/op	   1.94 MB/s	    1024 B/op	       2 allocs/op
+BenchmarkEcho/size=16/lib=coder-4          	  146646	      8421 ns/op	   1.90 MB/s	    1024 B/op	       2 allocs/op
+BenchmarkEcho/size=16/lib=coder-4          	  139586	      8521 ns/op	   1.88 MB/s	    1024 B/op	       2 allocs/op
+BenchmarkEcho/size=16/lib=coder-4          	  142102	      8185 ns/op	   1.95 MB/s	    1024 B/op	       2 allocs/op
+BenchmarkEcho/size=16/lib=coder-4          	  125943	      8792 ns/op	   1.82 MB/s	    1024 B/op	       2 allocs/op
+BenchmarkEcho/size=16/lib=gorilla-4        	  175106	      7016 ns/op	   2.28 MB/s	    1088 B/op	       5 allocs/op
+BenchmarkEcho/size=16/lib=gorilla-4        	  172296	      7006 ns/op	   2.28 MB/s	    1088 B/op	       5 allocs/op
+BenchmarkEcho/size=16/lib=gorilla-4        	  172312	      7724 ns/op	   2.07 MB/s	    1088 B/op	       5 allocs/op
+BenchmarkEcho/size=16/lib=gorilla-4        	  159134	      6876 ns/op	   2.33 MB/s	    1088 B/op	       5 allocs/op
+BenchmarkEcho/size=16/lib=gorilla-4        	  185400	      6969 ns/op	   2.30 MB/s	    1088 B/op	       5 allocs/op
+BenchmarkEcho/size=16/lib=gobwas-4         	   93316	     12858 ns/op	   1.24 MB/s	    1544 B/op	      11 allocs/op
+BenchmarkEcho/size=16/lib=gobwas-4         	  100760	     13857 ns/op	   1.15 MB/s	    1544 B/op	      11 allocs/op
+BenchmarkEcho/size=16/lib=gobwas-4         	   93714	     13180 ns/op	   1.21 MB/s	    1544 B/op	      11 allocs/op
+BenchmarkEcho/size=16/lib=gobwas-4         	   89590	     14037 ns/op	   1.14 MB/s	    1544 B/op	      11 allocs/op
+BenchmarkEcho/size=16/lib=gobwas-4         	   79694	     13903 ns/op	   1.15 MB/s	    1544 B/op	      11 allocs/op
+BenchmarkEcho/size=1024/lib=picatz-4       	   89593	     11854 ns/op	  86.39 MB/s	    5658 B/op	      23 allocs/op
+BenchmarkEcho/size=1024/lib=picatz-4       	  120772	     10652 ns/op	  96.13 MB/s	    5658 B/op	      23 allocs/op
+BenchmarkEcho/size=1024/lib=picatz-4       	   99274	     12049 ns/op	  84.99 MB/s	    5658 B/op	      23 allocs/op
+BenchmarkEcho/size=1024/lib=picatz-4       	   88867	     11328 ns/op	  90.39 MB/s	    5658 B/op	      23 allocs/op
+BenchmarkEcho/size=1024/lib=picatz-4       	  113298	     10530 ns/op	  97.25 MB/s	    5658 B/op	      23 allocs/op
+BenchmarkEcho/size=1024/lib=coder-4        	  110103	     11326 ns/op	  90.41 MB/s	    4352 B/op	       8 allocs/op
+BenchmarkEcho/size=1024/lib=coder-4        	  103375	     12003 ns/op	  85.31 MB/s	    4352 B/op	       8 allocs/op
+BenchmarkEcho/size=1024/lib=coder-4        	  110394	     11306 ns/op	  90.57 MB/s	    4352 B/op	       8 allocs/op
+BenchmarkEcho/size=1024/lib=coder-4        	  105078	     12070 ns/op	  84.84 MB/s	    4352 B/op	       8 allocs/op
+BenchmarkEcho/size=1024/lib=coder-4        	  111345	     11597 ns/op	  88.30 MB/s	    4352 B/op	       8 allocs/op
+BenchmarkEcho/size=1024/lib=gorilla-4      	  117373	     10117 ns/op	 101.22 MB/s	    4416 B/op	      11 allocs/op
+BenchmarkEcho/size=1024/lib=gorilla-4      	  117507	      9231 ns/op	 110.94 MB/s	    4416 B/op	      11 allocs/op
+BenchmarkEcho/size=1024/lib=gorilla-4      	   99517	     10532 ns/op	  97.22 MB/s	    4416 B/op	      11 allocs/op
+BenchmarkEcho/size=1024/lib=gorilla-4      	  133731	      8973 ns/op	 114.12 MB/s	    4416 B/op	      11 allocs/op
+BenchmarkEcho/size=1024/lib=gorilla-4      	  134467	     10215 ns/op	 100.25 MB/s	    4416 B/op	      11 allocs/op
+BenchmarkEcho/size=1024/lib=gobwas-4       	   63213	     20460 ns/op	  50.05 MB/s	    4858 B/op	      16 allocs/op
+BenchmarkEcho/size=1024/lib=gobwas-4       	   58395	     19240 ns/op	  53.22 MB/s	    4858 B/op	      16 allocs/op
+BenchmarkEcho/size=1024/lib=gobwas-4       	   53707	     22793 ns/op	  44.93 MB/s	    4858 B/op	      16 allocs/op
+BenchmarkEcho/size=1024/lib=gobwas-4       	   49524	     22110 ns/op	  46.31 MB/s	    4858 B/op	      16 allocs/op
+BenchmarkEcho/size=1024/lib=gobwas-4       	   54784	     20921 ns/op	  48.95 MB/s	    4858 B/op	      16 allocs/op
+BenchmarkEcho/size=16384/lib=picatz-4      	   18378	     65011 ns/op	 252.02 MB/s	   92187 B/op	      41 allocs/op
+BenchmarkEcho/size=16384/lib=picatz-4      	   18706	     63711 ns/op	 257.16 MB/s	   92187 B/op	      41 allocs/op
+BenchmarkEcho/size=16384/lib=picatz-4      	   18778	     64214 ns/op	 255.15 MB/s	   92187 B/op	      41 allocs/op
+BenchmarkEcho/size=16384/lib=picatz-4      	   17496	     67817 ns/op	 241.59 MB/s	   92187 B/op	      41 allocs/op
+BenchmarkEcho/size=16384/lib=picatz-4      	   16359	     73473 ns/op	 222.99 MB/s	   92187 B/op	      41 allocs/op
+BenchmarkEcho/size=16384/lib=coder-4       	   16459	     74628 ns/op	 219.54 MB/s	   75520 B/op	      26 allocs/op
+BenchmarkEcho/size=16384/lib=coder-4       	   16110	     73075 ns/op	 224.21 MB/s	   75520 B/op	      26 allocs/op
+BenchmarkEcho/size=16384/lib=coder-4       	   16554	     72150 ns/op	 227.08 MB/s	   75520 B/op	      26 allocs/op
+BenchmarkEcho/size=16384/lib=coder-4       	   17170	     70604 ns/op	 232.06 MB/s	   75520 B/op	      26 allocs/op
+BenchmarkEcho/size=16384/lib=coder-4       	   16916	     70717 ns/op	 231.68 MB/s	   75520 B/op	      26 allocs/op
+BenchmarkEcho/size=16384/lib=gorilla-4     	   20742	     59577 ns/op	 275.01 MB/s	   75656 B/op	      31 allocs/op
+BenchmarkEcho/size=16384/lib=gorilla-4     	   20188	     62128 ns/op	 263.72 MB/s	   75656 B/op	      31 allocs/op
+BenchmarkEcho/size=16384/lib=gorilla-4     	   19741	     57818 ns/op	 283.37 MB/s	   75656 B/op	      31 allocs/op
+BenchmarkEcho/size=16384/lib=gorilla-4     	   19964	     60788 ns/op	 269.53 MB/s	   75656 B/op	      31 allocs/op
+BenchmarkEcho/size=16384/lib=gorilla-4     	   22868	     57625 ns/op	 284.32 MB/s	   75656 B/op	      31 allocs/op
+BenchmarkEcho/size=16384/lib=gobwas-4      	   18430	     64284 ns/op	 254.87 MB/s	   76546 B/op	      34 allocs/op
+BenchmarkEcho/size=16384/lib=gobwas-4      	   17929	     65567 ns/op	 249.88 MB/s	   76533 B/op	      34 allocs/op
+BenchmarkEcho/size=16384/lib=gobwas-4      	   18052	     67154 ns/op	 243.98 MB/s	   76527 B/op	      34 allocs/op
+BenchmarkEcho/size=16384/lib=gobwas-4      	   18331	     64321 ns/op	 254.72 MB/s	   76514 B/op	      34 allocs/op
+BenchmarkEcho/size=16384/lib=gobwas-4      	   17268	     69777 ns/op	 234.81 MB/s	   76518 B/op	      34 allocs/op
+BenchmarkEcho/size=262144/lib=picatz-4     	    1321	    820721 ns/op	 319.41 MB/s	 1521723 B/op	      55 allocs/op
+BenchmarkEcho/size=262144/lib=picatz-4     	    1647	    743512 ns/op	 352.58 MB/s	 1521722 B/op	      55 allocs/op
+BenchmarkEcho/size=262144/lib=picatz-4     	    1492	    775304 ns/op	 338.12 MB/s	 1521726 B/op	      55 allocs/op
+BenchmarkEcho/size=262144/lib=picatz-4     	    1531	    792355 ns/op	 330.84 MB/s	 1521726 B/op	      55 allocs/op
+BenchmarkEcho/size=262144/lib=picatz-4     	    1449	    767718 ns/op	 341.46 MB/s	 1521723 B/op	      55 allocs/op
+BenchmarkEcho/size=262144/lib=coder-4      	    1333	    893966 ns/op	 293.24 MB/s	 1259265 B/op	      40 allocs/op
+BenchmarkEcho/size=262144/lib=coder-4      	    1425	    871048 ns/op	 300.95 MB/s	 1259270 B/op	      40 allocs/op
+BenchmarkEcho/size=262144/lib=coder-4      	    1346	    857319 ns/op	 305.77 MB/s	 1259265 B/op	      40 allocs/op
+BenchmarkEcho/size=262144/lib=coder-4      	    1368	   1004378 ns/op	 261.00 MB/s	 1259264 B/op	      40 allocs/op
+BenchmarkEcho/size=262144/lib=coder-4      	    1174	   1092636 ns/op	 239.92 MB/s	 1259267 B/op	      40 allocs/op
+BenchmarkEcho/size=262144/lib=gorilla-4    	    1179	   1036597 ns/op	 252.89 MB/s	 1259401 B/op	      45 allocs/op
+BenchmarkEcho/size=262144/lib=gorilla-4    	    1208	   1016428 ns/op	 257.91 MB/s	 1259403 B/op	      45 allocs/op
+BenchmarkEcho/size=262144/lib=gorilla-4    	    1094	   1124250 ns/op	 233.17 MB/s	 1259402 B/op	      45 allocs/op
+BenchmarkEcho/size=262144/lib=gorilla-4    	    1080	   1155869 ns/op	 226.79 MB/s	 1259404 B/op	      45 allocs/op
+BenchmarkEcho/size=262144/lib=gorilla-4    	    1108	   1069906 ns/op	 245.02 MB/s	 1259403 B/op	      45 allocs/op
+BenchmarkEcho/size=262144/lib=gobwas-4     	    1222	   1062290 ns/op	 246.77 MB/s	 1521918 B/op	      49 allocs/op
+BenchmarkEcho/size=262144/lib=gobwas-4     	    1196	   1193064 ns/op	 219.72 MB/s	 1521918 B/op	      49 allocs/op
+BenchmarkEcho/size=262144/lib=gobwas-4     	     918	   1090954 ns/op	 240.29 MB/s	 1521918 B/op	      49 allocs/op
+BenchmarkEcho/size=262144/lib=gobwas-4     	    1154	   1131601 ns/op	 231.66 MB/s	 1521916 B/op	      49 allocs/op
+BenchmarkEcho/size=262144/lib=gobwas-4     	    1010	   1114556 ns/op	 235.20 MB/s	 1521919 B/op	      49 allocs/op
+BenchmarkEchoParallel/size=1024/lib=picatz-4         	   90568	     13202 ns/op	  77.56 MB/s	    5660 B/op	      23 allocs/op
+BenchmarkEchoParallel/size=1024/lib=picatz-4         	   96062	     11259 ns/op	  90.95 MB/s	    5660 B/op	      23 allocs/op
+BenchmarkEchoParallel/size=1024/lib=picatz-4         	  114196	     10331 ns/op	  99.12 MB/s	    5660 B/op	      23 allocs/op
+BenchmarkEchoParallel/size=1024/lib=picatz-4         	  122739	     10733 ns/op	  95.41 MB/s	    5660 B/op	      23 allocs/op
+BenchmarkEchoParallel/size=1024/lib=picatz-4         	  113811	     10740 ns/op	  95.34 MB/s	    5660 B/op	      23 allocs/op
+BenchmarkEchoParallel/size=1024/lib=coder-4          	  114222	     11312 ns/op	  90.53 MB/s	    4353 B/op	       8 allocs/op
+BenchmarkEchoParallel/size=1024/lib=coder-4          	  119460	     10619 ns/op	  96.43 MB/s	    4353 B/op	       8 allocs/op
+BenchmarkEchoParallel/size=1024/lib=coder-4          	  114430	     10634 ns/op	  96.29 MB/s	    4353 B/op	       8 allocs/op
+BenchmarkEchoParallel/size=1024/lib=coder-4          	   96565	     11108 ns/op	  92.18 MB/s	    4353 B/op	       8 allocs/op
+BenchmarkEchoParallel/size=1024/lib=coder-4          	   97508	     12274 ns/op	  83.43 MB/s	    4353 B/op	       8 allocs/op
+BenchmarkEchoParallel/size=1024/lib=gorilla-4        	  114883	     10599 ns/op	  96.61 MB/s	    4417 B/op	      11 allocs/op
+BenchmarkEchoParallel/size=1024/lib=gorilla-4        	  107906	     10589 ns/op	  96.70 MB/s	    4417 B/op	      11 allocs/op
+BenchmarkEchoParallel/size=1024/lib=gorilla-4        	  116870	      9741 ns/op	 105.13 MB/s	    4417 B/op	      11 allocs/op
+BenchmarkEchoParallel/size=1024/lib=gorilla-4        	  123619	      9786 ns/op	 104.64 MB/s	    4417 B/op	      11 allocs/op
+BenchmarkEchoParallel/size=1024/lib=gorilla-4        	  116527	     10387 ns/op	  98.58 MB/s	    4417 B/op	      11 allocs/op
+BenchmarkEchoParallel/size=1024/lib=gobwas-4         	   87768	     14777 ns/op	  69.30 MB/s	    4859 B/op	      16 allocs/op
+BenchmarkEchoParallel/size=1024/lib=gobwas-4         	   81222	     14157 ns/op	  72.33 MB/s	    4859 B/op	      16 allocs/op
+BenchmarkEchoParallel/size=1024/lib=gobwas-4         	   82471	     15562 ns/op	  65.80 MB/s	    4859 B/op	      16 allocs/op
+BenchmarkEchoParallel/size=1024/lib=gobwas-4         	   74632	     15692 ns/op	  65.25 MB/s	    4859 B/op	      16 allocs/op
+BenchmarkEchoParallel/size=1024/lib=gobwas-4         	   84806	     15092 ns/op	  67.85 MB/s	    4859 B/op	      16 allocs/op
+BenchmarkHandshake/lib=picatz-4                      	    5611	    207333 ns/op	   36791 B/op	     131 allocs/op
+BenchmarkHandshake/lib=picatz-4                      	    6104	    205169 ns/op	   36793 B/op	     131 allocs/op
+BenchmarkHandshake/lib=picatz-4                      	    6822	    182563 ns/op	   36790 B/op	     131 allocs/op
+BenchmarkHandshake/lib=picatz-4                      	    5064	    233295 ns/op	   36793 B/op	     131 allocs/op
+BenchmarkHandshake/lib=picatz-4                      	    5620	    201285 ns/op	   36793 B/op	     131 allocs/op
+BenchmarkHandshake/lib=coder-4                       	    4068	    291212 ns/op	   32360 B/op	     231 allocs/op
+BenchmarkHandshake/lib=coder-4                       	    4215	    281580 ns/op	   32358 B/op	     231 allocs/op
+BenchmarkHandshake/lib=coder-4                       	    3948	    294834 ns/op	   32368 B/op	     231 allocs/op
+BenchmarkHandshake/lib=coder-4                       	    4708	    285567 ns/op	   32352 B/op	     231 allocs/op
+BenchmarkHandshake/lib=coder-4                       	    4201	    300594 ns/op	   32377 B/op	     231 allocs/op
+BenchmarkHandshake/lib=gorilla-4                     	    5660	    227435 ns/op	   29538 B/op	     121 allocs/op
+BenchmarkHandshake/lib=gorilla-4                     	    6112	    195166 ns/op	   29535 B/op	     121 allocs/op
+BenchmarkHandshake/lib=gorilla-4                     	    5709	    207371 ns/op	   29538 B/op	     121 allocs/op
+BenchmarkHandshake/lib=gorilla-4                     	    5473	    194159 ns/op	   29536 B/op	     121 allocs/op
+BenchmarkHandshake/lib=gorilla-4                     	    6285	    227183 ns/op	   29537 B/op	     121 allocs/op
+BenchmarkHandshake/lib=gobwas-4                      	    6051	    180339 ns/op	   12768 B/op	      75 allocs/op
+BenchmarkHandshake/lib=gobwas-4                      	    6891	    169754 ns/op	   12756 B/op	      75 allocs/op
+BenchmarkHandshake/lib=gobwas-4                      	    6848	    166107 ns/op	   12759 B/op	      75 allocs/op
+BenchmarkHandshake/lib=gobwas-4                      	    8234	    155871 ns/op	   12757 B/op	      75 allocs/op
+BenchmarkHandshake/lib=gobwas-4                      	    8498	    156165 ns/op	   12757 B/op	      75 allocs/op
+PASS
+ok  	github.com/picatz/websocket/benchmarks	148.486s
+goos: linux
+goarch: amd64
+pkg: github.com/picatz/websocket/benchmarks
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkIdleConn/lib=baseline-4         	       1	     17695 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=baseline-4         	       1	     15385 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=baseline-4         	       1	     14680 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=baseline-4         	       1	     14238 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=baseline-4         	       1	     14647 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=picatz-4           	       1	     19808 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=picatz-4           	       1	     21250 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=picatz-4           	       1	     21627 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=picatz-4           	       1	     21103 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=picatz-4           	       1	     22004 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=coder-4            	       1	     23822 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=coder-4            	       1	     23658 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=coder-4            	       1	     23446 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=coder-4            	       1	     23675 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=coder-4            	       1	     23773 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=gorilla-4          	       1	     17498 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=gorilla-4          	       1	     16024 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=gorilla-4          	       1	     14942 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=gorilla-4          	       1	     14418 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=gorilla-4          	       1	     15303 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=gobwas-4           	       1	     14369 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=gobwas-4           	       1	     14860 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=gobwas-4           	       1	     14549 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=gobwas-4           	       1	     15008 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=gobwas-4           	       1	     14483 B/conn	         1.000 goroutines/conn
+PASS
+ok  	github.com/picatz/websocket/benchmarks	3.768s
