@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,103 +12,6 @@ import (
 
 	"github.com/picatz/websocket"
 )
-
-func ExampleUpgrade() {
-	handlerFunc := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := websocket.Upgrade(w, r)
-		if err != nil {
-			http.Error(w, "Could not open WebSocket connection", http.StatusBadRequest)
-			return
-		}
-		defer conn.Close()
-
-		for {
-			messageType, message, err := conn.ReadMessage()
-			if err != nil {
-				// Connection closed by peer, or an error occurred.
-				break
-			}
-
-			if err := conn.WriteMessage(messageType, message); err != nil {
-				break
-			}
-		}
-	})
-
-	// Create an HTTP test server
-	server := httptest.NewServer(handlerFunc)
-	defer server.Close()
-
-	// Convert the server URL to a WebSocket URL
-	wsURL := "ws" + server.URL[len("http"):]
-
-	// Connect to the WebSocket server
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
-	defer cancel()
-
-	conn, resp, err := websocket.Dial(ctx, wsURL)
-	if err != nil {
-		panic(err)
-	}
-	defer conn.Close()
-	if resp.StatusCode != http.StatusSwitchingProtocols {
-		panic(fmt.Errorf("expected status code %d, got %d", http.StatusSwitchingProtocols, resp.StatusCode))
-	}
-
-	// Send a message
-	testMessage := "Hello, WebSocket!"
-	err = conn.WriteMessage(websocket.TextMessage, []byte(testMessage))
-	if err != nil {
-		panic(err)
-	}
-
-	// Read the echoed message
-	messageType, messageData, err := conn.ReadMessage()
-	if err != nil {
-		panic(err)
-	}
-
-	if messageType != websocket.TextMessage {
-		panic(fmt.Errorf("expected message type %d, got %d", websocket.TextMessage, messageType))
-	}
-
-	fmt.Printf("Received message: %q\n", string(messageData))
-	// Output:
-	// Received message: "Hello, WebSocket!"
-}
-
-func ExampleDial() {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := websocket.Upgrade(w, r)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		defer conn.Close()
-		messageType, data, err := conn.ReadMessage()
-		if err == nil {
-			_ = conn.WriteMessage(messageType, data)
-		}
-	}))
-	defer server.Close()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	conn, _, err := websocket.Dial(ctx, "ws"+server.URL[len("http"):])
-	if err != nil {
-		panic(err)
-	}
-	defer conn.Close()
-	if err := conn.WriteMessage(websocket.TextMessage, []byte("Hello, WebSocket!")); err != nil {
-		panic(err)
-	}
-	_, data, err := conn.ReadMessage()
-	if err != nil {
-		panic(err)
-	}
-	fmt.Printf("Received message: %s\n", data)
-	// Output: Received message: Hello, WebSocket!
-}
 
 // testEchoHandler is a simple WebSocket handler that echoes received messages back to the client.
 func testEchoHandler(t *testing.T, upgradeOptions ...websocket.UpgradeOption) func(w http.ResponseWriter, r *http.Request) {

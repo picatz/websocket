@@ -1,176 +1,102 @@
-// Package websocket provides a small WebSocket client and server implementation.
-// It supports text and binary messages, uncompressed fragmentation, and control
-// frames. It requires Go 1.27 or later and has no third-party dependencies.
+// Package websocket implements the WebSocket protocol defined in [RFC 6455],
+// with the permessage-deflate compression extension of [RFC 7692].
 //
-// # Connections
+// Dial opens a client connection to a ws or wss URL, and Upgrade takes over an
+// HTTP/1.1 request on a server. Both return a *Conn, which sends and receives
+// whole text and binary messages:
 //
-// Use Dial to connect to a ws or wss URL, and Upgrade to take over an HTTP/1.1
-// request on a server. Upgrade allows a missing Origin for native clients;
-// otherwise it requires a single valid HTTP/HTTPS Origin matching r.Host and the
-// actual connection's TLS scheme. Forwarded headers are not trusted. Use
-// WithUpgradeOriginCheck to replace that decision, for example with an exact
-// public-origin allowlist behind a TLS-terminating proxy. Malformed/multiple
-// fields are rejected before a callback. ErrOriginNotAllowed leaves the response
-// writer untouched; the caller may send HTTP 403. Authentication, authorization,
-// and authoritative Host validation remain application responsibilities. Origin
-// is not authentication and non-browser clients can omit or forge it.
+//	conn, _, err := websocket.Dial(ctx, "wss://example.com/socket")
+//	if err != nil {
+//		return err
+//	}
+//	defer conn.Close()
+//	if err := conn.WriteMessage(websocket.TextMessage, []byte("hello")); err != nil {
+//		return err
+//	}
+//	typ, data, err := conn.ReadMessage()
 //
-// The Dial context covers TCP, TLS, any proxy tunnel, and the HTTP upgrade
-// handshake. Once Dial succeeds, canceling that context does not cancel message
-// I/O. Use Conn.ReadMessageContext and Conn.WriteMessageContext to bound a call
-// with a context: when it ends mid-call the connection is aborted, as after a
-// timeout. Call Conn.Close to interrupt reads and writes. NewConn takes over
-// framing and I/O and closes its transport on Close or read failure; do not
-// read or write framed bytes directly on that transport.
+// The package uses only the standard library. Programs compiled for js/wasm
+// use [github.com/picatz/websocket/browser], which drives the host's
+// WebSocket object with the same message API, and
+// [github.com/picatz/websocket/wsjson] reads and writes JSON messages.
 //
-// Conn.LocalAddr, Conn.RemoteAddr and Conn.ConnectionState describe the
-// transport. The wsjson subpackage reads and writes JSON text messages.
+// # Reading, writing and concurrency
+//
+// Read each connection from one goroutine, calling ReadMessage in a loop until
+// it returns an error. ReadMessage also handles control frames: it answers
+// Pings, delivers Pongs to Conn.Ping, and reports the peer's Close frame as a
+// *CloseError. A connection that nobody reads cannot answer a keepalive.
+//
+// Any number of goroutines may write; writes are serialized. Close and the
+// deadline setters may be called from any goroutine and interrupt blocked I/O.
+// When several producers feed one connection, as in a chat room, give it a
+// bounded queue drained by a single writer, and drop a peer whose queue fills
+// instead of blocking every other sender on it.
+//
+// Every error from ReadMessage is terminal: return from the read loop. A write
+// error that reached the transport is terminal too, because a partially
+// written frame cannot be retried.
+//
+// # Contexts and deadlines
+//
+// Dial's context bounds connecting, TLS, any proxy tunnel and the handshake,
+// and nothing after Dial returns. To bound a single call use
+// Conn.ReadMessageContext or Conn.WriteMessageContext; if the context ends
+// mid-call the connection is aborted, exactly as after a deadline expires.
+// Conn.SetDeadline and its variants delegate to the transport and apply to
+// blocked I/O as well.
+//
+// Conn.Ping sends a Ping and waits for the matching Pong. Call it on a ticker
+// with a timeout to detect dead peers; a timeout leaves the connection open,
+// so closing it is the caller's decision.
+//
+// # Closing
+//
+// Conn.Close makes a best-effort attempt, bounded to one second, to send a
+// Close frame with StatusNormalClosure, and then closes the transport without
+// waiting for the peer's reply. Conn.CloseWithStatus sends another code and an
+// optional reason. When the
+// peer closes, ReadMessage returns a *CloseError, which matches io.EOF with
+// errors.Is; CloseStatus extracts its code from any error.
+//
+// # Limits and security
+//
+// Dial and Upgrade reject incoming messages larger than DefaultMaxMessageSize
+// (1 MiB) unless an option sets another limit; the limit applies to each frame
+// and to the reassembled, decompressed message. Dial also bounds the HTTP
+// response head to DefaultMaxResponseHeaderBytes. A connection from NewConn is
+// unlimited unless WithMaxBytes is given.
+//
+// Upgrade accepts requests without an Origin header, as sent by non-browser
+// clients, and otherwise requires the Origin to match the request's host and
+// TLS scheme. It never trusts Forwarded or X-Forwarded-* headers, so behind a
+// TLS-terminating proxy use WithUpgradeOriginCheck with an exact allowlist.
+// Origin checks protect browsers from cross-site use; they are not
+// authentication.
 //
 // # Proxies and custom transports
 //
 // Dial connects directly unless WithProxy selects an HTTP or HTTPS proxy, for
-// example with http.ProxyFromEnvironment. It then tunnels with CONNECT and runs
-// the WebSocket handshake, and TLS for wss, end to end inside the tunnel. Proxy
-// credentials go only to the proxy, and redirects are never followed.
-// WithNetDialContext replaces the TCP dialer, for SOCKS, Unix sockets or tests.
-//
-// Dial separately limits the HTTP response head to DefaultMaxResponseHeaderBytes
-// (1 MiB). WithMaxResponseHeaderBytes overrides it; explicit zero/negative means
-// unlimited, and the last option wins. The budget counts the decrypted status
-// line, all raw header lines and separators, including duplicates/continuations,
-// and the final empty line. Exactly that many bytes fit. Bodies and WebSocket
-// frames do not consume this budget. An exceeded limit matches ErrBadHandshake
-// and ErrResponseHeaderTooLarge and returns no connection or response. It is
-// not a heap or time guarantee; use Dial's context to bound handshake waiting.
-//
-// Conn.SetDeadline, Conn.SetReadDeadline and Conn.SetWriteDeadline delegate to
-// the transport and affect future and currently blocked I/O. A zero time clears
-// a deadline; there is no default message timeout. ReadMessage may write an
-// automatic Pong, so a read deadline alone cannot bound the call. Set an
-// appropriate write deadline too, or use SetDeadline for a shared budget.
-// Any read timeout is terminal. Write timeouts preserve ErrWriteFailed and the
-// underlying cause; close afterward, because partial frames cannot be retried.
-// Already buffered data may still be consumed. Deadlines do not preempt
-// callbacks, extension work, lock waits or custom transport Close implementations.
-// They are not whole-method timeouts.
-//
-// Close sends a best-effort notification and closes the transport without
-// waiting for the peer. When no writer is active, that notification replaces
-// any caller write deadline with a one-second deadline. Read-failure cleanup
-// instead preserves caller deadlines. Conn.CloseWithStatus sends a chosen status
-// code and reason instead of StatusNormalClosure. When the peer closes,
-// ReadMessage returns a *CloseError with its code and reason; CloseStatus
-// extracts the code from any error, and a CloseError matches io.EOF.
-//
-// # Message limits and concurrency
-//
-// Dial and Upgrade default to DefaultMaxMessageSize (1 MiB). Choose an explicit
-// limit with WithMaxMessageSize or WithUpgradeMaxMessageSize; zero/negative means
-// unlimited, and the last option wins. NewConn remains unlimited by default;
-// WithMaxBytes applies only positive limits and ignores non-positive options.
-// Limits bound each incoming data-frame wire payload and reassembled decoded
-// message. Headers, masking keys and controls do not consume the message budget.
-// Writes are not capped. For supported unfragmented built-in compression, encoded
-// and decoded sizes must both fit; incompressible input may need extra headroom.
-// The encoded limit is per frame, not an aggregate compressed-message budget.
-// Custom extensions must bound their own intermediate allocations. A byte cap
-// does not bound total memory, CPU, fragment count, concurrency or lifetime.
-//
-// Reads and writes are independently serialized. Close may be called concurrently
-// with either, as may all three deadline setters. Callers must coordinate
-// competing updates to the shared transport deadlines. WriteMessage does not
-// modify the caller's payload. Ping and pong
-// handlers run synchronously from ReadMessage and must not call it recursively.
-// Conn.Ping waits for the matching Pong, which only a concurrent ReadMessage
-// loop can deliver.
-// An extension instance must not be shared between connections.
-//
-// # Extension negotiation
-//
-// Dial and Upgrade validate the complete extension header, including repeated
-// fields and quoted parameter tokens. Dial rejects selections that were not
-// offered and closes the transport on negotiation failure. Upgrade validates
-// extension-generated selections before hijacking. Errors can be checked with
-// errors.Is(err, ErrInvalidExtension). Custom extensions receive the complete
-// comma-joined peer header and must validate their own parameter and repetition
-// semantics. Multiple offers for the same extension remain valid alternatives.
+// example http.ProxyFromEnvironment. It then tunnels with CONNECT and runs the
+// handshake, and TLS for wss, end to end inside the tunnel. Redirects are
+// never followed. WithNetDialContext replaces the TCP dialer, for SOCKS, Unix
+// sockets or tests. NewConn runs the protocol over any net.Conn whose
+// handshake the caller has already performed.
 //
 // # Compression
 //
-// NewPerMessageDeflateExtension opts into permessage-deflate ([RFC 7692]).
+// NewPerMessageDeflateExtension opts into permessage-deflate on either side.
 // Messages are compressed as one DEFLATE stream across any number of frames,
-// with context takeover in both directions unless a no_context_takeover
-// parameter is negotiated, and with any window from 8 to 15 bits. Options set
-// the level, a size threshold below which messages are sent uncompressed, and
-// WithCompressionMemoryLimit, which bounds the state a connection keeps between
-// messages by negotiating smaller windows or no context takeover. The default
-// limit, DefaultCompressionMemoryLimit, keeps only the 32 KiB histories in
-// each direction; a limit of 0 keeps a whole compressor per connection, which
-// is faster but uses up to about 1 MiB. Compressors and decompressors are
-// pooled across connections while idle.
+// with context takeover unless the peers negotiate otherwise and with any
+// window from 8 to 15 bits. By default a connection keeps about 64 KiB of
+// compression state between messages (DefaultCompressionMemoryLimit);
+// compressors are pooled across connections while idle.
 //
-// Custom frame extensions compose with compression: a message is compressed and
-// then each frame passes through the custom extensions in registration order,
-// and on receive each frame passes through them before it is decompressed.
-// Built-in compression owns RSV1; changing it, or enabling a second built-in
-// instance, fails with ErrUnsupportedExtensionComposition.
-//
-// # Common patterns
-//
-// Read each connection from one goroutine, calling Conn.ReadMessage in a loop
-// until it returns an error. When the peer closes, the error is a *CloseError,
-// which matches errors.Is(err, io.EOF); CloseStatus(err) gives its status
-// code. Control frames are handled inside that loop: ReadMessage answers Pings
-// and delivers Pongs, so a connection nobody reads cannot answer a keepalive
-// and Conn.Ping cannot complete.
-//
-// Writes may run on another goroutine, concurrently with the read loop. When
-// several goroutines produce messages for one connection, as in a chat room or
-// a pub/sub broker, give the connection a bounded queue drained by a single
-// writer goroutine, and disconnect a peer whose queue is full instead of
-// blocking every other sender on it. Bound each write with
-// Conn.WriteMessageContext and a timeout, so a stalled peer cannot hold the
-// writer forever.
-//
-// To detect dead peers, call Conn.Ping on a ticker with a context timeout, and
-// close the connection when it fails. Ping waits for the matching Pong, which
-// the read loop delivers; a timeout leaves the connection open, so the decision
-// to close stays with the caller.
-//
-// Conn.Close may be called from any goroutine, for example a writer that hit
-// an error, and interrupts a blocked ReadMessage. Return from the read loop on
-// any error: the connection is unusable after one.
-//
-// The examples directory has a runnable, tested program for each pattern:
-// [github.com/picatz/websocket/examples/keepalive] for pings and dead peer
-// detection, [github.com/picatz/websocket/examples/chat] for broadcast to every
-// client, and [github.com/picatz/websocket/examples/pubsub] for topic
-// subscriptions.
-//
-// # Limitations
-//
-// Go's inflater may buffer up to 32 KiB of decoded permessage-deflate output
-// before exposing it, delaying UTF-8/size rejection while input is withheld.
-// Decoded limits do not bound CPU time; use transport deadlines. Direct built-in
-// frame callbacks require complete messages; use Conn for wire fragmentation.
-// Do not run those callbacks concurrently with Conn I/O. Subprotocol offers are unique
-// HTTP tokens; any selected protocol must be exactly one case-sensitive offered
-// token. Omitting selection is allowed. WithSubprotocols offers protocols from
-// Dial, WithUpgradeSubprotocols selects the server's most preferred offered
-// protocol, and Conn.Subprotocol reports the result. Applications implement
-// their subprotocols. Custom headers
-// reject invalid HTTP syntax and reserved fields before dialing or hijacking;
-// callers still own field-specific semantics. Every ReadMessage error terminates
-// the connection while preserving the detecting call's original error. Protocol
-// failures notify the peer when the writer and extension encoding are safe, then
-// abort transport I/O without changing caller deadlines. The notification effort
-// is bounded to one second for default transports. Custom callbacks and transport
-// Close implementations, including wrappers hiding TLS, may still block.
-// Focused regression tests do not establish full RFC conformance.
-//
-// See the executable examples for local client/server usage.
-//
-// [RFC 7692]: https://www.rfc-editor.org/rfc/rfc7692.html
+// The examples directory holds tested programs for common patterns:
+// [github.com/picatz/websocket/examples/keepalive],
+// [github.com/picatz/websocket/examples/chat] and
+// [github.com/picatz/websocket/examples/pubsub].
 //
 // [RFC 6455]: https://www.rfc-editor.org/rfc/rfc6455.html
+// [RFC 7692]: https://www.rfc-editor.org/rfc/rfc7692.html
 package websocket

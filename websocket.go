@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -63,6 +64,11 @@ const DefaultMaxMessageSize = 1 << 20
 // all header lines and their separators, and the final empty line.
 const DefaultMaxResponseHeaderBytes = 1 << 20
 
+// Opcode is a WebSocket frame opcode. ReadMessage returns, and WriteMessage
+// accepts, only TextMessage and BinaryMessage; the other values identify
+// fragments and control frames.
+//
+// https://www.rfc-editor.org/rfc/rfc6455#section-5.2
 type Opcode int
 
 const (
@@ -74,6 +80,8 @@ const (
 	PongMessage       Opcode = 0xA // Pong message opcode.
 )
 
+// String returns the name of a defined opcode, such as "TextMessage", or
+// "Opcode(n)" for any other value.
 func (o Opcode) String() string {
 	switch o {
 	case ContinuationFrame:
@@ -89,22 +97,23 @@ func (o Opcode) String() string {
 	case PongMessage:
 		return "PongMessage"
 	default:
-		return "Unknown"
+		return "Opcode(" + strconv.Itoa(int(o)) + ")"
 	}
 }
 
-// Frame represents a WebSocket frame.
+// Frame is one WebSocket frame as seen by an Extension. Applications that
+// send and receive messages through Conn never need it.
 //
-// https://tools.ietf.org/html/rfc6455#section-5.2
+// https://www.rfc-editor.org/rfc/rfc6455#section-5.2
 type Frame struct {
-	Final   bool
-	Opcode  Opcode
-	Payload []byte
-	Masked  bool
-	MaskKey [4]byte
-	Rsv1    bool
-	Rsv2    bool
-	Rsv3    bool
+	Final   bool    // FIN: this is the last frame of a message
+	Opcode  Opcode  // frame type; ContinuationFrame for later fragments
+	Payload []byte  // application data, unmasked
+	Masked  bool    // whether the frame is masked on the wire (client to server)
+	MaskKey [4]byte // masking key used when Masked is true
+	Rsv1    bool    // RSV1, owned by permessage-deflate
+	Rsv2    bool    // RSV2, available to other extensions
+	Rsv3    bool    // RSV3, available to other extensions
 }
 
 // Extension interface for WebSocket extensions.
@@ -339,10 +348,14 @@ func NewPerMessageDeflateExtension(options ...PerMessageDeflateOption) Extension
 	return pmd
 }
 
-// Conn represents a WebSocket connection. Reads and writes are independently
-// serialized. Close and the deadline setters may be called concurrently with
-// reads and writes. Deadlines are shared transport state; callers must coordinate
-// competing deadline updates.
+// Conn is a WebSocket connection, created by Dial, Upgrade or NewConn.
+//
+// One goroutine may read at a time; concurrent reads are serialized and
+// interleave messages unpredictably, so use a single read loop. Any number of
+// goroutines may write: each WriteMessage sends its whole message before the
+// next starts. Close, CloseWithStatus, Ping and the deadline setters may be
+// called concurrently with reads and writes. Deadlines are shared transport
+// state, so goroutines that set them must coordinate.
 type Conn struct {
 	conn     net.Conn          // Underlying network connection
 	rw       *bufio.ReadWriter // Buffered reader and writer
@@ -384,6 +397,7 @@ type Conn struct {
 	pings   map[string]chan struct{}
 }
 
+// ConnOption configures a connection created by NewConn.
 type ConnOption func(*Conn)
 
 // WithMaxBytes sets the incoming frame and reassembled-message limit for NewConn.
@@ -601,14 +615,32 @@ func (c *Conn) failureCloseSafe() bool {
 	return true
 }
 
-// SetPingHandler sets the handler function for Ping frames.
+// SetPingHandler replaces how ReadMessage answers a Ping. The default handler
+// replies with a Pong carrying the same application data, as RFC 6455 Section
+// 5.5.2 requires; a replacement must send that Pong itself, for example with
+// WriteControlFrame(PongMessage, []byte(appData)). A nil handler restores the
+// default.
+//
+// The handler runs on the goroutine calling ReadMessage, before ReadMessage
+// returns, and must not call ReadMessage. An error it returns is returned by
+// ReadMessage and ends the connection. SetPingHandler may be called
+// concurrently with reads.
+//
+// https://www.rfc-editor.org/rfc/rfc6455#section-5.5.2
 func (c *Conn) SetPingHandler(handler func(appData string) error) {
 	c.handlerMu.Lock()
 	defer c.handlerMu.Unlock()
 	c.pingHandler = handler
 }
 
-// SetPongHandler sets the handler function for Pong frames.
+// SetPongHandler sets a function that ReadMessage calls with the application
+// data of each Pong it receives. Conn.Ping matches its Pong before the handler
+// runs, so a handler is not needed to use Ping. A nil handler, the default,
+// ignores Pongs.
+//
+// The handler runs on the goroutine calling ReadMessage and must not call
+// ReadMessage. An error it returns is returned by ReadMessage and ends the
+// connection. SetPongHandler may be called concurrently with reads.
 func (c *Conn) SetPongHandler(handler func(appData string) error) {
 	c.handlerMu.Lock()
 	defer c.handlerMu.Unlock()
