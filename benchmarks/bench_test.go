@@ -64,6 +64,9 @@ func payload(size int) []byte {
 // BenchmarkEcho measures one client write and one echoed read of a binary
 // message over a single loopback connection. Both endpoints use the library
 // under test, so time and allocations cover both sides of the round trip.
+// Besides the mean, it reports the median and 99th percentile round trip
+// (p50-ns, p99-ns) and the garbage collector's CPU time per round trip
+// (gc-cpu-ns/op).
 func BenchmarkEcho(b *testing.B) {
 	for _, size := range sizes {
 		for _, lib := range libraries {
@@ -74,14 +77,20 @@ func BenchmarkEcho(b *testing.B) {
 				p := payload(size)
 				b.SetBytes(int64(size))
 				b.ReportAllocs()
+				lat := newLatencies()
+				gc := startGCCost()
 				for b.Loop() {
+					start := time.Now()
 					if err := c.write(p); err != nil {
 						b.Fatal(err)
 					}
 					if _, err := c.read(); err != nil {
 						b.Fatal(err)
 					}
+					lat.record(time.Since(start))
 				}
+				gc.report(b, lat.n)
+				lat.report(b)
 			})
 		}
 	}
@@ -89,6 +98,8 @@ func BenchmarkEcho(b *testing.B) {
 
 // BenchmarkEchoParallel is BenchmarkEcho with one connection per parallel
 // worker, all served by one server, to show contention and scheduler costs.
+// It reports GC cost like BenchmarkEcho, but no percentiles: its ns/op is
+// throughput across workers, not one round trip's latency.
 func BenchmarkEchoParallel(b *testing.B) {
 	const size = 1 << 10
 	for _, lib := range libraries {
@@ -98,6 +109,7 @@ func BenchmarkEchoParallel(b *testing.B) {
 			p := payload(size)
 			b.SetBytes(size)
 			b.ReportAllocs()
+			gc := startGCCost()
 			b.RunParallel(func(pb *testing.PB) {
 				c, err := lib.dial(b.Context(), wsURL(srv))
 				if err != nil {
@@ -116,6 +128,7 @@ func BenchmarkEchoParallel(b *testing.B) {
 					}
 				}
 			})
+			gc.report(b, b.N)
 		})
 	}
 }
@@ -232,4 +245,23 @@ func rawHandshake(tb testing.TB, addr string) net.Conn {
 		tb.Fatalf("handshake status %s", resp.Status)
 	}
 	return conn
+}
+
+// TestReadLimit checks every server enforces readLimit, so the read paths
+// being compared do the same bounds checks: a larger message must end the
+// connection instead of being echoed.
+func TestReadLimit(t *testing.T) {
+	for _, lib := range libraries {
+		t.Run(lib.name, func(t *testing.T) {
+			srv := httptest.NewServer(lib.echo)
+			defer srv.Close()
+			c := dial(t, lib, srv)
+			if err := c.write(payload(readLimit + 1)); err != nil {
+				return // The server may close before the write completes.
+			}
+			if got, err := c.read(); err == nil {
+				t.Fatalf("server echoed %d bytes over the %d byte limit", len(got), readLimit)
+			}
+		})
+	}
 }

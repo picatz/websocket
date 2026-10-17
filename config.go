@@ -217,7 +217,7 @@ type Upgrader struct {
 // https://datatracker.ietf.org/doc/html/rfc6455#section-4.2.1
 func (u *Upgrader) Upgrade(w http.ResponseWriter, r *http.Request) (*Conn, error) {
 	if u == nil {
-		u = &Upgrader{}
+		u = &zeroUpgrader
 	}
 	return u.upgrade(w, r, nil)
 }
@@ -225,30 +225,43 @@ func (u *Upgrader) Upgrade(w http.ResponseWriter, r *http.Request) (*Conn, error
 // upgrade is Upgrade with extra extensions negotiated after Compression's,
 // which only tests supply.
 func (u *Upgrader) upgrade(w http.ResponseWriter, r *http.Request, extra []frameExtension) (*Conn, error) {
-	conn, err := u.handshake(w, r, extra)
+	// The handshake runs on the handler's goroutine, which keeps whatever
+	// stack the handshake grew to for as long as the connection is open, so
+	// the options are resolved in a call that returns before upgrade starts
+	// rather than in a frame that stays below it.
+	opts, err := u.options(extra)
+	var conn *Conn
+	if err == nil {
+		conn, err = upgrade(w, r, &opts)
+	}
 	if err != nil {
 		return nil, writeUpgradeError(w, r, err, u.Error)
 	}
 	return conn, nil
 }
 
-func (u *Upgrader) handshake(w http.ResponseWriter, r *http.Request, extra []frameExtension) (*Conn, error) {
+// zeroUpgrader is the Upgrader that Upgrade and a nil *Upgrader use. It is
+// never modified.
+var zeroUpgrader Upgrader
+
+// options resolves u and extra into the options upgrade takes.
+func (u *Upgrader) options(extra []frameExtension) (upgradeOptions, error) {
 	extensions, err := buildExtensions(u.Compression, extra)
 	if err != nil {
-		return nil, err
+		return upgradeOptions{}, err
 	}
-	return upgrade(w, r, &upgradeOptions{
+	return upgradeOptions{
 		extensions:     extensions,
 		responseHeader: u.Header,
 		maxBytes:       messageLimit(u.MaxMessageSize),
 		originCheck:    u.CheckOrigin,
 		subprotocols:   cloneSubprotocols(u.Subprotocols),
-	})
+	}, nil
 }
 
 // Upgrade upgrades the HTTP server connection with a zero Upgrader.
 func Upgrade(w http.ResponseWriter, r *http.Request) (*Conn, error) {
-	return (&Upgrader{}).Upgrade(w, r)
+	return zeroUpgrader.Upgrade(w, r)
 }
 
 // ConnConfig configures NewConn for a connection whose handshake the caller
