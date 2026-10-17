@@ -13,8 +13,8 @@ import (
 func contextPipe(t *testing.T) (client, server *websocket.Conn) {
 	t.Helper()
 	a, b := net.Pipe()
-	client = websocket.NewConn(a, false, nil)
-	server = websocket.NewConn(b, true, nil)
+	client = websocket.NewConn(a, websocket.ConnConfig{})
+	server = websocket.NewConn(b, websocket.ConnConfig{Server: true})
 	// Close the raw pipes first: on a synchronous pipe, two Close calls would
 	// otherwise each wait out the one-second close-notification bound.
 	t.Cleanup(func() {

@@ -29,7 +29,7 @@ func TestReadMessageAllocations(t *testing.T) {
 					wire := benchmarkWire(payload, masked, 1)
 					wire[0] = wire[0]&0xf0 | byte(op)
 					r := bytes.NewReader(wire)
-					c := NewConn(&benchmarkConn{reader: r, writer: io.Discard}, masked, nil)
+					c := NewConn(&benchmarkConn{reader: r, writer: io.Discard}, ConnConfig{Server: masked})
 					want := 1.0
 					if size == 0 {
 						want = 0
@@ -78,7 +78,7 @@ func TestReadMessageFragmentedAllocations(t *testing.T) {
 				wire := benchmarkWire(payload, true, tc.fragments)
 				wire[0] = wire[0]&0xf0 | byte(op)
 				r := bytes.NewReader(wire)
-				c := NewConn(&benchmarkConn{reader: r, writer: io.Discard}, true, nil)
+				c := NewConn(&benchmarkConn{reader: r, writer: io.Discard}, ConnConfig{Server: true})
 				got := testing.AllocsPerRun(20, func() {
 					r.Reset(wire)
 					c.br.Reset(r)
@@ -102,7 +102,7 @@ func TestWriteAllocations(t *testing.T) {
 		for _, server := range []bool{false, true} {
 			t.Run(fmt.Sprintf("bytes=%d/server=%t", size, server), func(t *testing.T) {
 				payload := benchmarkPayload(size)
-				c := NewConn(&benchmarkConn{writer: io.Discard}, server, nil)
+				c := NewConn(&benchmarkConn{writer: io.Discard}, ConnConfig{Server: server})
 				if got := testing.AllocsPerRun(100, func() {
 					if err := c.WriteMessage(BinaryMessage, payload); err != nil {
 						t.Fatal(err)
@@ -250,7 +250,7 @@ func TestFragmentedReadStaysWithinLimit(t *testing.T) {
 	for _, fragments := range []int{2, 7, 100, limit} {
 		payload := bytes.Repeat([]byte{'a'}, limit)
 		wire := benchmarkWire(payload, true, fragments)
-		c := NewConn(&benchmarkConn{reader: bytes.NewReader(wire), writer: io.Discard}, true, nil, WithMaxBytes(limit))
+		c := NewConn(&benchmarkConn{reader: bytes.NewReader(wire), writer: io.Discard}, ConnConfig{Server: true, MaxMessageSize: limit})
 		_, got, err := c.ReadMessage()
 		if err != nil || !bytes.Equal(got, payload) {
 			t.Fatalf("fragments=%d: read %d bytes, err=%v", fragments, len(got), err)

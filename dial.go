@@ -11,46 +11,6 @@ import (
 	"strings"
 )
 
-// WithNetDialContext sets the function Dial uses to open the TCP transport,
-// either to the WebSocket server or, when WithProxy selects one, to the proxy.
-// The function receives the Dial context, the network "tcp" and a host:port
-// address. A nil function restores the default net.Dialer; the last option wins.
-//
-// The returned connection is owned by Dial and, after a successful handshake,
-// by the Conn. Dial still performs TLS for wss URLs and HTTPS proxies itself.
-func WithNetDialContext(dial func(ctx context.Context, network, addr string) (net.Conn, error)) DialOption {
-	return func(opts *dialOptions) {
-		opts.netDialContext = dial
-	}
-}
-
-// WithProxy sets the function that selects an HTTP proxy for Dial, with the
-// same signature as [http.Transport.Proxy]. Use [http.ProxyFromEnvironment] to
-// honor HTTP_PROXY, HTTPS_PROXY and NO_PROXY. Without this option, or when the
-// function returns a nil URL, Dial connects directly.
-//
-// The function receives a GET request whose URL is the WebSocket URL with ws
-// mapped to http and wss to https, so environment-based selection treats wss
-// like HTTPS. Dial tunnels through the proxy with an HTTP/1.1 CONNECT request
-// ([RFC 9110, Section 9.3.6]) and then performs the WebSocket handshake, and
-// TLS for wss, end to end inside the tunnel. The proxy never sees the
-// WebSocket request headers of a wss connection.
-//
-// Proxy URLs must use the http or https scheme; https proxies are reached over
-// TLS using a clone of the WithTLSConfig configuration with ServerName set to
-// the proxy host, matching [http.Transport]. User info in the proxy URL is sent
-// only to the proxy as Basic Proxy-Authorization. The CONNECT response head
-// counts against WithMaxResponseHeaderBytes, and any status other than 200
-// fails with an error matching ErrBadHandshake and ErrProxy. SOCKS proxies are
-// not supported; use WithNetDialContext to supply a SOCKS dialer instead.
-//
-// [RFC 9110, Section 9.3.6]: https://www.rfc-editor.org/rfc/rfc9110.html#section-9.3.6
-func WithProxy(proxy func(*http.Request) (*url.URL, error)) DialOption {
-	return func(opts *dialOptions) {
-		opts.proxy = proxy
-	}
-}
-
 // dialTransport opens the TCP connection for target (host:port), or for the
 // proxy selected for u. A non-nil proxy URL means the caller must tunnel with
 // connectProxy before speaking HTTP to target.

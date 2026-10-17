@@ -25,8 +25,13 @@ func (*memoryConn) SetDeadline(time.Time) error      { return nil }
 func (*memoryConn) SetReadDeadline(time.Time) error  { return nil }
 func (*memoryConn) SetWriteDeadline(time.Time) error { return nil }
 
+// frameConn reads wire with a message limit of limit bytes, or none when limit
+// is 0.
 func frameConn(wire []byte, server bool, limit int) *Conn {
-	return NewConn(&memoryConn{Reader: bytes.NewReader(wire)}, server, nil, WithMaxBytes(limit))
+	if limit == 0 {
+		limit = -1
+	}
+	return NewConn(&memoryConn{Reader: bytes.NewReader(wire)}, ConnConfig{Server: server, MaxMessageSize: limit})
 }
 
 func TestReadFrameRejectsMalformedHeaders(t *testing.T) {
@@ -97,7 +102,7 @@ func TestReadFrameLengthBoundaries(t *testing.T) {
 		t.Run(strconv.Itoa(n), func(t *testing.T) {
 			raw := &memoryConn{Reader: bytes.NewReader(nil)}
 			wire := &raw.written
-			writer := NewConn(raw, true, nil)
+			writer := NewConn(raw, ConnConfig{Server: true})
 			data := bytes.Repeat([]byte{'x'}, n)
 			if err := writer.WriteMessage(BinaryMessage, data); err != nil {
 				t.Fatal(err)

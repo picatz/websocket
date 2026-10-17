@@ -14,10 +14,10 @@ import (
 )
 
 // testEchoHandler is a simple WebSocket handler that echoes received messages back to the client.
-func testEchoHandler(t *testing.T, upgradeOptions ...websocket.UpgradeOption) func(w http.ResponseWriter, r *http.Request) {
+func testEchoHandler(t *testing.T, u *websocket.Upgrader) func(w http.ResponseWriter, r *http.Request) {
 	t.Helper()
 	return func(w http.ResponseWriter, r *http.Request) {
-		conn, err := websocket.Upgrade(w, r, upgradeOptions...)
+		conn, err := u.Upgrade(w, r)
 		if err != nil {
 			http.Error(w, "Could not open WebSocket connection", http.StatusBadRequest)
 			return
@@ -46,7 +46,7 @@ func testEchoHandler(t *testing.T, upgradeOptions ...websocket.UpgradeOption) fu
 
 func TestWebSocketEcho(t *testing.T) {
 	// Create an HTTP test server
-	server := httptest.NewServer(http.HandlerFunc(testEchoHandler(t)))
+	server := httptest.NewServer(http.HandlerFunc(testEchoHandler(t, nil)))
 	defer server.Close()
 
 	// Convert the server URL to a WebSocket URL
@@ -85,7 +85,7 @@ func TestWebSocketEcho(t *testing.T) {
 
 func TestWebSocketBinaryMessage(t *testing.T) {
 	// Create an HTTP test server
-	server := httptest.NewServer(http.HandlerFunc(testEchoHandler(t)))
+	server := httptest.NewServer(http.HandlerFunc(testEchoHandler(t, nil)))
 	defer server.Close()
 
 	// Convert the server URL to a WebSocket URL
@@ -124,7 +124,7 @@ func TestWebSocketBinaryMessage(t *testing.T) {
 
 func TestWebSocketPingPong(t *testing.T) {
 	// Create an HTTP test server
-	server := httptest.NewServer(http.HandlerFunc(testEchoHandler(t)))
+	server := httptest.NewServer(http.HandlerFunc(testEchoHandler(t, nil)))
 	defer server.Close()
 
 	// Convert the server URL to a WebSocket URL
@@ -179,7 +179,7 @@ func TestWebSocketPingPong(t *testing.T) {
 
 func TestWebSocketClose(t *testing.T) {
 	// Create an HTTP test server
-	server := httptest.NewServer(http.HandlerFunc(testEchoHandler(t)))
+	server := httptest.NewServer(http.HandlerFunc(testEchoHandler(t, nil)))
 	defer server.Close()
 
 	// Convert the server URL to a WebSocket URL
@@ -210,7 +210,7 @@ func TestWebSocketClose(t *testing.T) {
 
 func TestWebSocketCompression(t *testing.T) {
 	// Create an HTTP test server with permessage-deflate enabled
-	server := httptest.NewServer(http.HandlerFunc(testEchoHandler(t, websocket.WithUpgradeExtensions(websocket.NewPerMessageDeflateExtension()))))
+	server := httptest.NewServer(http.HandlerFunc(testEchoHandler(t, &websocket.Upgrader{Compression: &websocket.Compression{}})))
 	defer server.Close()
 
 	// Convert the server URL to a WebSocket URL
@@ -220,7 +220,7 @@ func TestWebSocketCompression(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()
 
-	conn, resp, err := websocket.Dial(ctx, wsURL, websocket.WithExtensions(websocket.NewPerMessageDeflateExtension()))
+	conn, resp, err := (&websocket.Dialer{Compression: &websocket.Compression{}}).Dial(ctx, wsURL)
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
@@ -249,12 +249,10 @@ func TestWebSocketCompression(t *testing.T) {
 
 func TestWebSocketPerMessageDeflateNoContextTakeover(t *testing.T) {
 	// Create an HTTP test server with permessage-deflate extension and no context takeover
-	server := httptest.NewServer(http.HandlerFunc(testEchoHandler(t, websocket.WithUpgradeExtensions(
-		websocket.NewPerMessageDeflateExtension(
-			websocket.WithClientNoContextTakeover(),
-			websocket.WithServerNoContextTakeover(),
-		),
-	))))
+	server := httptest.NewServer(http.HandlerFunc(testEchoHandler(t, &websocket.Upgrader{Compression: &websocket.Compression{
+		ClientNoContextTakeover: true,
+		ServerNoContextTakeover: true,
+	}})))
 	defer server.Close()
 
 	// Convert the server URL to a WebSocket URL
@@ -264,12 +262,10 @@ func TestWebSocketPerMessageDeflateNoContextTakeover(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()
 
-	conn, resp, err := websocket.Dial(ctx, wsURL, websocket.WithExtensions(
-		websocket.NewPerMessageDeflateExtension(
-			websocket.WithClientNoContextTakeover(),
-			websocket.WithServerNoContextTakeover(),
-		),
-	))
+	conn, resp, err := (&websocket.Dialer{Compression: &websocket.Compression{
+		ClientNoContextTakeover: true,
+		ServerNoContextTakeover: true,
+	}}).Dial(ctx, wsURL)
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}

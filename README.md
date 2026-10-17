@@ -48,7 +48,7 @@ import (
 
 func echoHandler(w http.ResponseWriter, r *http.Request) {
 	// Upgrade the HTTP connection to a WebSocket connection
-	conn, err := websocket.Upgrade(w, r, websocket.WithUpgradeMaxMessageSize(1<<20))
+	conn, err := websocket.Upgrade(w, r)
 	if err != nil {
 		// Upgrade has already written the HTTP error response.
 		log.Printf("Upgrade failed: %v", err)
@@ -106,7 +106,8 @@ func main() {
 	// Dial the WebSocket server
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	conn, resp, err := websocket.Dial(ctx, "ws://localhost:8080/ws", websocket.WithMaxMessageSize(1<<20))
+	dialer := &websocket.Dialer{MaxMessageSize: 1 << 20}
+	conn, resp, err := dialer.Dial(ctx, "ws://localhost:8080/ws")
 	if err != nil {
 		log.Fatalf("Dial failed: %v", err)
 	}
@@ -232,12 +233,10 @@ err := wsjson.Write(ctx, conn, map[string]string{"ack": event.Kind})
 
 ## Limits and connection lifetime
 
-`Dial` and `Upgrade` default to `DefaultMaxMessageSize`, 1 MiB (1,048,576 bytes).
-Set `WithMaxMessageSize(n)` for a client or `WithUpgradeMaxMessageSize(n)` for a
-server to choose an application-appropriate budget. An explicit zero or negative
-value opts into unlimited incoming payloads; the last size option wins.
-`NewConn` remains low-level and unlimited unless given positive `WithMaxBytes(n)`.
-Non-positive `WithMaxBytes` options are ignored, including after a positive option.
+Connections default to `DefaultMaxMessageSize`, 1 MiB (1,048,576 bytes). Set
+`MaxMessageSize` on a `Dialer`, `Upgrader` or `ConnConfig` to choose an
+application-appropriate budget. Zero means the default and a negative value
+opts into unlimited incoming payloads.
 
 Limits apply to each incoming data-frame wire payload and the reassembled decoded
 message. Headers, masking keys and interleaved controls do not consume the message
@@ -319,41 +318,41 @@ no automatic handshake timeout. Close the connection after any write error.
 
 ## Subprotocols
 
-`WithSubprotocols` offers application protocols from `Dial`, in order of
-preference. `WithUpgradeSubprotocols` lists the protocols a server supports, in
-its own order of preference; `Upgrade` selects the first one the client offered,
+`Dialer.Subprotocols` offers application protocols, in order of preference.
+`Upgrader.Subprotocols` lists the protocols a server supports, in its own order
+of preference; `Upgrade` selects the first one the client offered,
 or none. Both sides read the result with `Conn.Subprotocol()`, which is `""`
 when nothing was selected.
 
 ```go
 // Client
-conn, _, err := websocket.Dial(ctx, "wss://example.com/socket",
-	websocket.WithSubprotocols("v2.chat", "v1.chat"))
+dialer := &websocket.Dialer{Subprotocols: []string{"v2.chat", "v1.chat"}}
+conn, _, err := dialer.Dial(ctx, "wss://example.com/socket")
 
 // Server
-conn, err := websocket.Upgrade(w, r, websocket.WithUpgradeSubprotocols("v2.chat", "v1.chat"))
+upgrader := &websocket.Upgrader{Subprotocols: []string{"v2.chat", "v1.chat"}}
+conn, err := upgrader.Upgrade(w, r)
 if err == nil && conn.Subprotocol() == "" {
 	conn.CloseWithStatus(websocket.StatusPolicyViolation, "unsupported subprotocol")
 }
 ```
 
 Protocols are case-sensitive HTTP tokens and must be unique. Setting
-`Sec-WebSocket-Protocol` through `WithHeader` or `WithResponseHeader` still
-works, but combining it with the matching option is an error.
+`Sec-WebSocket-Protocol` through `Dialer.Header` or `Upgrader.Header` still
+works, but combining it with `Subprotocols` is an error.
 
 ## Compression
 
-`permessage-deflate` ([RFC 7692]) is opt-in. Create one extension per connection;
-it holds that connection's compression state.
+`permessage-deflate` ([RFC 7692]) is opt-in: set `Compression` on a `Dialer` or
+`Upgrader`. Each connection gets its own compression state, so one `Dialer` or
+`Upgrader` can be shared.
 
 ```go
-conn, _, err := websocket.Dial(ctx, "wss://example.com/ws",
-	websocket.WithExtensions(websocket.NewPerMessageDeflateExtension()))
+dialer := &websocket.Dialer{Compression: &websocket.Compression{}}
+conn, _, err := dialer.Dial(ctx, "wss://example.com/ws")
 
-conn, err := websocket.Upgrade(w, r,
-	websocket.WithUpgradeExtensions(websocket.NewPerMessageDeflateExtension(
-		websocket.WithCompressionMemoryLimit(16<<10),
-	)))
+upgrader := &websocket.Upgrader{Compression: &websocket.Compression{MemoryLimit: 16 << 10}}
+conn, err := upgrader.Upgrade(w, r)
 ```
 
 - **Fragmentation.** Messages are compressed and decompressed as one DEFLATE
@@ -432,24 +431,24 @@ incoming size limit.
 
 ## Client proxies and custom dialers
 
-`Dial` connects directly by default. `WithProxy` takes the same function type as
+`Dial` connects directly by default. `Dialer.Proxy` has the same function type as
 `http.Transport.Proxy`, so `http.ProxyFromEnvironment` honors `HTTP_PROXY`,
 `HTTPS_PROXY` and `NO_PROXY` (a `wss` URL is selected like `https`):
 
 ```go
-conn, _, err := websocket.Dial(ctx, "wss://example.com/socket",
-	websocket.WithProxy(http.ProxyFromEnvironment))
+dialer := &websocket.Dialer{Proxy: http.ProxyFromEnvironment}
+conn, _, err := dialer.Dial(ctx, "wss://example.com/socket")
 ```
 
 `http` and `https` proxies are supported through an HTTP/1.1 `CONNECT` tunnel; the
 WebSocket handshake and `wss` TLS then run end to end inside it. An `https` proxy
-is verified with a clone of `WithTLSConfig` whose `ServerName` is the proxy host.
+is verified with a clone of `Dialer.TLSClientConfig` whose `ServerName` is the proxy host.
 Proxy URL credentials are sent only to the proxy as Basic `Proxy-Authorization`
 and are never included in errors. The `CONNECT` response head shares the
-`WithMaxResponseHeaderBytes` budget; a non-200 status, or data sent before the
+`Dialer.MaxResponseHeaderBytes` budget; a non-200 status, or data sent before the
 tunnel is used, fails with an error matching `ErrBadHandshake` and `ErrProxy`.
 
-`WithNetDialContext` replaces the TCP dialer used to reach the server or proxy,
+`Dialer.NetDialContext` replaces the TCP dialer used to reach the server or proxy,
 for example to use a SOCKS dialer, a Unix socket, or an in-memory test transport.
 
 ## Browser origins and proxies
@@ -461,12 +460,12 @@ The scheme comes only from the actual `r.TLS` connection; authority comes from
 HTTP/HTTPS port is equivalent to its omission. Host case and IPv6 spelling are
 normalized; trailing dots and loopback aliases remain distinct.
 
-Use `WithUpgradeOriginCheck(func(r *http.Request, origin string) bool)` to replace
+Set `Upgrader.CheckOrigin` to a `func(r *http.Request, origin string) bool` to replace
 that decision with an exact public-origin allowlist, including behind a
 TLS-terminating proxy. The callback receives a canonical origin, `""` for absent,
 or `"null"` for an opaque origin. Explicitly decide whether to allow those cases;
-`null` does not identify one trusted website. A nil callback restores the default,
-and repeated options are last-wins. See [migration examples](MIGRATION.md).
+`null` does not identify one trusted website. A nil callback keeps the default.
+See [migration examples](MIGRATION.md).
 
 Before any callback, empty, multiple, list-valued or malformed fields are denied.
 Tuple hosts use ASCII RFC 3986 reg-name characters except percent escapes and
@@ -482,10 +481,12 @@ When `Upgrade` fails before taking over the connection, it writes the HTTP error
 response itself, so the handler only logs and returns: 403 for a rejected
 Origin, 405 with `Allow: GET` for another method, 426 with
 `Sec-WebSocket-Version: 13` for an unsupported version, 500 when hijacking is
-unavailable or the server's own options are invalid, and 400 for any other
-malformed handshake. The 400, 405 and 426 errors match `ErrBadHandshake`, so a handler can tell a bad client from a rejected origin or
-its own misconfiguration. After `ErrHandshakeFailed` the transport may have been
-hijacked, so nothing is written.
+unavailable or the `Upgrader` is invalid, and 400 for any other malformed
+handshake. The 400, 405 and 426 errors match `ErrBadHandshake`, so a handler can
+tell a bad client from a rejected origin or its own misconfiguration. After
+`ErrHandshakeFailed` the transport may have been hijacked, so nothing is written.
+Set `Upgrader.Error` to write a different body, for example JSON; the required
+`Allow` and `Sec-WebSocket-Version` fields are already set when it runs.
 
 ## Conformance
 
@@ -527,7 +528,7 @@ Docker.
 - Custom request/response headers reject invalid HTTP field names and values
   (including CR/LF, NUL, and other forbidden control bytes) before dialing or
   hijacking. Generated handshake fields and HTTP body-framing fields are reserved
-  case-insensitively; see `WithHeader` and `WithResponseHeader` for the lists.
+  case-insensitively; see `Dialer.Header` and `Upgrader.Header` for the lists.
   Ordinary repeated fields (including `Set-Cookie`) are preserved. Callers still
   own ordinary field-specific semantics
 - Direct built-in `ProcessIncomingFrame` and `ProcessOutgoingFrame` callbacks

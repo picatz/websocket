@@ -62,7 +62,7 @@ func TestUpgradeRejectsCustomHeadersBeforeHijack(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			before := headers.Clone()
 			w := &countingHijacker{ResponseRecorder: httptest.NewRecorder()}
-			conn, err := Upgrade(w, upgradeRequest(), WithResponseHeader(headers))
+			conn, err := (&Upgrader{Header: headers}).Upgrade(w, upgradeRequest())
 			if conn != nil || !errors.Is(err, ErrInvalidHandshakeHeader) {
 				t.Fatalf("Upgrade = %v, %v", conn, err)
 			}
@@ -102,7 +102,7 @@ func TestDialRejectsCustomHeadersBeforeConnect(t *testing.T) {
 			before := headers.Clone()
 			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 			defer cancel()
-			conn, resp, err := Dial(ctx, "ws://"+listener.Addr().String(), WithHeader(headers))
+			conn, resp, err := (&Dialer{Header: headers}).Dial(ctx, "ws://"+listener.Addr().String())
 			if conn != nil || resp != nil || !errors.Is(err, ErrInvalidHandshakeHeader) {
 				t.Fatalf("Dial = %v, %v, %v", conn, resp, err)
 			}
@@ -142,7 +142,7 @@ func TestValidCustomHeaderCompatibility(t *testing.T) {
 	received := make(chan http.Header, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		received <- r.Header.Clone()
-		conn, err := Upgrade(w, r, WithResponseHeader(responseHeaders))
+		conn, err := (&Upgrader{Header: responseHeaders}).Upgrade(w, r)
 		if err != nil {
 			t.Error(err)
 			return
@@ -150,7 +150,7 @@ func TestValidCustomHeaderCompatibility(t *testing.T) {
 		defer conn.conn.Close()
 	}))
 	defer srv.Close()
-	conn, resp, err := Dial(t.Context(), "ws"+srv.URL[4:], WithHeader(requestHeaders))
+	conn, resp, err := (&Dialer{Header: requestHeaders}).Dial(t.Context(), "ws"+srv.URL[4:])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +174,7 @@ func TestValidCustomHeaderCompatibility(t *testing.T) {
 func TestUpgradePreservesRepeatedHeaderWireLines(t *testing.T) {
 	raw := &memoryConn{Reader: bytes.NewReader(nil)}
 	w := &hijackResponse{httptest.NewRecorder(), raw, bufio.NewReadWriter(bufio.NewReader(raw), bufio.NewWriter(raw))}
-	_, err := Upgrade(w, upgradeRequest(), WithResponseHeader(http.Header{"Set-Cookie": {"a=1", "b=2"}, "x-test": {"one", "two"}}))
+	_, err := (&Upgrader{Header: http.Header{"Set-Cookie": {"a=1", "b=2"}, "x-test": {"one", "two"}}}).Upgrade(w, upgradeRequest())
 	if err != nil {
 		t.Fatal(err)
 	}

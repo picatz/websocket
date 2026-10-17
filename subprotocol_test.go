@@ -40,7 +40,7 @@ func TestDialRejectsUnsolicitedSubprotocol(t *testing.T) {
 
 func TestUpgradeRejectsUnofferedSubprotocol(t *testing.T) {
 	w := &countingHijacker{ResponseRecorder: httptest.NewRecorder()}
-	_, _ = Upgrade(w, upgradeRequest(), WithResponseHeader(http.Header{"Sec-WebSocket-Protocol": {"unoffered"}}))
+	_, _ = (&Upgrader{Header: http.Header{"Sec-WebSocket-Protocol": {"unoffered"}}}).Upgrade(w, upgradeRequest())
 	if w.calls != 0 {
 		t.Fatal("attempted hijack with an unoffered subprotocol")
 	}
@@ -79,7 +79,7 @@ func TestSubprotocolOfferValidation(t *testing.T) {
 			}
 			if !tc.valid {
 				// An invalid URL must not mask caller-header validation, which runs before dialing.
-				conn, resp, err := Dial(t.Context(), ":invalid", WithHeader(tc.header))
+				conn, resp, err := (&Dialer{Header: tc.header}).Dial(t.Context(), ":invalid")
 				if conn != nil || resp != nil || !errors.Is(err, ErrInvalidSubprotocol) || !errors.Is(err, ErrInvalidHandshakeHeader) {
 					t.Fatalf("Dial = %v, %v, %v", conn, resp, err)
 				}
@@ -129,7 +129,7 @@ func TestSubprotocolSelectionHandshake(t *testing.T) {
 			w := &hijackResponse{httptest.NewRecorder(), raw, bufio.NewReadWriter(bufio.NewReader(raw), bufio.NewWriter(raw))}
 			r := upgradeRequest()
 			r.Header = mergeHeaders(r.Header, tc.offer)
-			conn, err := Upgrade(w, r, WithResponseHeader(tc.selection))
+			conn, err := (&Upgrader{Header: tc.selection}).Upgrade(w, r)
 			if (err == nil) != tc.valid {
 				t.Fatalf("Upgrade error = %v, valid = %v", err, tc.valid)
 			}
@@ -164,7 +164,7 @@ func TestSubprotocolSelectionHandshake(t *testing.T) {
 			defer srv.Close()
 			ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 			defer cancel()
-			conn, resp, err := Dial(ctx, "ws"+srv.URL[4:], WithHeader(tc.offer))
+			conn, resp, err := (&Dialer{Header: tc.offer}).Dial(ctx, "ws"+srv.URL[4:])
 			if (err == nil) != tc.valid || resp == nil {
 				t.Fatalf("Dial = %v, %v, %v", conn, resp, err)
 			}

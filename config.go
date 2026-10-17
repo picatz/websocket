@@ -1,0 +1,330 @@
+package websocket
+
+import (
+	"bufio"
+	"context"
+	"crypto/tls"
+	"net"
+	"net/http"
+	"net/url"
+)
+
+// A Dialer contains options for connecting to a WebSocket server. Its zero
+// value dials directly with TLS defaults, no compression, and the default
+// message and response-head limits. A Dialer may be reused and is safe for
+// concurrent use; Dial does not modify it or the values it refers to.
+type Dialer struct {
+	// NetDialContext opens the TCP transport, either to the WebSocket server
+	// or, when Proxy selects one, to the proxy. It receives the Dial context,
+	// the network "tcp" and a host:port address. If nil, a zero net.Dialer is
+	// used.
+	//
+	// The returned connection is owned by Dial and, after a successful
+	// handshake, by the Conn. Dial still performs TLS for wss URLs and HTTPS
+	// proxies itself.
+	NetDialContext func(ctx context.Context, network, addr string) (net.Conn, error)
+
+	// Proxy selects an HTTP proxy, with the same signature as
+	// [http.Transport.Proxy]. Use [http.ProxyFromEnvironment] to honor
+	// HTTP_PROXY, HTTPS_PROXY and NO_PROXY. If nil, or when it returns a nil
+	// URL, Dial connects directly.
+	//
+	// The function receives a GET request whose URL is the WebSocket URL with
+	// ws mapped to http and wss to https, so environment-based selection
+	// treats wss like HTTPS. Dial tunnels through the proxy with an HTTP/1.1
+	// CONNECT request ([RFC 9110, Section 9.3.6]) and then performs the
+	// WebSocket handshake, and TLS for wss, end to end inside the tunnel. The
+	// proxy never sees the WebSocket request headers of a wss connection.
+	//
+	// Proxy URLs must use the http or https scheme; https proxies are reached
+	// over TLS using a clone of TLSClientConfig with ServerName set to the proxy
+	// host, matching [http.Transport]. User info in the proxy URL is sent only
+	// to the proxy as Basic Proxy-Authorization. The CONNECT response head
+	// counts against MaxResponseHeaderBytes, and any status other than 200
+	// fails with an error matching ErrBadHandshake and ErrProxy. SOCKS proxies
+	// are not supported; supply a SOCKS dialer as NetDialContext instead.
+	//
+	// [RFC 9110, Section 9.3.6]: https://www.rfc-editor.org/rfc/rfc9110.html#section-9.3.6
+	Proxy func(*http.Request) (*url.URL, error)
+
+	// TLSClientConfig configures TLS for wss URLs and HTTPS proxies. Dial uses a
+	// clone, setting ServerName from the URL when it is empty. If nil, the
+	// zero configuration is used.
+	TLSClientConfig *tls.Config
+
+	// Header holds additional request header fields for the handshake. Dial
+	// rejects invalid field names and values and fields managed by the
+	// handshake: Host, Upgrade, Connection, Sec-WebSocket-Key,
+	// Sec-WebSocket-Version and Sec-WebSocket-Extensions. Content-Length and
+	// Transfer-Encoding are also forbidden because the handshake has no body.
+	// Repeated ordinary fields are preserved; the caller owns their semantics.
+	//
+	// A raw Sec-WebSocket-Protocol field must hold unique HTTP tokens, and
+	// cannot be combined with Subprotocols.
+	Header http.Header
+
+	// Subprotocols are the application subprotocols to offer, in order of
+	// preference. Each must be a unique, case-sensitive HTTP token. The server
+	// selects at most one; Conn.Subprotocol reports it, and Dial rejects a
+	// selection that was not offered with ErrInvalidSubprotocol.
+	//
+	// https://datatracker.ietf.org/doc/html/rfc6455#section-4.1
+	Subprotocols []string
+
+	// Compression, if non-nil, offers permessage-deflate (RFC 7692) with these
+	// settings. Each connection gets its own compression state.
+	Compression *Compression
+
+	// NewExtensions, if non-nil, returns further extensions to offer, after
+	// Compression. It is called once per Dial and must return new instances:
+	// an Extension holds one connection's negotiated state.
+	NewExtensions func() []Extension
+
+	// MaxMessageSize bounds each incoming frame and reassembled message in
+	// bytes, including data decompressed by Compression. Zero means
+	// DefaultMaxMessageSize; a negative value means no limit.
+	MaxMessageSize int
+
+	// MaxResponseHeaderBytes bounds the HTTP response head: the status line,
+	// every raw header line (including duplicates and continuation
+	// whitespace), line separators and the final empty line. It counts
+	// decrypted bytes, not TLS overhead, bodies or frames, and is not a time
+	// limit; use Dial's context for that. Zero means
+	// DefaultMaxResponseHeaderBytes; a negative value means no limit. An
+	// exceeded limit returns an error matching both ErrBadHandshake and
+	// ErrResponseHeaderTooLarge, with a nil connection and response.
+	MaxResponseHeaderBytes int64
+}
+
+// Dial connects to the WebSocket server at urlStr, a ws or wss URL. ctx covers
+// TCP, any proxy tunnel, TLS and the HTTP upgrade handshake, but not later
+// message I/O. On a failed handshake the returned response, when non-nil, is
+// the server's reply with its body closed.
+func (d *Dialer) Dial(ctx context.Context, urlStr string) (*Conn, *http.Response, error) {
+	if d == nil {
+		d = &Dialer{}
+	}
+	extensions, err := buildExtensions(d.Compression, d.NewExtensions)
+	if err != nil {
+		return nil, nil, err
+	}
+	return dial(ctx, urlStr, &dialOptions{
+		extensions:             extensions,
+		header:                 d.Header,
+		tlsConfig:              d.TLSClientConfig,
+		maxBytes:               messageLimit(d.MaxMessageSize),
+		maxResponseHeaderBytes: headLimit(d.MaxResponseHeaderBytes),
+		netDialContext:         d.NetDialContext,
+		proxy:                  d.Proxy,
+		subprotocols:           cloneSubprotocols(d.Subprotocols),
+	})
+}
+
+// Dial connects to the WebSocket server at urlStr with a zero Dialer.
+func Dial(ctx context.Context, urlStr string) (*Conn, *http.Response, error) {
+	return (&Dialer{}).Dial(ctx, urlStr)
+}
+
+// An Upgrader contains options for accepting WebSocket connections. Its zero
+// value accepts same-origin requests with no subprotocol, no compression and
+// the default message limit. One Upgrader may be shared by every handler; it
+// is safe for concurrent use, and Upgrade does not modify it.
+type Upgrader struct {
+	// CheckOrigin replaces the default same-origin decision. If nil, a
+	// missing Origin is allowed; otherwise a single valid HTTP/HTTPS Origin
+	// must match r.Host and the scheme observed through r.TLS. Forwarded
+	// headers and r.URL.Scheme are not trusted.
+	//
+	// The function receives the request and one canonical Origin: a lowercase
+	// scheme/ASCII host, normalized numeric port (HTTP/HTTPS defaults
+	// omitted), and normalized IPv6; "" means absent and "null" means an
+	// opaque origin. Host spelling is otherwise preserved, including trailing
+	// dots; Unicode hosts must use ASCII/punycode. Malformed, empty, multiple,
+	// or list-valued Origin fields are rejected before the function runs.
+	//
+	// It replaces, rather than supplements, the default: it must decide
+	// whether missing and opaque origins are allowed. Use an exact allowlist
+	// for public origins behind a TLS-terminating proxy. Origin is not
+	// authentication.
+	CheckOrigin func(r *http.Request, origin string) bool
+
+	// Subprotocols are the subprotocols the server supports, in order of
+	// preference. Upgrade selects the first of these the client offered, or
+	// none if the client offered none of them; RFC 6455 allows a server to
+	// omit the selection, and the application decides whether to continue
+	// without one. Conn.Subprotocol reports the selection. Each must be a
+	// unique, case-sensitive HTTP token.
+	//
+	// https://datatracker.ietf.org/doc/html/rfc6455#section-4.2.2
+	Subprotocols []string
+
+	// Header holds additional response header fields for the 101 response.
+	// Upgrade rejects invalid field names and values and fields managed by
+	// the handshake: Upgrade, Connection, Sec-WebSocket-Accept and
+	// Sec-WebSocket-Extensions. Content-Length and Transfer-Encoding are also
+	// forbidden. Repeated ordinary fields, such as Set-Cookie, are preserved.
+	//
+	// A raw Sec-WebSocket-Protocol field may select exactly one token the
+	// client offered, and cannot be combined with Subprotocols.
+	Header http.Header
+
+	// Compression, if non-nil, accepts a client's permessage-deflate (RFC
+	// 7692) offer with these settings. Each connection gets its own
+	// compression state.
+	Compression *Compression
+
+	// NewExtensions, if non-nil, returns further extensions to negotiate,
+	// after Compression. It is called once per Upgrade and must return new
+	// instances: an Extension holds one connection's negotiated state.
+	NewExtensions func() []Extension
+
+	// MaxMessageSize bounds each incoming frame and reassembled message in
+	// bytes, including data decompressed by Compression. Zero means
+	// DefaultMaxMessageSize; a negative value means no limit.
+	MaxMessageSize int
+
+	// Error, if non-nil, writes the HTTP error response when the handshake
+	// fails before the connection is taken over, for example to match an
+	// application's error format. Upgrade has already set the header fields
+	// the status requires, Allow or Sec-WebSocket-Version, and returns err to
+	// its caller after Error returns. The default writes a short plain-text
+	// body without the error's details.
+	Error func(w http.ResponseWriter, r *http.Request, status int, err error)
+}
+
+// Upgrade upgrades the HTTP server connection to a WebSocket connection.
+//
+// When Upgrade fails before taking over the connection, it writes the HTTP
+// error response itself, with Error if set, and returns the error; the
+// handler should just return. The error says which response was sent:
+//
+//   - ErrOriginNotAllowed: 403 Forbidden.
+//   - ErrBadHandshake: the client's request was at fault. A non-GET request
+//     (ErrInvalidMethod) gets 405 Method Not Allowed with Allow: GET, an
+//     unsupported version (ErrUnsupportedVersion) 426 Upgrade Required with
+//     Sec-WebSocket-Version: 13 (RFC 6455 section 4.4), and any other
+//     malformed request 400 Bad Request.
+//   - ErrNotHijacker, or an invalid Upgrader (ErrInvalidConfig):
+//     500 Internal Server Error.
+//   - ErrHandshakeFailed: nothing, as the transport may already be hijacked.
+//
+// Upgrade requires an HTTP/1.1 connection with hijacking support. Middleware
+// may implement http.Hijacker directly or expose the underlying
+// http.ResponseWriter through an Unwrap() http.ResponseWriter method, as used
+// by http.ResponseController. A writer's own Hijack method takes precedence
+// over Unwrap. HTTP/2 is not supported.
+//
+// Origin checks are not authentication: callers still own authentication,
+// authorization, and authoritative Host validation.
+//
+// https://datatracker.ietf.org/doc/html/rfc6455#section-4.2.1
+func (u *Upgrader) Upgrade(w http.ResponseWriter, r *http.Request) (*Conn, error) {
+	if u == nil {
+		u = &Upgrader{}
+	}
+	conn, err := u.upgrade(w, r)
+	if err != nil {
+		return nil, writeUpgradeError(w, r, err, u.Error)
+	}
+	return conn, nil
+}
+
+func (u *Upgrader) upgrade(w http.ResponseWriter, r *http.Request) (*Conn, error) {
+	extensions, err := buildExtensions(u.Compression, u.NewExtensions)
+	if err != nil {
+		return nil, err
+	}
+	return upgrade(w, r, &upgradeOptions{
+		extensions:     extensions,
+		responseHeader: u.Header,
+		maxBytes:       messageLimit(u.MaxMessageSize),
+		originCheck:    u.CheckOrigin,
+		subprotocols:   cloneSubprotocols(u.Subprotocols),
+	})
+}
+
+// Upgrade upgrades the HTTP server connection with a zero Upgrader.
+func Upgrade(w http.ResponseWriter, r *http.Request) (*Conn, error) {
+	return (&Upgrader{}).Upgrade(w, r)
+}
+
+// ConnConfig configures NewConn for a connection whose handshake the caller
+// performed. Its zero value is a client connection with no extensions and the
+// DefaultMaxMessageSize limit.
+type ConnConfig struct {
+	// Server selects the server role: incoming frames must be masked and
+	// outgoing frames are not.
+	Server bool
+
+	// Subprotocol is the subprotocol the caller's handshake selected, which
+	// Conn.Subprotocol reports.
+	Subprotocol string
+
+	// Extensions are the extensions the caller's handshake negotiated, in
+	// the order they were offered. The Conn takes them over.
+	//
+	// For a manual server handshake with NewPerMessageDeflateExtension, call
+	// NewConn before Extension.Negotiate to establish the server role. Then
+	// negotiate the client's offer and, only if Extension.IsEnabled reports
+	// true, include Extension.Offer in the response before starting I/O. Do
+	// not advertise enabled permessage-deflate together with another enabled
+	// extension: operations reject that composition, and NewConn cannot undo
+	// a manual handshake.
+	Extensions []Extension
+
+	// MaxMessageSize bounds each incoming frame and reassembled message in
+	// bytes, including decompressed data. Zero means DefaultMaxMessageSize; a
+	// negative value means no limit.
+	MaxMessageSize int
+}
+
+// NewConn creates a WebSocket connection over conn, whose opening handshake
+// the caller has completed. It takes over WebSocket framing and I/O; Close and
+// read-error cleanup close the transport. Callers must not read or write
+// framed bytes directly on conn.
+func NewConn(conn net.Conn, cfg ConnConfig) *Conn {
+	ws := newConn(conn, bufio.NewReader(conn), cfg.Server, cfg.Extensions, messageLimit(cfg.MaxMessageSize))
+	ws.subprotocol = cfg.Subprotocol
+	return ws
+}
+
+// messageLimit maps a configured message size to the internal limit, where 0
+// means unlimited.
+func messageLimit(n int) int {
+	switch {
+	case n == 0:
+		return DefaultMaxMessageSize
+	case n < 0:
+		return 0
+	}
+	return n
+}
+
+// headLimit maps a configured response-head limit to the internal one, where
+// 0 means unlimited.
+func headLimit(n int64) int64 {
+	switch {
+	case n == 0:
+		return DefaultMaxResponseHeaderBytes
+	case n < 0:
+		return 0
+	}
+	return n
+}
+
+// buildExtensions creates one connection's extensions: permessage-deflate
+// from compression, if any, then the factory's.
+func buildExtensions(compression *Compression, factory func() []Extension) ([]Extension, error) {
+	var extensions []Extension
+	if compression != nil {
+		pmd, err := compression.extension()
+		if err != nil {
+			return nil, err
+		}
+		extensions = append(extensions, pmd)
+	}
+	if factory != nil {
+		extensions = append(extensions, factory()...)
+	}
+	return extensions, nil
+}
