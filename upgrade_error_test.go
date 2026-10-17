@@ -1,9 +1,11 @@
 package websocket
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -83,5 +85,25 @@ func TestUpgradeWritesErrorResponses(t *testing.T) {
 				t.Fatalf("Upgrade error = %v; want ErrBadHandshake %v", err, bad)
 			}
 		})
+	}
+}
+
+type failingHijacker struct {
+	*httptest.ResponseRecorder
+	err error
+}
+
+func (w failingHijacker) Hijack() (net.Conn, *bufio.ReadWriter, error) { return nil, nil, w.err }
+
+// A hijack failure keeps its cause reachable and writes no response.
+func TestUpgradeHijackErrorIsWrapped(t *testing.T) {
+	cause := errors.New("hijack broke")
+	w := failingHijacker{httptest.NewRecorder(), cause}
+	conn, err := Upgrade(w, upgradeRequest())
+	if conn != nil || !errors.Is(err, ErrHandshakeFailed) || !errors.Is(err, cause) {
+		t.Fatalf("Upgrade = %v, %v; want ErrHandshakeFailed wrapping the cause", conn, err)
+	}
+	if w.Body.Len() != 0 || w.Code != http.StatusOK {
+		t.Fatalf("wrote %d %q after a hijack failure", w.Code, w.Body.String())
 	}
 }

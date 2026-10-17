@@ -1922,7 +1922,7 @@ func upgrade(w http.ResponseWriter, r *http.Request, options []UpgradeOption) (*
 		if !ok && errors.Is(err, http.ErrNotSupported) {
 			return nil, ErrNotHijacker
 		}
-		return nil, fmt.Errorf("%w: %v", ErrHandshakeFailed, err)
+		return nil, fmt.Errorf("%w: %w", ErrHandshakeFailed, err)
 	}
 	if err := writeUpgradeResponse(bufrw.Writer, acceptKey, responseHeader); err != nil {
 		conn.Close()
@@ -2068,10 +2068,10 @@ func writeUpgradeResponse(w *bufio.Writer, acceptKey string, responseHeader http
 	// A bufio.Writer keeps its first error, so checking the last write
 	// covers them all.
 	if _, err := w.WriteString("\r\n"); err != nil {
-		return fmt.Errorf("%w: failed to write handshake response: %v", ErrHandshakeFailed, err)
+		return fmt.Errorf("%w: failed to write handshake response: %w", ErrHandshakeFailed, err)
 	}
 	if err := w.Flush(); err != nil {
-		return fmt.Errorf("%w: failed to flush handshake response: %v", ErrHandshakeFailed, err)
+		return fmt.Errorf("%w: failed to flush handshake response: %w", ErrHandshakeFailed, err)
 	}
 	return nil
 }
