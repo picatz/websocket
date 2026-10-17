@@ -1697,6 +1697,7 @@ func dial(ctx context.Context, urlStr string, opts *dialOptions) (ws *Conn, resp
 		return nil, nil, fmt.Errorf("%w: failed to read handshake response: %w", ErrBadHandshake, err)
 	}
 	if resp.StatusCode != http.StatusSwitchingProtocols {
+		keepRejectedBody(conn, resp)
 		conn.Close()
 		return nil, resp, fmt.Errorf("%w: unexpected status code %d", ErrBadHandshake, resp.StatusCode)
 	}
