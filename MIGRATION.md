@@ -14,17 +14,13 @@ appropriate budget. Do not split messages just to avoid the cap: message
 boundaries belong to the application protocol.
 
 ```go
-client, _, err := websocket.Dial(ctx, endpoint,
-    websocket.WithMaxMessageSize(4 << 20))
-server, err := websocket.Upgrade(w, r,
-    websocket.WithUpgradeMaxMessageSize(64 << 10))
+client, _, err := (&websocket.Dialer{MaxMessageSize: 4 << 20}).Dial(ctx, endpoint)
+server, err := (&websocket.Upgrader{MaxMessageSize: 64 << 10}).Upgrade(w, r)
 ```
 
-Existing explicit positive limits retain their meaning. Explicit zero or negative
-high-level limits remain unlimited; the last option wins. Nil options retain the
-default. `NewConn` remains unlimited unless given positive `WithMaxBytes`;
-non-positive `WithMaxBytes` options do not erase an earlier positive limit.
-Outgoing writes remain unaffected.
+Positive limits retain their meaning. With the [config structs](#config-structs),
+zero selects the default and a negative value means unlimited, for `NewConn`
+too. Outgoing writes remain unaffected.
 
 The same budget bounds each encoded data frame and the reassembled decoded
 message. For the supported unfragmented built-in compression path, incompressible
@@ -44,8 +40,8 @@ configured head-byte limit. This is an intentional default tightening: inventory
 large custom response headers and choose a larger positive budget if needed.
 
 ```go
-client, response, err := websocket.Dial(ctx, endpoint,
-    websocket.WithMaxResponseHeaderBytes(2 << 20))
+dialer := &websocket.Dialer{MaxResponseHeaderBytes: 2 << 20}
+client, response, err := dialer.Dial(ctx, endpoint)
 ```
 
 The budget includes the status line, every raw header line, duplicate fields,
@@ -55,8 +51,7 @@ of exactly the budget fits; needing another byte returns an error matching both
 returns a nil connection and response. Ordinary malformed-input and transport
 errors retain their causes; a canceled Dial context retains precedence.
 
-Omitted/nil options keep the default. An explicit zero or negative value opts
-out of the bound; the last option wins. The budget is decrypted HTTP bytes, not
+Zero keeps the default. A negative value opts out of the bound. The budget is decrypted HTTP bytes, not
 TLS overhead. It does not count HTTP bodies or WebSocket frames, and is separate
 from the incoming message limit. Buffered first-frame bytes are preserved.
 This is not a total-memory, CPU, concurrency or wall-clock guarantee. Use the
@@ -93,10 +88,10 @@ var allowed = map[string]bool{
     "https://app.example.com": true,
     "https://admin.example.com:8443": true,
 }
-conn, err := websocket.Upgrade(w, r,
-    websocket.WithUpgradeOriginCheck(func(r *http.Request, origin string) bool {
-        return origin == "" || allowed[origin]
-    }))
+upgrader := &websocket.Upgrader{CheckOrigin: func(r *http.Request, origin string) bool {
+    return origin == "" || allowed[origin]
+}}
+conn, err := upgrader.Upgrade(w, r)
 ```
 
 The callback sees one canonical origin, `""` for genuinely absent Origin, or
@@ -104,7 +99,7 @@ The callback sees one canonical origin, `""` for genuinely absent Origin, or
 explicitly. The example retains missing-Origin native clients; remove that branch
 if your protocol requires a browser Origin. The default rejects `null`; opting
 in does not identify a specific trusted site or local file. A nil callback
-restores the default and the last callback option wins. Malformed inputs cannot
+keeps the default. Malformed inputs cannot
 be opted in. Request/header data are not rewritten.
 
 Keep authentication, authorization, routing and authoritative Host validation.
@@ -172,7 +167,7 @@ handler mapped them to an HTTP status. It now writes the response itself:
 | `ErrOriginNotAllowed` | 403 |
 | `ErrInvalidMethod` | 405, with `Allow: GET` |
 | `ErrUnsupportedVersion` | 426, with `Sec-WebSocket-Version: 13` |
-| `ErrNotHijacker`, `ErrInvalidHandshakeHeader` (the server's own options) | 500 |
+| `ErrNotHijacker`, or an invalid `Upgrader` such as a reserved `Header` field (`ErrInvalidHandshakeHeader`) | 500 |
 | `ErrHandshakeFailed` | nothing: the transport may already be hijacked |
 | any other malformed handshake | 400 |
 
@@ -206,6 +201,77 @@ if err != nil {
 `github.com/picatz/openai` returns without writing after a failed `Upgrade` and
 needs no change.
 
+## Config structs
+
+Dial, Upgrade and NewConn used to take functional options. Settings now live in
+plain structs whose zero values are the defaults: `Dialer` for clients,
+`Upgrader` for servers and `ConnConfig` for `NewConn`. One field names each
+concept on both sides, a struct can be built once and shared, and the
+package-level `Dial(ctx, url)` and `Upgrade(w, r)` use the zero value. Every
+`DialOption`, `UpgradeOption` and `ConnOption`, and their `With*` constructors,
+are removed. The `PerMessageDeflateOption`s remain for custom extension use.
+
+| Before | After |
+|---|---|
+| `WithHeader(h)` | `Dialer.Header` |
+| `WithResponseHeader(h)` | `Upgrader.Header` |
+| `WithSubprotocols(p...)` | `Dialer.Subprotocols` |
+| `WithUpgradeSubprotocols(p...)` | `Upgrader.Subprotocols` |
+| `WithMaxMessageSize(n)` | `Dialer.MaxMessageSize` |
+| `WithUpgradeMaxMessageSize(n)` | `Upgrader.MaxMessageSize` |
+| `WithMaxBytes(n)` on `NewConn` | `ConnConfig.MaxMessageSize` |
+| `WithMaxResponseHeaderBytes(n)` | `Dialer.MaxResponseHeaderBytes` |
+| `WithTLSConfig(c)` | `Dialer.TLSConfig` |
+| `WithProxy(f)` | `Dialer.Proxy` |
+| `WithNetDialContext(f)` | `Dialer.NetDialContext` |
+| `WithUpgradeOriginCheck(f)` | `Upgrader.CheckOrigin` |
+| `WithExtensions(NewPerMessageDeflateExtension(...))` | `Dialer.Compression` |
+| `WithUpgradeExtensions(NewPerMessageDeflateExtension(...))` | `Upgrader.Compression` |
+| `WithExtensions(custom...)`, `WithUpgradeExtensions(custom...)` | `NewExtensions` on either struct |
+| `NewConn(c, isServer, exts, WithMaxBytes(n))` | `NewConn(c, ConnConfig{Server: isServer, Extensions: exts, MaxMessageSize: n})` |
+
+```go
+// Before
+conn, _, err := websocket.Dial(ctx, endpoint,
+	websocket.WithHeader(header),
+	websocket.WithMaxMessageSize(1<<20),
+	websocket.WithProxy(http.ProxyFromEnvironment),
+	websocket.WithExtensions(websocket.NewPerMessageDeflateExtension()))
+
+// After
+dialer := &websocket.Dialer{
+	Header:         header,
+	MaxMessageSize: 1 << 20,
+	Proxy:          http.ProxyFromEnvironment,
+	Compression:    &websocket.Compression{},
+}
+conn, _, err := dialer.Dial(ctx, endpoint)
+```
+
+Behavior that changes with the move:
+
+- **Limits.** For `MaxMessageSize` and `MaxResponseHeaderBytes`, zero now means
+  the default and a negative value means unlimited, as with `http.Server`. An
+  explicit `WithMaxMessageSize(0)` used to mean unlimited; write `-1`.
+- **NewConn's default limit.** `NewConn` used to be unlimited unless given
+  `WithMaxBytes`. A zero `ConnConfig` now applies `DefaultMaxMessageSize`, like
+  Dial and Upgrade; set `MaxMessageSize: -1` to keep the old behavior.
+- **Extensions per connection.** An extension holds one connection's state, so
+  a shared `Dialer` or `Upgrader` cannot hold one. `Compression` builds a fresh
+  permessage-deflate extension for every connection; `NewExtensions` is called
+  once per handshake and must return new instances. `Compression` is always
+  negotiated before them.
+- **Compression settings.** `Compression` fields map to the old
+  `PerMessageDeflateOption`s: `Level`, `Threshold`, `MemoryLimit` (where -1
+  means no limit, the old `WithCompressionMemoryLimit(0)`), the two
+  `*NoContextTakeover` flags and the two `*MaxWindowBits`. Invalid values make
+  Dial fail before connecting and Upgrade answer 500.
+- **Error responses.** `Upgrader.Error` replaces the body Upgrade writes when the
+  handshake fails, with the status and required header fields already chosen.
+
+`github.com/picatz/openai` moves its one `Dial` call to a `Dialer` in a
+companion change.
+
 ## Compression negotiation and composition
 
 `permessage-deflate` now sends with context takeover, fragments large compressed
@@ -215,8 +281,8 @@ that follow RFC 7692 need no change; these are the observable differences:
 - A client's default offer is `permessage-deflate; client_max_window_bits`,
   declaring that the server may select any client window. Previously the offer
   had no parameters.
-- `WithClientMaxWindowBits(8..14)` for `Dial` and `WithServerMaxWindowBits(8..14)`
-  for `Upgrade` are honored instead of being rejected before connecting. A server
+- `Compression.ClientMaxWindowBits` (8..14) for `Dial` and
+  `Compression.ServerMaxWindowBits` (8..14) for `Upgrade` are honored instead of being rejected before connecting. A server
   accepts an offered `server_max_window_bits` below 15 instead of declining it,
   and includes a configured server window even when the client offered none
   (RFC 7692, Section 7.1.2.1).
@@ -227,8 +293,8 @@ that follow RFC 7692 need no change; these are the observable differences:
   message poisons later writes on that connection.
 - Each connection keeps at most `DefaultCompressionMemoryLimit` (64 KiB) of
   compression state between messages by default: its send and receive history,
-  not a whole compressor. Negotiated parameters are unchanged. Pass
-  `WithCompressionMemoryLimit(0)` to keep a compressor per connection instead,
+  not a whole compressor. Negotiated parameters are unchanged. Set
+  `Compression.MemoryLimit` to -1 to keep a compressor per connection instead,
   which is faster per message and uses about 0.5–1 MiB.
 
 ## Verification scope

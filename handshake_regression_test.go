@@ -82,7 +82,7 @@ func TestDialHonorsTLSConfig(t *testing.T) {
 	}))
 	defer srv.Close()
 	config := srv.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
-	conn, _, err := Dial(t.Context(), "wss"+srv.URL[5:], WithTLSConfig(config))
+	conn, _, err := (&Dialer{TLSConfig: config}).Dial(t.Context(), "wss"+srv.URL[5:])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +156,7 @@ func TestUpgradeRejectsInvalidKey(t *testing.T) {
 func TestUpgradeMaxMessageSize(t *testing.T) {
 	raw := &memoryConn{Reader: bytes.NewReader([]byte{0x82, 0x85, 0, 0, 0, 0, 1, 2, 3, 4, 5})}
 	w := &hijackResponse{httptest.NewRecorder(), raw, bufio.NewReadWriter(bufio.NewReader(raw), bufio.NewWriter(raw))}
-	conn, err := Upgrade(w, upgradeRequest(), WithUpgradeMaxMessageSize(4))
+	conn, err := (&Upgrader{MaxMessageSize: 4}).Upgrade(w, upgradeRequest())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -54,13 +54,13 @@ var (
 	ErrProxy                   = errors.New("websocket: proxy tunnel failed")
 )
 
-// DefaultMaxMessageSize is the incoming payload limit used by Dial and Upgrade
-// when no size option is supplied. It bounds each data frame and the reassembled
+// DefaultMaxMessageSize is the incoming payload limit used when a Dialer,
+// Upgrader or ConnConfig leaves MaxMessageSize zero. It bounds each data frame and the reassembled
 // decoded message, not total memory, connection lifetime, or outgoing messages.
 const DefaultMaxMessageSize = 1 << 20
 
-// DefaultMaxResponseHeaderBytes is Dial's HTTP response-head byte limit when no
-// WithMaxResponseHeaderBytes option is supplied. It includes the status line,
+// DefaultMaxResponseHeaderBytes is Dial's HTTP response-head byte limit when
+// Dialer.MaxResponseHeaderBytes is zero. It includes the status line,
 // all header lines and their separators, and the final empty line.
 const DefaultMaxResponseHeaderBytes = 1 << 20
 
@@ -401,41 +401,14 @@ type Conn struct {
 	pings   map[string]chan struct{}
 }
 
-// ConnOption configures a connection created by NewConn.
-type ConnOption func(*Conn)
-
-// WithMaxBytes sets the incoming frame and reassembled-message limit for NewConn.
-// It also bounds decoded data from the built-in compression extension. A
-// non-positive value is ignored; NewConn starts with no limit.
-func WithMaxBytes(maxBytes int) ConnOption {
-	return func(c *Conn) {
-		if maxBytes > 0 {
-			c.maxBytes = maxBytes
-		}
-	}
-}
-
-// NewConn creates a new WebSocket connection.
-// It takes over WebSocket framing and I/O; Close and read-error cleanup close
-// the transport. Callers must not read or write framed bytes directly on conn.
-//
-// For a manual server handshake with the built-in compression extension, call
-// NewConn before Extension.Negotiate to establish the server role. Then negotiate
-// the client's offer and, only if Extension.IsEnabled reports true, include
-// Extension.Offer in the response before starting I/O. Do not advertise enabled
-// built-in PMD together with another enabled extension: operations reject that
-// unsupported composition, and this constructor cannot undo a manual handshake.
-func NewConn(conn net.Conn, isServer bool, extensions []Extension, opts ...ConnOption) *Conn {
-	return newConn(conn, bufio.NewReader(conn), isServer, extensions, opts...)
-}
-
-// newConn is NewConn with a read buffer that may already hold bytes read past
-// the handshake. It must read from conn.
-func newConn(conn net.Conn, br *bufio.Reader, isServer bool, extensions []Extension, opts ...ConnOption) *Conn {
+// newConn creates a Conn whose read buffer br may already hold bytes read past
+// the handshake. br must read from conn. maxBytes 0 means no limit.
+func newConn(conn net.Conn, br *bufio.Reader, isServer bool, extensions []Extension, maxBytes int) *Conn {
 	wsConn := &Conn{
 		conn:       conn,
 		rw:         bufio.NewReadWriter(br, nil),
 		isServer:   isServer,
+		maxBytes:   maxBytes,
 		extensions: extensions,
 	}
 
@@ -448,10 +421,6 @@ func newConn(conn net.Conn, br *bufio.Reader, isServer bool, extensions []Extens
 	wsConn.abortConn = conn
 	if tlsConn, ok := conn.(*tls.Conn); ok {
 		wsConn.abortConn = tlsConn.NetConn()
-	}
-
-	for _, opt := range opts {
-		opt(wsConn)
 	}
 
 	return wsConn
@@ -1536,10 +1505,8 @@ func writeMasked(w *bufio.Writer, key [4]byte, p []byte) error {
 	return nil
 }
 
-// DialOption represents an option for the Dial function.
-type DialOption func(*dialOptions)
-
-// dialOptions stores the options for the Dial function.
+// dialOptions is a Dialer resolved for one Dial: defaults applied, the
+// subprotocol list detached and extensions created for this connection.
 type dialOptions struct {
 	extensions             []Extension
 	header                 http.Header
@@ -1551,81 +1518,8 @@ type dialOptions struct {
 	subprotocols           []string
 }
 
-// apply applies the options to the dialOptions.
-func (opts *dialOptions) apply(options []DialOption) {
-	for _, option := range options {
-		if option != nil {
-			option(opts)
-		}
-	}
-}
-
-// WithExtensions sets the extensions to use during the WebSocket handshake.
-func WithExtensions(extensions ...Extension) DialOption {
-	return func(opts *dialOptions) {
-		opts.extensions = extensions
-	}
-}
-
-// WithHeader sets custom headers for the WebSocket handshake.
-// Dial rejects invalid HTTP field names/values and fields managed by the
-// handshake: Host, Upgrade, Connection, Sec-WebSocket-Key, Sec-WebSocket-Version,
-// and Sec-WebSocket-Extensions. Content-Length and Transfer-Encoding are also
-// forbidden because the handshake has no HTTP body. Names are case-insensitive.
-// Sec-WebSocket-Protocol offers must be unique HTTP tokens. A server may select
-// one offered token (case-sensitive) or omit selection. Repeated ordinary fields
-// are preserved; the caller owns their semantics.
-func WithHeader(header http.Header) DialOption {
-	return func(opts *dialOptions) {
-		opts.header = header
-	}
-}
-
-// WithTLSConfig sets the TLS configuration for the WebSocket connection.
-func WithTLSConfig(config *tls.Config) DialOption {
-	return func(opts *dialOptions) {
-		opts.tlsConfig = config
-	}
-}
-
-// WithMaxMessageSize sets the maximum frame and reassembled message size in bytes.
-// For the built-in compression extension, this also bounds decompressed data.
-// The default is DefaultMaxMessageSize. An explicit non-positive value makes
-// the size unlimited. When repeated, the last option wins.
-func WithMaxMessageSize(maxBytes int) DialOption {
-	return func(opts *dialOptions) {
-		opts.maxBytes = maxBytes
-	}
-}
-
-// WithMaxResponseHeaderBytes sets Dial's HTTP response-head byte limit. The
-// budget includes the status line, every raw header line (including duplicates
-// and continuation whitespace), line separators, and the final empty line.
-// Exactly maxBytes bytes fit if the complete head ends within that budget.
-// It counts decrypted HTTP bytes, not TLS overhead, response bodies or frames.
-// This is not a total-memory or time limit; use Dial's context to bound waiting.
-// The default is DefaultMaxResponseHeaderBytes. An explicit non-positive value
-// makes the limit unlimited. When repeated, the last option wins.
-// An exceeded limit returns an error matching both ErrBadHandshake and
-// ErrResponseHeaderTooLarge, with a nil connection and response.
-func WithMaxResponseHeaderBytes(maxBytes int64) DialOption {
-	return func(opts *dialOptions) {
-		opts.maxResponseHeaderBytes = maxBytes
-	}
-}
-
-// Dial establishes a WebSocket client connection to the given URL.
-// Incoming payloads default to DefaultMaxMessageSize; WithMaxMessageSize overrides it.
-// The response head defaults to DefaultMaxResponseHeaderBytes;
-// WithMaxResponseHeaderBytes overrides it independently of the message limit.
-// ctx covers TCP, TLS, and the HTTP upgrade handshake, but not subsequent I/O.
-func Dial(ctx context.Context, urlStr string, options ...DialOption) (ws *Conn, response *http.Response, err error) {
-	opts := &dialOptions{
-		maxBytes:               DefaultMaxMessageSize,
-		maxResponseHeaderBytes: DefaultMaxResponseHeaderBytes,
-	}
-	opts.apply(options)
-
+// dial performs the client handshake for a resolved Dialer.
+func dial(ctx context.Context, urlStr string, opts *dialOptions) (ws *Conn, response *http.Response, err error) {
 	if err := validateHandshakeHeaders(opts.header, false); err != nil {
 		return nil, nil, err
 	}
@@ -1820,16 +1714,13 @@ func Dial(ctx context.Context, urlStr string, options ...DialOption) (ws *Conn, 
 		return nil, resp, fmt.Errorf("%w: %w", ErrInvalidExtension, err)
 	}
 
-	ws = newConn(conn, br, false, opts.extensions, WithMaxBytes(opts.maxBytes))
+	ws = newConn(conn, br, false, opts.extensions, opts.maxBytes)
 	ws.subprotocol = subprotocol
 	ws.abortConn = rawConn
 	return ws, resp, nil
 }
 
-// UpgradeOption represents an option for the Upgrade function.
-type UpgradeOption func(*upgradeOptions)
-
-// upgradeOptions stores the options for the Upgrade function.
+// upgradeOptions is an Upgrader resolved for one Upgrade.
 type upgradeOptions struct {
 	extensions     []Extension
 	responseHeader http.Header
@@ -1838,105 +1729,8 @@ type upgradeOptions struct {
 	subprotocols   []string
 }
 
-// apply applies the options to the upgradeOptions.
-func (opts *upgradeOptions) apply(options []UpgradeOption) {
-	for _, option := range options {
-		if option != nil {
-			option(opts)
-		}
-	}
-}
-
-// WithUpgradeExtensions sets the extensions to use during the WebSocket handshake.
-func WithUpgradeExtensions(extensions ...Extension) UpgradeOption {
-	return func(opts *upgradeOptions) {
-		opts.extensions = extensions
-	}
-}
-
-// WithResponseHeader sets custom headers for the WebSocket handshake response.
-// Upgrade rejects invalid HTTP field names/values and fields managed by the
-// handshake: Upgrade, Connection, Sec-WebSocket-Accept, and
-// Sec-WebSocket-Extensions. Content-Length and Transfer-Encoding are also
-// forbidden in a 101 response. Names are case-insensitive. Repeated ordinary
-// fields, such as Set-Cookie, are preserved; the caller owns their semantics.
-// Sec-WebSocket-Protocol may select exactly one token offered by the client,
-// using a single field value, or be omitted to select no subprotocol.
-func WithResponseHeader(header http.Header) UpgradeOption {
-	return func(opts *upgradeOptions) {
-		opts.responseHeader = header
-	}
-}
-
-// WithUpgradeMaxMessageSize sets the maximum incoming frame and reassembled
-// message size, including built-in decompression. The default is
-// DefaultMaxMessageSize. An explicit non-positive value means unlimited.
-// When repeated, the last option wins.
-func WithUpgradeMaxMessageSize(maxBytes int) UpgradeOption {
-	return func(opts *upgradeOptions) {
-		opts.maxBytes = maxBytes
-	}
-}
-
-// WithUpgradeOriginCheck replaces the default same-origin decision. The callback
-// receives the request and one canonical Origin: a lowercase scheme/ASCII host,
-// normalized numeric port (HTTP/HTTPS defaults omitted), and normalized IPv6;
-// "" means absent and "null" means an opaque origin. Host spelling is otherwise
-// preserved, including trailing dots; Unicode hosts must use ASCII/punycode.
-// Hosts accept ASCII RFC 3986 reg-name characters except percent escapes and
-// commas, or bracketed IPv6 without a zone. Mapped IPv6 is serialized in hex.
-// Malformed, empty, multiple, or list-valued Origin fields are rejected before
-// the callback. A nil callback restores the default. The last option wins.
-//
-// Use an exact allowlist for public origins behind a TLS-terminating proxy.
-// Forwarded headers are untrusted unless the application validates its ingress.
-// A callback replaces, rather than supplements, the default decision; it must
-// explicitly decide whether missing and opaque origins are allowed.
-func WithUpgradeOriginCheck(check func(r *http.Request, origin string) bool) UpgradeOption {
-	return func(opts *upgradeOptions) {
-		opts.originCheck = check
-	}
-}
-
-// Upgrade upgrades the HTTP server connection to a WebSocket connection.
-// Incoming payloads default to DefaultMaxMessageSize. A missing Origin is allowed;
-// otherwise a single valid HTTP/HTTPS Origin must match r.Host and the scheme
-// observed through r.TLS. Forwarded headers and r.URL.Scheme are not trusted.
-// Origin is not authentication: callers still own authentication, authorization,
-// and authoritative Host validation. WithUpgradeOriginCheck replaces the policy.
-//
-// When Upgrade fails before taking over the connection, it writes the HTTP
-// error response itself and returns the error; the handler should just return.
-// The error says which response was sent:
-//
-//   - ErrOriginNotAllowed: 403 Forbidden.
-//   - ErrBadHandshake: the client's request was at fault. A non-GET request
-//     (ErrInvalidMethod) gets 405 Method Not Allowed with Allow: GET, an
-//     unsupported version (ErrUnsupportedVersion) 426 Upgrade Required with
-//     Sec-WebSocket-Version: 13 (RFC 6455 section 4.4), and any other
-//     malformed request 400 Bad Request.
-//   - ErrNotHijacker, or invalid server options (ErrInvalidHandshakeHeader):
-//     500 Internal Server Error.
-//   - ErrHandshakeFailed: nothing, as the transport may already be hijacked.
-//
-// https://datatracker.ietf.org/doc/html/rfc6455#section-4.2.1
-//
-// It requires an HTTP/1.1 connection with hijacking support. Middleware may
-// implement http.Hijacker directly or expose the underlying http.ResponseWriter
-// through an Unwrap() http.ResponseWriter method, as used by http.ResponseController.
-// A writer's own Hijack method takes precedence over Unwrap. HTTP/2 is not supported.
-func Upgrade(w http.ResponseWriter, r *http.Request, options ...UpgradeOption) (*Conn, error) {
-	conn, err := upgrade(w, r, options)
-	if err != nil {
-		return nil, writeUpgradeError(w, err)
-	}
-	return conn, nil
-}
-
-func upgrade(w http.ResponseWriter, r *http.Request, options []UpgradeOption) (*Conn, error) {
-	opts := &upgradeOptions{maxBytes: DefaultMaxMessageSize}
-	opts.apply(options)
-
+// upgrade performs the server handshake for a resolved Upgrader.
+func upgrade(w http.ResponseWriter, r *http.Request, opts *upgradeOptions) (*Conn, error) {
 	// Each step is its own function so that only one step's locals are on
 	// the stack at a time. The handler goroutine keeps whatever stack the
 	// handshake grew to for the connection's lifetime.
@@ -1970,7 +1764,7 @@ func upgrade(w http.ResponseWriter, r *http.Request, options []UpgradeOption) (*
 	// Keep the hijacked reader, which may already hold the client's first
 	// frames. The hijacked writer is released: frames are written through a
 	// shared, pooled buffer only while one is being written.
-	ws := newConn(conn, bufrw.Reader, true, opts.extensions, WithMaxBytes(opts.maxBytes))
+	ws := newConn(conn, bufrw.Reader, true, opts.extensions, opts.maxBytes)
 	ws.subprotocol = subprotocol
 	return ws, nil
 }

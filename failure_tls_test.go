@@ -191,7 +191,7 @@ func TestFailureTLSNewConnAbortsWithoutCloseNotify(t *testing.T) {
 	for _, server := range []bool{false, true} {
 		t.Run(fmt.Sprint(server), func(t *testing.T) {
 			target, peer, raw, peerRaw := failureTLSPair(t, server)
-			c := NewConn(target, server, nil)
+			c := NewConn(target, ConnConfig{Server: server})
 			if c.abortConn != raw {
 				t.Fatal("NewConn did not retain the concrete TLS underlying transport")
 			}
@@ -238,7 +238,7 @@ func TestFailureTLSNewConnAbortsWithoutCloseNotify(t *testing.T) {
 
 func TestFailureTLSConcurrentCloseCancelsNotification(t *testing.T) {
 	target, peer, raw, peerRaw := failureTLSPair(t, false)
-	c := NewConn(target, false, nil)
+	c := NewConn(target, ConnConfig{})
 	var wg sync.WaitGroup
 	t.Cleanup(func() { raw.Close(); peerRaw.Close(); wg.Wait() })
 	peerDone := make(chan error, 1)
@@ -268,7 +268,7 @@ func TestFailureTLSConcurrentCloseCancelsNotification(t *testing.T) {
 
 func TestFailureTLSNormalCloseFirstStillAllowsAbort(t *testing.T) {
 	target, peer, raw, peerRaw := failureTLSPair(t, false)
-	c := NewConn(target, false, nil)
+	c := NewConn(target, ConnConfig{})
 	var wg sync.WaitGroup
 	t.Cleanup(func() { raw.Close(); peerRaw.Close(); wg.Wait() })
 	readDone := make(chan error, 1)
@@ -376,7 +376,7 @@ func TestFailureTLSDialRetainsRawAbortTransport(t *testing.T) {
 	}))
 	defer srv.Close()
 	config := srv.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
-	c, _, err := Dial(t.Context(), "wss"+srv.URL[5:], WithTLSConfig(config))
+	c, _, err := (&Dialer{TLSConfig: config}).Dial(t.Context(), "wss"+srv.URL[5:])
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -33,11 +33,11 @@ func TestConnInfo(t *testing.T) {
 				_, _, _ = conn.ReadMessage()
 			})
 			var srv *httptest.Server
-			var options []DialOption
+			var d Dialer
 			url := ""
 			if secure {
 				srv = httptest.NewTLSServer(handler)
-				options = append(options, WithTLSConfig(srv.Client().Transport.(*http.Transport).TLSClientConfig))
+				d.TLSConfig = srv.Client().Transport.(*http.Transport).TLSClientConfig
 				url = "wss" + srv.URL[5:]
 			} else {
 				srv = httptest.NewServer(handler)
@@ -47,7 +47,7 @@ func TestConnInfo(t *testing.T) {
 
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			defer cancel()
-			conn, _, err := Dial(ctx, url, options...)
+			conn, _, err := d.Dial(ctx, url)
 			if err != nil {
 				t.Fatal(err)
 			}

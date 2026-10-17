@@ -38,7 +38,7 @@ func TestReadMessageOwnershipCapacityAndLifetime(t *testing.T) {
 					}
 					wire := append(bytes.Clone(frameWire), frameWire...)
 					// An allocated but empty extension slice also registers no extensions.
-					c := NewConn(&memoryConn{Reader: bytes.NewReader(wire)}, server, []Extension{})
+					c := NewConn(&memoryConn{Reader: bytes.NewReader(wire)}, ConnConfig{Server: server, Extensions: []Extension{}})
 					kind, first, err := c.ReadMessage()
 					if err != nil || kind != op || !bytes.Equal(first, want) || cap(first) != wantCap || (size == 0 && first != nil) {
 						t.Fatalf("first read: type=%v len/cap=%d/%d err=%v; want %v %d/%d", kind, len(first), cap(first), err, op, size, wantCap)
@@ -102,7 +102,7 @@ func TestReadMessageOwnershipFragmentAndControlBoundaries(t *testing.T) {
 			t.Run(fmt.Sprintf("server=%v/type=%s/second starter", server, op), func(t *testing.T) {
 				wire := append(frame(byte(op), nil), limitHeader(server, 0x80|byte(op), len(payload))...)
 				raw := &headerOnlyConn{memoryConn: memoryConn{Reader: bytes.NewReader(wire)}}
-				c := NewConn(raw, server, nil)
+				c := NewConn(raw, ConnConfig{Server: server})
 				if _, p, err := c.ReadMessage(); err != ErrUnexpectedFrame || p != nil || raw.bodyReads != 0 {
 					t.Fatalf("read: len=%d err=%v body reads=%d", len(p), err, raw.bodyReads)
 				}
@@ -155,7 +155,7 @@ func TestReadMessageOwnershipExtensionIsolation(t *testing.T) {
 						return nil
 					}}
 					wire := append(limitWire(server, 0x80|byte(op), firstWant), limitWire(server, 0x80|byte(op), secondWant)...)
-					c := NewConn(&memoryConn{Reader: bytes.NewReader(wire)}, server, []Extension{ext})
+					c := NewConn(&memoryConn{Reader: bytes.NewReader(wire)}, ConnConfig{Server: server, Extensions: []Extension{ext}})
 					kind, first, err := c.ReadMessage()
 					if err != nil || kind != op || !bytes.Equal(first, firstWant) || len(held) != 1 {
 						t.Fatalf("first read: type=%v len=%d err=%v held=%d", kind, len(first), err, len(held))
@@ -192,7 +192,7 @@ func TestReadMessageOwnershipRegisteredExtensions(t *testing.T) {
 					want := ownershipPayload(op, 512)
 					wire := limitWire(server, 0x80|byte(op), want)
 					ext := &ownershipExtension{enabled: enabled}
-					c := NewConn(&memoryConn{Reader: bytes.NewReader(wire)}, server, []Extension{ext})
+					c := NewConn(&memoryConn{Reader: bytes.NewReader(wire)}, ConnConfig{Server: server, Extensions: []Extension{ext}})
 					kind, got, err := c.ReadMessage()
 					wantProcess := 0
 					if enabled {
@@ -207,7 +207,7 @@ func TestReadMessageOwnershipRegisteredExtensions(t *testing.T) {
 					// RSV1 is deliberately clear: even enabled PMD must keep the
 					// registered-extension fallback for uncompressed messages.
 					pmd := &perMessageDeflate{enabled: enabled}
-					c = NewConn(&memoryConn{Reader: bytes.NewReader(wire)}, server, []Extension{pmd})
+					c = NewConn(&memoryConn{Reader: bytes.NewReader(wire)}, ConnConfig{Server: server, Extensions: []Extension{pmd}})
 					if kind, got, err = c.ReadMessage(); err != nil || kind != op || !bytes.Equal(got, want) {
 						t.Fatalf("uncompressed PMD: type=%v len=%d err=%v", kind, len(got), err)
 					}
@@ -235,7 +235,7 @@ func TestReadMessageOwnershipDecodedLimits(t *testing.T) {
 						return nil
 					}}
 					raw := &failureMemoryConn{memoryConn: memoryConn{Reader: bytes.NewReader(limitWire(server, 0x80|byte(op), ownershipPayload(op, limit)))}}
-					c := NewConn(raw, server, []Extension{grow, trim}, WithMaxBytes(limit))
+					c := NewConn(raw, ConnConfig{Server: server, Extensions: []Extension{grow, trim}, MaxMessageSize: limit})
 					kind, got, err := c.ReadMessage()
 					if grow.processCalls != 1 || trim.processCalls != 1 {
 						t.Fatalf("decoded limit checked before all extensions: grow=%d trim=%d", grow.processCalls, trim.processCalls)
@@ -328,7 +328,7 @@ func TestReadMessageOwnershipFailures(t *testing.T) {
 						wire = limitHeader(server, 0x80|byte(op), len(p))
 					}
 					raw := &streamChoppedConn{chunks: [][]byte{wire}, tailErr: tail}
-					c := NewConn(raw, server, extensions, WithMaxBytes(limit))
+					c := NewConn(raw, ConnConfig{Server: server, Extensions: extensions, MaxMessageSize: limit})
 					_, got, err := c.ReadMessage()
 					if !errors.Is(err, cause) || got != nil {
 						t.Fatalf("failure: len=%d err=%v, want %v", len(got), err, cause)
@@ -374,7 +374,7 @@ func TestReadMessageOwnershipConcurrentReaders(t *testing.T) {
 			t.Run(fmt.Sprintf("server=%v/type=%s", server, op), func(t *testing.T) {
 				wire := append(limitWire(server, 0x80|byte(op), bytes.Repeat([]byte{'a'}, 4096)), limitWire(server, 0x80|byte(op), bytes.Repeat([]byte{'b'}, 4096))...)
 				raw := &ownershipGatedConn{memoryConn: memoryConn{Reader: bytes.NewReader(wire)}, entered: make(chan struct{}), release: make(chan struct{})}
-				c := NewConn(raw, server, nil)
+				c := NewConn(raw, ConnConfig{Server: server})
 				var release sync.Once
 				unblock := func() { release.Do(func() { close(raw.release) }) }
 				defer unblock()

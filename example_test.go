@@ -61,21 +61,17 @@ func Example() {
 	// Output: TextMessage hello
 }
 
-// Upgrade takes over an HTTP/1.1 request. Errors returned before the
-// connection is hijacked leave the response writer untouched, so the handler
-// chooses the HTTP response.
-func ExampleUpgrade() {
+// An Upgrader holds the server's handshake settings and is safe to share
+// between handlers. When the handshake fails, Upgrade has already answered the
+// request with a 4xx or 5xx response, so the handler only returns.
+func ExampleUpgrader() {
+	upgrader := &websocket.Upgrader{
+		Subprotocols:   []string{"chat.v2", "chat.v1"},
+		MaxMessageSize: 64 << 10,
+	}
 	handler := func(w http.ResponseWriter, r *http.Request) {
-		conn, err := websocket.Upgrade(w, r,
-			websocket.WithUpgradeSubprotocols("chat.v2", "chat.v1"),
-			websocket.WithUpgradeMaxMessageSize(64<<10),
-		)
+		conn, err := upgrader.Upgrade(w, r)
 		if err != nil {
-			if errors.Is(err, websocket.ErrOriginNotAllowed) {
-				http.Error(w, "origin not allowed", http.StatusForbidden)
-				return
-			}
-			http.Error(w, "websocket upgrade failed", http.StatusBadRequest)
 			return
 		}
 		defer conn.Close()
@@ -84,8 +80,8 @@ func ExampleUpgrade() {
 	srv := httptest.NewServer(http.HandlerFunc(handler))
 	defer srv.Close()
 
-	conn, _, err := websocket.Dial(context.Background(), wsURL(srv),
-		websocket.WithSubprotocols("chat.v1"))
+	dialer := &websocket.Dialer{Subprotocols: []string{"chat.v1"}}
+	conn, _, err := dialer.Dial(context.Background(), wsURL(srv))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -219,12 +215,13 @@ func ExampleConn_WriteMessageContext() {
 }
 
 // Compression is opt-in on both sides, and the handshake decides whether it is
-// used. Each connection needs its own extension instance. Messages shorter
-// than the threshold are sent uncompressed.
-func ExampleNewPerMessageDeflateExtension() {
+// used. A Compression value builds a fresh extension for every connection, so
+// one Dialer or Upgrader can be shared. Messages shorter than Threshold are
+// sent uncompressed.
+func ExampleCompression() {
+	upgrader := &websocket.Upgrader{Compression: &websocket.Compression{}}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := websocket.Upgrade(w, r,
-			websocket.WithUpgradeExtensions(websocket.NewPerMessageDeflateExtension()))
+		conn, err := upgrader.Upgrade(w, r)
 		if err != nil {
 			return
 		}
@@ -237,11 +234,8 @@ func ExampleNewPerMessageDeflateExtension() {
 	}))
 	defer srv.Close()
 
-	pmd := websocket.NewPerMessageDeflateExtension(
-		websocket.WithCompressionThreshold(256),
-	)
-	conn, resp, err := websocket.Dial(context.Background(), wsURL(srv),
-		websocket.WithExtensions(pmd))
+	dialer := &websocket.Dialer{Compression: &websocket.Compression{Threshold: 256}}
+	conn, resp, err := dialer.Dial(context.Background(), wsURL(srv))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -264,17 +258,14 @@ func ExampleNewPerMessageDeflateExtension() {
 
 // Behind a TLS-terminating proxy the request's Host and scheme are not the
 // public origin, so replace the same-origin check with an exact allowlist.
-func ExampleWithUpgradeOriginCheck() {
+// A rejected origin is answered with 403 Forbidden.
+func ExampleUpgrader_checkOrigin() {
 	allowed := map[string]bool{"https://app.example.com": true}
+	upgrader := &websocket.Upgrader{CheckOrigin: func(r *http.Request, origin string) bool {
+		return allowed[origin]
+	}}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := websocket.Upgrade(w, r,
-			websocket.WithUpgradeOriginCheck(func(r *http.Request, origin string) bool {
-				return allowed[origin]
-			}))
-		if errors.Is(err, websocket.ErrOriginNotAllowed) {
-			http.Error(w, "origin not allowed", http.StatusForbidden)
-			return
-		}
+		conn, err := upgrader.Upgrade(w, r)
 		if err != nil {
 			return
 		}
@@ -283,9 +274,8 @@ func ExampleWithUpgradeOriginCheck() {
 	defer srv.Close()
 
 	for _, origin := range []string{"https://app.example.com", "https://evil.example"} {
-		header := http.Header{"Origin": {origin}}
-		conn, resp, err := websocket.Dial(context.Background(), wsURL(srv),
-			websocket.WithHeader(header))
+		dialer := &websocket.Dialer{Header: http.Header{"Origin": {origin}}}
+		conn, resp, err := dialer.Dial(context.Background(), wsURL(srv))
 		if err != nil {
 			fmt.Println(origin, resp.StatusCode)
 			continue

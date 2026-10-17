@@ -38,11 +38,20 @@ func (w *originWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	return nil, nil, errors.New("unexpected hijack")
 }
 
-func originUpgrade(t *testing.T, r *http.Request, options ...UpgradeOption) (*Conn, error) {
+// originPolicy is an Upgrader with only CheckOrigin set.
+func originPolicy(check func(*http.Request, string) bool) *Upgrader {
+	return &Upgrader{CheckOrigin: check}
+}
+
+func originUpgrade(t *testing.T, r *http.Request, upgraders ...*Upgrader) (*Conn, error) {
 	t.Helper()
 	raw := &memoryConn{Reader: bytes.NewReader(nil)}
 	w := &hijackResponse{httptest.NewRecorder(), raw, bufio.NewReadWriter(bufio.NewReader(raw), bufio.NewWriter(raw))}
-	c, err := Upgrade(w, r, options...)
+	u := &Upgrader{}
+	if len(upgraders) > 0 {
+		u = upgraders[0]
+	}
+	c, err := u.Upgrade(w, r)
 	if c != nil {
 		t.Cleanup(func() { c.conn.Close() })
 	}
@@ -125,7 +134,7 @@ func TestUpgradeRejectsAmbiguousOriginBeforeCallback(t *testing.T) {
 			w := new(originWriter)
 			called := 0
 			ext := &negotiationExtension{name: "example", offer: "example"}
-			c, err := Upgrade(w, r, WithUpgradeExtensions(ext), WithUpgradeOriginCheck(func(*http.Request, string) bool { called++; return true }))
+			c, err := (&Upgrader{NewExtensions: func() []Extension { return []Extension{ext} }, CheckOrigin: func(*http.Request, string) bool { called++; return true }}).Upgrade(w, r)
 			if c != nil || err != ErrOriginNotAllowed || called != 0 || ext.calls != 0 || w.calls != 0 || w.status != http.StatusForbidden {
 				t.Fatalf("conn %v, error %v, policy %d, extension %d, hijacks %d, status %d", c, err, called, ext.calls, w.calls, w.status)
 			}
@@ -152,7 +161,7 @@ func TestUpgradeOriginOverride(t *testing.T) {
 			}
 			before := r.Clone(t.Context())
 			calls := 0
-			c, err := originUpgrade(t, r, WithUpgradeOriginCheck(func(got *http.Request, origin string) bool {
+			c, err := originUpgrade(t, r, originPolicy(func(got *http.Request, origin string) bool {
 				calls++
 				if got != r || origin != tc.want {
 					t.Fatalf("callback = %p %q; want %p %q", got, origin, r, tc.want)
@@ -167,30 +176,28 @@ func TestUpgradeOriginOverride(t *testing.T) {
 			}
 		})
 	}
-	allow := WithUpgradeOriginCheck(func(_ *http.Request, o string) bool { return o == "https://public.test" })
-	deny := WithUpgradeOriginCheck(func(*http.Request, string) bool { return false })
+	allow := originPolicy(func(_ *http.Request, o string) bool { return o == "https://public.test" })
+	deny := originPolicy(func(*http.Request, string) bool { return false })
 	for _, tc := range []struct {
 		name, origin string
-		options      []UpgradeOption
+		upgrader     *Upgrader
 		allow        bool
 	}{
-		{"allow cross-origin", "https://public.test", []UpgradeOption{allow}, true},
-		{"reject suffix", "https://public.test.evil", []UpgradeOption{allow}, false},
-		{"replace default", "http://example.test", []UpgradeOption{allow}, false},
-		{"deny missing", "<missing>", []UpgradeOption{deny}, false},
-		{"deny same-origin", "http://example.test", []UpgradeOption{deny}, false},
-		{"nil restores same origin", "http://example.test", []UpgradeOption{deny, WithUpgradeOriginCheck(nil)}, true},
-		{"nil restores missing", "<missing>", []UpgradeOption{deny, WithUpgradeOriginCheck(nil)}, true},
-		{"nil restores default", "https://public.test", []UpgradeOption{allow, WithUpgradeOriginCheck(nil)}, false},
-		{"last deny", "https://public.test", []UpgradeOption{allow, deny}, false},
-		{"last allow", "https://public.test", []UpgradeOption{deny, nil, allow}, true},
+		{"allow cross-origin", "https://public.test", allow, true},
+		{"reject suffix", "https://public.test.evil", allow, false},
+		{"replace default", "http://example.test", allow, false},
+		{"deny missing", "<missing>", deny, false},
+		{"deny same-origin", "http://example.test", deny, false},
+		{"nil is same origin", "http://example.test", &Upgrader{}, true},
+		{"nil allows missing", "<missing>", &Upgrader{}, true},
+		{"nil rejects cross-origin", "https://public.test", &Upgrader{}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := upgradeRequest()
 			if tc.origin != "<missing>" {
 				r.Header.Set("Origin", tc.origin)
 			}
-			_, err := originUpgrade(t, r, tc.options...)
+			_, err := originUpgrade(t, r, tc.upgrader)
 			if (err == nil) != tc.allow {
 				t.Fatalf("error %v; allow %v", err, tc.allow)
 			}
@@ -209,13 +216,13 @@ func TestUpgradeOriginProxyBoundary(t *testing.T) {
 	if _, err := originUpgrade(t, r); err != ErrOriginNotAllowed {
 		t.Fatalf("spoofed headers allowed: %v", err)
 	}
-	if _, err := originUpgrade(t, r, WithUpgradeOriginCheck(func(_ *http.Request, o string) bool { return o == "https://example.test" })); err != nil {
+	if _, err := originUpgrade(t, r, originPolicy(func(_ *http.Request, o string) bool { return o == "https://example.test" })); err != nil {
 		t.Fatal(err)
 	}
 	// Application-owned trust fixture: only a verified ingress supplies context.
 	// No forwarding header is ever promoted directly into trusted context.
 	type publicOriginKey struct{}
-	policy := WithUpgradeOriginCheck(func(r *http.Request, o string) bool {
+	policy := originPolicy(func(r *http.Request, o string) bool {
 		expected, ok := r.Context().Value(publicOriginKey{}).(string)
 		return ok && o == expected
 	})
@@ -267,16 +274,16 @@ func TestUpgradeOriginRealLoopback(t *testing.T) {
 			defer srv.Close()
 			u, _ := url.Parse(srv.URL)
 			for _, origin := range []string{"", srv.URL, "http://other.test", strings.Replace(srv.URL, "127.0.0.1", "localhost", 1)} {
-				opts := []DialOption{WithHeader(http.Header{"Origin": {origin}})}
+				d := &Dialer{Header: http.Header{"Origin": {origin}}}
 				if origin == "" {
-					opts = nil
+					d.Header = nil
 				}
 				if secure {
-					opts = append(opts, WithTLSConfig(srv.Client().Transport.(*http.Transport).TLSClientConfig))
+					d.TLSConfig = srv.Client().Transport.(*http.Transport).TLSClientConfig
 				}
 				ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 				defer cancel()
-				c, resp, err := Dial(ctx, "ws"+strings.TrimPrefix(u.Scheme, "http")+"://"+u.Host, opts...)
+				c, resp, err := d.Dial(ctx, "ws"+strings.TrimPrefix(u.Scheme, "http")+"://"+u.Host)
 				allowed := origin == "" || origin == srv.URL
 				if allowed {
 					if err != nil {
@@ -342,7 +349,7 @@ func TestUpgradeOriginDenialHasNoSideEffects(t *testing.T) {
 		}
 		w := new(originWriter)
 		ext := &negotiationExtension{name: "example", offer: "example"}
-		c, err := Upgrade(w, r, WithUpgradeOriginCheck(tc.check), WithUpgradeExtensions(ext))
+		c, err := (&Upgrader{CheckOrigin: tc.check, NewExtensions: func() []Extension { return []Extension{ext} }}).Upgrade(w, r)
 		if c != nil || err != ErrOriginNotAllowed || w.calls != 0 || ext.calls != 0 || w.status != http.StatusForbidden {
 			t.Fatalf("rejection: conn %v err %v hijacks %d extension %d status %d", c, err, w.calls, ext.calls, w.status)
 		}

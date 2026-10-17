@@ -50,16 +50,17 @@ func limitHeader(server bool, first byte, size int) []byte {
 
 // Both roles go through their public high-level constructor. The server's
 // transport records failure replies; the client uses an actual loopback handshake.
-func highLevelReader(t *testing.T, server bool, wire []byte, limits ...int) (*Conn, *memoryConn) {
+// limit is the configured MaxMessageSize: 0 for the default, negative for none.
+func highLevelReader(t *testing.T, server bool, wire []byte, limit ...int) (*Conn, *memoryConn) {
 	t.Helper()
 	if server {
 		raw := &memoryConn{Reader: bytes.NewReader(wire)}
 		w := &hijackResponse{httptest.NewRecorder(), raw, bufio.NewReadWriter(bufio.NewReader(raw), bufio.NewWriter(raw))}
-		opts := []UpgradeOption{nil}
-		for _, n := range limits {
-			opts = append(opts, WithUpgradeMaxMessageSize(n))
+		u := &Upgrader{}
+		if len(limit) > 0 {
+			u.MaxMessageSize = limit[0]
 		}
-		c, err := Upgrade(w, upgradeRequest(), opts...)
+		c, err := u.Upgrade(w, upgradeRequest())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -79,13 +80,13 @@ func highLevelReader(t *testing.T, server bool, wire []byte, limits ...int) (*Co
 		rw.Flush()
 	}))
 	t.Cleanup(srv.Close)
-	opts := []DialOption{nil}
-	for _, n := range limits {
-		opts = append(opts, WithMaxMessageSize(n))
+	d := &Dialer{}
+	if len(limit) > 0 {
+		d.MaxMessageSize = limit[0]
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	c, _, err := Dial(ctx, "ws"+srv.URL[4:], opts...)
+	c, _, err := d.Dial(ctx, "ws"+srv.URL[4:])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,24 +206,20 @@ func TestExplicitLimitCompatibility(t *testing.T) {
 	for _, server := range []bool{false, true} {
 		for _, tc := range []struct {
 			name       string
-			limits     []int
+			limit      int
 			want, size int
 		}{
-			{"zero", []int{0}, 0, DefaultMaxMessageSize + 1},
-			{"negative", []int{-1}, 0, DefaultMaxMessageSize + 1},
-			{"smaller", []int{17}, 17, 17},
-			{"larger", []int{DefaultMaxMessageSize + 1}, DefaultMaxMessageSize + 1, DefaultMaxMessageSize + 1},
-			{"last zero", []int{17, 0}, 0, DefaultMaxMessageSize + 1},
-			{"last negative", []int{17, -1}, 0, DefaultMaxMessageSize + 1},
-			{"last positive", []int{0, -1, 17}, 17, 17},
-			{"last larger", []int{17, DefaultMaxMessageSize + 1}, DefaultMaxMessageSize + 1, DefaultMaxMessageSize + 1},
+			{"zero is the default", 0, DefaultMaxMessageSize, DefaultMaxMessageSize},
+			{"negative is unlimited", -1, 0, DefaultMaxMessageSize + 1},
+			{"smaller", 17, 17, 17},
+			{"larger", DefaultMaxMessageSize + 1, DefaultMaxMessageSize + 1, DefaultMaxMessageSize + 1},
 		} {
 			t.Run(strconv.FormatBool(server)+"/"+tc.name, func(t *testing.T) {
 				wire := limitWire(server, 0x82, bytes.Repeat([]byte{'x'}, tc.size))
 				if tc.want > 0 {
 					wire = append(wire, limitHeader(server, 0x82, tc.want+1)...)
 				}
-				c, raw := highLevelReader(t, server, wire, tc.limits...)
+				c, raw := highLevelReader(t, server, wire, tc.limit)
 				if c.maxBytes != tc.want {
 					t.Fatalf("limit %d, want %d", c.maxBytes, tc.want)
 				}
@@ -237,13 +234,13 @@ func TestExplicitLimitCompatibility(t *testing.T) {
 		}
 	}
 	for _, tc := range []struct {
-		name    string
-		options []ConnOption
-		want    int
+		name  string
+		limit int
+		want  int
 	}{
-		{"omitted", nil, 0}, {"zero", []ConnOption{WithMaxBytes(0)}, 0}, {"negative", []ConnOption{WithMaxBytes(-1)}, 0},
-		{"positive", []ConnOption{WithMaxBytes(17)}, 17}, {"positive then zero", []ConnOption{WithMaxBytes(17), WithMaxBytes(0)}, 17},
-		{"positive then negative", []ConnOption{WithMaxBytes(17), WithMaxBytes(-1)}, 17},
+		{"zero is the default", 0, DefaultMaxMessageSize},
+		{"negative is unlimited", -1, 0},
+		{"positive", 17, 17},
 	} {
 		t.Run("NewConn/"+tc.name, func(t *testing.T) {
 			size := DefaultMaxMessageSize + 1
@@ -254,7 +251,7 @@ func TestExplicitLimitCompatibility(t *testing.T) {
 			if tc.want > 0 {
 				wire = append(wire, limitHeader(false, 0x82, size+1)...)
 			}
-			c := NewConn(&memoryConn{Reader: bytes.NewReader(wire)}, false, nil, tc.options...)
+			c := NewConn(&memoryConn{Reader: bytes.NewReader(wire)}, ConnConfig{MaxMessageSize: tc.limit})
 			if c.maxBytes != tc.want {
 				t.Fatalf("limit %d want %d", c.maxBytes, tc.want)
 			}
@@ -281,7 +278,7 @@ func TestHighLevelDefaultDoesNotLimitWrites(t *testing.T) {
 	}
 	result := make(chan error, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		c, err := Upgrade(w, r, WithUpgradeMaxMessageSize(0))
+		c, err := (&Upgrader{MaxMessageSize: -1}).Upgrade(w, r)
 		if err != nil {
 			result <- err
 			return

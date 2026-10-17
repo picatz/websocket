@@ -10,7 +10,7 @@ import (
 func TestCloseControlPreventsLaterData(t *testing.T) {
 	for _, server := range []bool{false, true} {
 		raw := &memoryConn{Reader: bytes.NewReader(nil)}
-		c := NewConn(raw, server, nil)
+		c := NewConn(raw, ConnConfig{Server: server})
 		if err := c.WriteControlFrame(CloseMessage, nil); err != nil {
 			t.Fatal(err)
 		}
@@ -34,7 +34,7 @@ func TestCloseControlCompletesHandshakeOnce(t *testing.T) {
 				t.Fatal(err)
 			}
 			raw := &memoryConn{Reader: bytes.NewReader(peer.conn.(*memoryConn).written.Bytes())}
-			c := NewConn(raw, server, nil)
+			c := NewConn(raw, ConnConfig{Server: server})
 			if err := c.WriteControlFrame(CloseMessage, nil); err != nil {
 				t.Fatal(err)
 			}
@@ -121,7 +121,7 @@ func (c *failingCloseConn) Write(p []byte) (int, error) {
 func TestFailedCloseControlPreservesTransportError(t *testing.T) {
 	for _, partial := range []bool{false, true} {
 		raw := &failingCloseConn{memoryConn: &memoryConn{Reader: bytes.NewReader(nil)}, partial: partial}
-		c := NewConn(raw, true, nil)
+		c := NewConn(raw, ConnConfig{Server: true})
 		for _, write := range []func() error{
 			func() error { return c.WriteControlFrame(CloseMessage, []byte{3, 232}) },
 			func() error { return c.WriteMessage(TextMessage, []byte("late")) },
@@ -143,7 +143,7 @@ func TestFailedCloseControlPreservesTransportError(t *testing.T) {
 func TestConcurrentCloseControlOrdering(t *testing.T) {
 	for range 100 {
 		raw := &memoryConn{Reader: bytes.NewReader(nil)}
-		c := NewConn(raw, true, nil)
+		c := NewConn(raw, ConnConfig{Server: true})
 		start := make(chan struct{})
 		results := make(chan error, 3)
 		go func() { <-start; results <- c.WriteMessage(BinaryMessage, []byte("data")) }()
