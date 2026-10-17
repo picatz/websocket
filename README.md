@@ -127,6 +127,8 @@ guide. Each topic below links to its section:
   bounding calls, and keepalives with `Ping`.
 - [Closing](https://pkg.go.dev/github.com/picatz/websocket#hdr-Closing): when
   to use `Close`, `CloseWrite` or `Shutdown`.
+- [Handshake options](https://pkg.go.dev/github.com/picatz/websocket#hdr-Handshake_options):
+  subprotocol negotiation and extra handshake headers.
 - [Limits and security](https://pkg.go.dev/github.com/picatz/websocket#hdr-Limits_and_security):
   message limits, the Origin policy, and the HTTP errors `Upgrade` writes.
 - [Proxies and custom transports](https://pkg.go.dev/github.com/picatz/websocket#hdr-Proxies_and_custom_transports):
@@ -142,7 +144,7 @@ Two subpackages build on the core:
   client for programs compiled with `GOOS=js GOARCH=wasm`. It drives the
   host's own `WebSocket` object with the same message API.
 
-[MIGRATION.md](MIGRATION.md) lists the API changes made on the way to v0.1.0.
+[MIGRATION.md](MIGRATION.md) lists the API changes made while the API settled.
 
 ## Conformance
 

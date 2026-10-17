@@ -177,6 +177,10 @@
 //   - [github.com/picatz/websocket/examples/echo]: a server with limits and a
 //     graceful shutdown.
 //   - [github.com/picatz/websocket/examples/client]: a command-line client.
+//   - [github.com/picatz/websocket/examples/reconnect]: a client that resumes
+//     after failures, with jittered backoff.
+//   - [github.com/picatz/websocket/examples/auth]: credentials checked before
+//     Upgrade, closing when one expires.
 //   - [github.com/picatz/websocket/examples/keepalive]: dropping peers that
 //     stop answering Pings.
 //   - [github.com/picatz/websocket/examples/chat]: broadcasting with a bounded
