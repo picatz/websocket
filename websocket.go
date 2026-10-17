@@ -294,6 +294,8 @@ type Conn struct {
 	isServer bool              // True if this Conn is on the server side
 	maxBytes int               // Maximum message size in bytes
 
+	subprotocol string // Negotiated Sec-WebSocket-Protocol; immutable after the handshake
+
 	readMu  sync.Mutex // Protects read operations
 	writeMu sync.Mutex // Protects write operations
 	closeMu sync.Mutex // Protects shutdown reservation; never held during I/O
@@ -1253,6 +1255,7 @@ type dialOptions struct {
 	maxResponseHeaderBytes int64
 	netDialContext         func(ctx context.Context, network, addr string) (net.Conn, error)
 	proxy                  func(*http.Request) (*url.URL, error)
+	subprotocols           []string
 }
 
 // apply applies the options to the dialOptions.
@@ -1332,6 +1335,17 @@ func Dial(ctx context.Context, urlStr string, options ...DialOption) (ws *Conn, 
 
 	if err := validateHandshakeHeaders(opts.header, false); err != nil {
 		return nil, nil, err
+	}
+	if opts.subprotocols != nil {
+		if err := validateSubprotocolOption(opts.subprotocols, opts.header); err != nil {
+			return nil, nil, fmt.Errorf("%w: %w", ErrInvalidHandshakeHeader, err)
+		}
+		// Clone so the caller's header map is never modified.
+		opts.header = opts.header.Clone()
+		if opts.header == nil {
+			opts.header = make(http.Header, 1)
+		}
+		opts.header.Set("Sec-WebSocket-Protocol", strings.Join(opts.subprotocols, ", "))
 	}
 
 	offered, err := parseSubprotocolOffers(opts.header)
@@ -1486,7 +1500,8 @@ func Dial(ctx context.Context, urlStr string, options ...DialOption) (ws *Conn, 
 		return nil, resp, ErrInvalidSecAccept
 	}
 
-	if err := validateSubprotocolSelection(resp.Header, offered); err != nil {
+	subprotocol, err := validateSubprotocolSelection(resp.Header, offered)
+	if err != nil {
 		conn.Close()
 		return nil, resp, err
 	}
@@ -1516,6 +1531,7 @@ func Dial(ctx context.Context, urlStr string, options ...DialOption) (ws *Conn, 
 	}
 
 	ws = NewConn(conn, false, opts.extensions, WithMaxBytes(opts.maxBytes))
+	ws.subprotocol = subprotocol
 	ws.abortConn = rawConn
 	ws.rw.Reader = br
 	return ws, resp, nil
@@ -1530,6 +1546,7 @@ type upgradeOptions struct {
 	responseHeader http.Header
 	maxBytes       int
 	originCheck    func(*http.Request, string) bool
+	subprotocols   []string
 }
 
 // apply applies the options to the upgradeOptions.
@@ -1639,8 +1656,17 @@ func Upgrade(w http.ResponseWriter, r *http.Request, options ...UpgradeOption) (
 	if err != nil {
 		return nil, err
 	}
-	if err := validateSubprotocolSelection(opts.responseHeader, offered); err != nil {
+	if opts.subprotocols != nil {
+		if err := validateSubprotocolOption(opts.subprotocols, opts.responseHeader); err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrInvalidHandshakeHeader, err)
+		}
+	}
+	subprotocol, err := validateSubprotocolSelection(opts.responseHeader, offered)
+	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidHandshakeHeader, err)
+	}
+	if subprotocol == "" {
+		subprotocol = selectSubprotocol(opts.subprotocols, offered)
 	}
 	if !upgradeOriginAllowed(r, opts.originCheck) {
 		return nil, ErrOriginNotAllowed
@@ -1696,6 +1722,9 @@ func Upgrade(w http.ResponseWriter, r *http.Request, options ...UpgradeOption) (
 	if selection != "" {
 		responseHeader.Set("Sec-WebSocket-Extensions", selection)
 	}
+	if opts.subprotocols != nil && subprotocol != "" {
+		responseHeader.Set("Sec-WebSocket-Protocol", subprotocol)
+	}
 
 	// Preserve direct Hijacker errors and use the standard controller to reach
 	// hijacking support through middleware that exposes Unwrap.
@@ -1742,6 +1771,7 @@ func Upgrade(w http.ResponseWriter, r *http.Request, options ...UpgradeOption) (
 	}
 
 	ws := NewConn(conn, true, opts.extensions, WithMaxBytes(opts.maxBytes))
+	ws.subprotocol = subprotocol
 	ws.rw = bufrw
 	return ws, nil
 }
@@ -1834,22 +1864,23 @@ func parseSubprotocolOffers(header http.Header) (map[string]struct{}, error) {
 
 // A response may omit selection, or contain exactly one field with one offered
 // token. In particular, repeated response fields and comma lists are forbidden.
-func validateSubprotocolSelection(header http.Header, offered map[string]struct{}) error {
+// It returns the selected token, or "" when the header is absent.
+func validateSubprotocolSelection(header http.Header, offered map[string]struct{}) (string, error) {
 	values := subprotocolValues(header)
 	if len(values) == 0 {
-		return nil
+		return "", nil
 	}
 	if len(values) != 1 {
-		return ErrInvalidSubprotocol
+		return "", ErrInvalidSubprotocol
 	}
 	selected := strings.Trim(values[0], " \t")
 	if !isHTTPToken(selected) {
-		return ErrInvalidSubprotocol
+		return "", ErrInvalidSubprotocol
 	}
 	if _, ok := offered[selected]; !ok {
-		return ErrInvalidSubprotocol
+		return "", ErrInvalidSubprotocol
 	}
-	return nil
+	return selected, nil
 }
 
 // computeAcceptKey computes the Sec-WebSocket-Accept value.

@@ -103,8 +103,10 @@
 // fragmentation. Do not run those callbacks concurrently with Conn I/O.
 // Full compression parameter compatibility remains experimental. Subprotocol offers are unique
 // HTTP tokens; any selected protocol must be exactly one case-sensitive offered
-// token. Omitting selection is allowed. Applications choose and implement their
-// subprotocols. Custom headers
+// token. Omitting selection is allowed. WithSubprotocols offers protocols from
+// Dial, WithUpgradeSubprotocols selects the server's most preferred offered
+// protocol, and Conn.Subprotocol reports the result. Applications implement
+// their subprotocols. Custom headers
 // reject invalid HTTP syntax and reserved fields before dialing or hijacking;
 // callers still own field-specific semantics. Every ReadMessage error terminates
 // the connection while preserving the detecting call's original error. Protocol
