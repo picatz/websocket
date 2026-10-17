@@ -260,3 +260,46 @@ func TestFragmentedReadStaysWithinLimit(t *testing.T) {
 		}
 	}
 }
+
+// TestHandshakeAllocations pins the server's request checks to the one
+// allocation it keeps, the Sec-WebSocket-Accept value, and the key helpers
+// to none.
+func TestHandshakeAllocations(t *testing.T) {
+	if raceEnabled {
+		t.Skip("allocation counts are not meaningful with the race detector")
+	}
+	// The worked example in RFC 6455 section 1.3.
+	const key, accept = "dGhlIHNhbXBsZSBub25jZQ==", "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
+	if got := computeAcceptKey(key); got != accept {
+		t.Fatalf("computeAcceptKey(%q) = %q, want %q", key, got, accept)
+	}
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.Header.Set("Connection", "Upgrade")
+	r.Header.Set("Upgrade", "websocket")
+	r.Header.Set("Sec-WebSocket-Version", "13")
+	r.Header.Set("Sec-WebSocket-Key", key)
+	opts := &upgradeOptions{}
+	for _, tc := range []struct {
+		name string
+		want float64
+		f    func()
+	}{
+		{"generateKey", 0, func() { _ = generateKey() }},
+		{"acceptKey", 0, func() { k := []byte(key); _ = acceptKey(k) }},
+		{"validChallengeKey", 0, func() { _ = validChallengeKey(key) }},
+		{"checkUpgradeRequest", 1, func() {
+			if _, _, err := checkUpgradeRequest(r, opts); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"negotiateUpgradeExtensions", 0, func() {
+			if _, err := negotiateUpgradeExtensions(r, opts); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		if got := testing.AllocsPerRun(100, tc.f); got != tc.want {
+			t.Errorf("%s: %v allocations, want %v", tc.name, got, tc.want)
+		}
+	}
+}
