@@ -13,8 +13,9 @@ import (
 //   - ErrInvalidMethod: 405 Method Not Allowed, with Allow: GET.
 //   - ErrUnsupportedVersion: 426 Upgrade Required, with
 //     Sec-WebSocket-Version: 13 (RFC 6455 section 4.4).
-//   - ErrNotHijacker, and an invalid Upgrader, such as a reserved response
-//     header (ErrInvalidHandshakeHeader): 500 Internal Server Error.
+//   - ErrNotHijacker, and an invalid Upgrader (ErrInvalidConfig, or
+//     ErrInvalidHandshakeHeader for a reserved response header): 500
+//     Internal Server Error.
 //   - ErrHandshakeFailed: 0. The transport may already be hijacked.
 //   - Any other error, which is a malformed client handshake: 400 Bad Request.
 //
@@ -29,7 +30,7 @@ func upgradeErrorStatus(err error) int {
 		return http.StatusMethodNotAllowed
 	case errors.Is(err, ErrUnsupportedVersion):
 		return http.StatusUpgradeRequired
-	case errors.Is(err, ErrNotHijacker), errors.Is(err, ErrInvalidHandshakeHeader), errors.Is(err, errInvalidConfig):
+	case errors.Is(err, ErrNotHijacker), errors.Is(err, ErrInvalidHandshakeHeader), errors.Is(err, ErrInvalidConfig):
 		return http.StatusInternalServerError
 	default:
 		return http.StatusBadRequest

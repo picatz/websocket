@@ -66,7 +66,7 @@ func TestDialRejectsInvalidCompression(t *testing.T) {
 				return nil, errors.New("unexpected dial")
 			}}
 			conn, resp, err := d.Dial(t.Context(), "ws://example.test/")
-			if conn != nil || resp != nil || !errors.Is(err, errInvalidConfig) {
+			if conn != nil || resp != nil || !errors.Is(err, ErrInvalidConfig) {
 				t.Fatalf("Dial = %v, %v, %v", conn, resp, err)
 			}
 		})
@@ -81,7 +81,7 @@ func TestUpgradeRejectsInvalidCompression(t *testing.T) {
 			r.Header.Set("Sec-WebSocket-Extensions", "permessage-deflate")
 			w := &countingHijacker{ResponseRecorder: httptest.NewRecorder()}
 			conn, err := (&Upgrader{Compression: &c}).Upgrade(w, r)
-			if conn != nil || !errors.Is(err, errInvalidConfig) || errors.Is(err, ErrBadHandshake) {
+			if conn != nil || !errors.Is(err, ErrInvalidConfig) || errors.Is(err, ErrBadHandshake) {
 				t.Fatalf("Upgrade = %v, %v", conn, err)
 			}
 			if w.calls != 0 || w.Code != http.StatusInternalServerError {

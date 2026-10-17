@@ -16,7 +16,9 @@ import (
 type Compression struct {
 	// Level is the DEFLATE level for outgoing messages, from
 	// flate.HuffmanOnly (-2) to flate.BestCompression (9). Zero means
-	// flate.DefaultCompression. The level is independent of the window.
+	// flate.DefaultCompression, so flate.NoCompression cannot be selected;
+	// use Threshold to send small messages uncompressed, or leave
+	// Compression nil. The level is independent of the window.
 	Level int
 
 	// Threshold sends messages shorter than this many bytes uncompressed.
@@ -61,13 +63,13 @@ type Compression struct {
 func (c *Compression) extension() (Extension, error) {
 	switch {
 	case c.Level < flate.HuffmanOnly || c.Level > flate.BestCompression:
-		return nil, fmt.Errorf("%w: Compression.Level %d is outside -2 to 9", errInvalidConfig, c.Level)
+		return nil, fmt.Errorf("%w: Compression.Level %d is outside -2 to 9", ErrInvalidConfig, c.Level)
 	case c.Threshold < 0:
-		return nil, fmt.Errorf("%w: Compression.Threshold %d is negative", errInvalidConfig, c.Threshold)
+		return nil, fmt.Errorf("%w: Compression.Threshold %d is negative", ErrInvalidConfig, c.Threshold)
 	case !validWindowBits(c.ClientMaxWindowBits):
-		return nil, fmt.Errorf("%w: Compression.ClientMaxWindowBits %d is outside 8 to 15", errInvalidConfig, c.ClientMaxWindowBits)
+		return nil, fmt.Errorf("%w: Compression.ClientMaxWindowBits %d is outside 8 to 15", ErrInvalidConfig, c.ClientMaxWindowBits)
 	case !validWindowBits(c.ServerMaxWindowBits):
-		return nil, fmt.Errorf("%w: Compression.ServerMaxWindowBits %d is outside 8 to 15", errInvalidConfig, c.ServerMaxWindowBits)
+		return nil, fmt.Errorf("%w: Compression.ServerMaxWindowBits %d is outside 8 to 15", ErrInvalidConfig, c.ServerMaxWindowBits)
 	}
 	options := []PerMessageDeflateOption{
 		WithCompressionThreshold(c.Threshold),

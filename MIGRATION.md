@@ -167,7 +167,7 @@ handler mapped them to an HTTP status. It now writes the response itself:
 | `ErrOriginNotAllowed` | 403 |
 | `ErrInvalidMethod` | 405, with `Allow: GET` |
 | `ErrUnsupportedVersion` | 426, with `Sec-WebSocket-Version: 13` |
-| `ErrNotHijacker`, or an invalid `Upgrader` such as a reserved `Header` field (`ErrInvalidHandshakeHeader`) | 500 |
+| `ErrNotHijacker`, or an invalid `Upgrader`: `ErrInvalidConfig`, or `ErrInvalidHandshakeHeader` for a reserved `Header` field | 500 |
 | `ErrHandshakeFailed` | nothing: the transport may already be hijacked |
 | any other malformed handshake | 400 |
 
@@ -264,8 +264,9 @@ Behavior that changes with the move:
 - **Compression settings.** `Compression` fields map to the old
   `PerMessageDeflateOption`s: `Level`, `Threshold`, `MemoryLimit` (where -1
   means no limit, the old `WithCompressionMemoryLimit(0)`), the two
-  `*NoContextTakeover` flags and the two `*MaxWindowBits`. Invalid values make
-  Dial fail before connecting and Upgrade answer 500.
+  `*NoContextTakeover` flags and the two `*MaxWindowBits`. Invalid values
+  return `ErrInvalidConfig`: Dial fails before connecting and Upgrade answers
+  500.
 - **Error responses.** `Upgrader.Error` replaces the body Upgrade writes when the
   handshake fails, with the status and required header fields already chosen.
 
