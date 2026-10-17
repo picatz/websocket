@@ -1,8 +1,10 @@
-# High-level default policy migration
+# Migrating to v0.1.0
 
-These are intentional compatibility changes to `Dial` and `Upgrade`, not a
-behavior-preserving patch. Review callers before adopting the revision. This
-note does not assign a release version or announce a release.
+v0.1.0 is the first tagged release. Code written against an untagged revision
+of `main` from before it needs the changes below, which are listed in the order
+they landed. Code new to the package can skip this file; the
+[package documentation](https://pkg.go.dev/github.com/picatz/websocket)
+describes the v0.1.0 API.
 
 ## Incoming payload budgets
 

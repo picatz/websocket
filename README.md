@@ -3,520 +3,148 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/picatz/websocket.svg)](https://pkg.go.dev/github.com/picatz/websocket)
 [![Test](https://github.com/picatz/websocket/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/picatz/websocket/actions/workflows/test.yml)
 [![Autobahn](https://github.com/picatz/websocket/actions/workflows/conformance.yml/badge.svg?branch=main)](#conformance)
- 
-This package provides a small, standard-library-only [WebSocket] client and server implementation for Go 1.26 and later.
-It supports text and binary messages, ping/pong/close frames, message fragmentation, and
-optional [`permessage-deflate`](#compression) compression with context takeover and every window size.
 
-[WebSocket]: https://en.wikipedia.org/wiki/WebSocket
-[RFC 6455]: https://tools.ietf.org/html/rfc6455
-[RFC 7692]: https://tools.ietf.org/html/rfc7692
+A [WebSocket] client and server for Go 1.26 and later, built only on the
+standard library. It implements [RFC 6455] and the permessage-deflate
+compression extension of [RFC 7692], and passes every graded case of the
+[Autobahn TestSuite](#conformance) as both client and server.
+
+- **Client and server.** `Dial` takes a `ws` or `wss` URL; `Upgrade` takes over
+  a `net/http` handler. `Dialer` and `Upgrader` hold the options, and their
+  zero values are safe defaults.
+- **Messages or streams.** Read and write whole messages, or stream one of any
+  size with `NextReader` and `NextWriter`.
+- **Contexts throughout.** Dial, read, write, ping and shut down with a
+  `context.Context`.
+- **A complete closing handshake.** `Close`, `CloseWithStatus`, `CloseWrite`
+  for a half-close and `Shutdown` for a graceful drain, with typed status codes.
+- **Compression.** permessage-deflate with context takeover, every window
+  size, and a bounded memory budget per connection.
+- **Safe defaults.** A 1 MiB message limit, a same-origin check for browsers,
+  UTF-8 validation, and HTTP error responses written for you.
+- **Proxies and tunnels.** HTTP and HTTPS proxies, custom dialers, and
+  `NetConn` to carry any stream protocol over a WebSocket.
+- **Beyond the core.** [`wsjson`](wsjson) for JSON messages and
+  [`browser`](browser) for Go compiled to WebAssembly.
 
 > [!NOTE]
-> This package is intentionally small and depends only on the standard library.
-> It passes every graded case of the [Autobahn TestSuite](#conformance) as both client
-> and server, with and without compression, but that suite is a test baseline,
-> not a certification. [`github.com/coder/websocket`] is the more established
-> choice if you want a longer production track record.
+> This package is young. Autobahn is a test baseline, not a certification,
+> and [`github.com/coder/websocket`](https://pkg.go.dev/github.com/coder/websocket)
+> has a longer production track record.
 
-[`github.com/coder/websocket`]: https://pkg.go.dev/github.com/coder/websocket
+[WebSocket]: https://en.wikipedia.org/wiki/WebSocket
+[RFC 6455]: https://www.rfc-editor.org/rfc/rfc6455.html
+[RFC 7692]: https://www.rfc-editor.org/rfc/rfc7692.html
 
-## Installation
+## Install
 
 ```console
 go get github.com/picatz/websocket
 ```
 
-## Usage
+## Quick start
 
-Can be used as a client or server.
-
-### Server
-
-Here's how you can use the websocket package to create a simple WebSocket echo server:
+A server upgrades a request and reads messages until the connection ends:
 
 ```go
-package main
-
-import (
-	"errors"
-	"io"
-	"log"
-	"net/http"
-
-	"github.com/picatz/websocket"
-)
-
-func echoHandler(w http.ResponseWriter, r *http.Request) {
-	// Upgrade the HTTP connection to a WebSocket connection
+http.HandleFunc("/echo", func(w http.ResponseWriter, r *http.Request) {
 	conn, err := websocket.Upgrade(w, r)
 	if err != nil {
-		// Upgrade has already written the HTTP error response.
-		log.Printf("Upgrade failed: %v", err)
-		return
+		return // Upgrade has already written the HTTP error response.
 	}
 	defer conn.Close()
-
-	// Handle the WebSocket connection
 	for {
-		messageType, message, err := conn.ReadMessage()
+		typ, data, err := conn.ReadMessage()
 		if err != nil {
-			if errors.Is(err, io.EOF) {
-				log.Printf("Connection closed by peer (status %v)", websocket.CloseStatus(err))
-			} else {
-				log.Printf("ReadMessage failed: %v", err)
-			}
-			break
+			return // The peer closed, or the connection failed.
 		}
-
-		log.Printf("Received message: %s", message)
-
-		// Echo the message back to the client
-		if err := conn.WriteMessage(messageType, message); err != nil {
-			log.Printf("WriteMessage failed: %v", err)
-			break
-		}
-	}
-}
-
-func main() {
-	http.HandleFunc("/ws", echoHandler)
-
-	log.Println("WebSocket server started on :8080")
-	if err := http.ListenAndServe(":8080", nil); err != nil {
-		log.Fatalf("Server failed: %v", err)
-	}
-}
-```
-
-### Client
-
-```go
-package main
-
-import (
-	"context"
-	"fmt"
-	"log"
-	"time"
-
-	"github.com/picatz/websocket"
-)
-
-func main() {
-	// Dial the WebSocket server
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	dialer := &websocket.Dialer{MaxMessageSize: 1 << 20}
-	conn, resp, err := dialer.Dial(ctx, "ws://localhost:8080/ws")
-	if err != nil {
-		log.Fatalf("Dial failed: %v", err)
-	}
-	defer conn.Close()
-	defer resp.Body.Close()
-
-	// Send a message to the server
-	message := []byte("Hello, WebSocket!")
-	if err := conn.WriteMessage(websocket.TextMessage, message); err != nil {
-		log.Fatalf("WriteMessage failed: %v", err)
-	}
-
-	// Read the server's response
-	_, data, err := conn.ReadMessage()
-	if err != nil {
-		log.Fatalf("ReadMessage failed: %v", err)
-	}
-
-	fmt.Printf("Received message: %s\n", data)
-}
-```
-
-### Keepalives
-
-`ReadMessage` answers every Ping with a Pong, as RFC 6455 requires, and
-ignores unsolicited Pongs. `Ping` sends a Ping and waits for the matching
-Pong, for keepalives and liveness checks. Pongs are processed by
-`ReadMessage`, so keep a read loop running:
-
-```go
-go func() {
-	for {
-		if _, _, err := conn.ReadMessage(); err != nil {
+		if err := conn.WriteMessage(typ, data); err != nil {
 			return
 		}
 	}
-}()
-
-ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-defer cancel()
-if err := conn.Ping(ctx); err != nil {
-	conn.Close() // the peer did not answer in time
-}
+})
 ```
 
-Each call uses a distinct payload, so concurrent pings are matched
-independently. A context that ends while the Ping frame is being written aborts
-the connection, like `WriteMessageContext`; one that ends while waiting for the
-Pong only returns its error, leaving the decision to close to the caller. A
-connection that closes first makes `Ping` return an error matching
-`io.ErrClosedPipe`.
-
-### Examples
-
-Each directory under [`examples`](examples) is a small program with tests:
-
-- [`echo`](examples/echo) echoes every message back, with an incoming size
-  limit and a graceful shutdown that closes each connection with
-  `StatusGoingAway`.
-- [`client`](examples/client) is a command-line client in the spirit of
-  `wscat`: standard input lines become messages and replies are printed.
-- [`keepalive`](examples/keepalive) pings clients on an interval and drops
-  those that stop answering.
-- [`chat`](examples/chat) broadcasts messages to every connected client, with a
-  bounded send queue per client.
-- [`pubsub`](examples/pubsub) delivers messages by topic over a small JSON
-  protocol.
-- [`rpc`](examples/rpc) is a JSON-RPC 2.0 server that runs calls
-  concurrently, with a bound per connection.
-- [`tunnel`](examples/tunnel) forwards TCP connections, such as SSH, over
-  WebSocket with `NetConn`.
-- [`browser`](examples/browser) serves a page running Go compiled to
-  WebAssembly that talks to the server with the `browser` package. Start it
-  with `go run ./examples/browser`.
-
-### Browser and WebAssembly clients
-
-Programs compiled with `GOOS=js GOARCH=wasm` cannot open TCP connections, so
-`Dial` is not available to them. The [`browser`](browser) subpackage drives the
-host's own `WebSocket` object instead. Its methods are a subset of
-`*websocket.Conn`'s with identical signatures, and a peer close is a
-`*websocket.CloseError`. The intended direction is for `websocket.Dial` itself
-to work under `GOOS=js`:
+A client dials, sends a message and reads the reply:
 
 ```go
-conn, err := (&browser.Dialer{Subprotocols: []string{"chat"}}).Dial(ctx, "wss://example.com/socket")
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
+
+conn, _, err := websocket.Dial(ctx, "ws://localhost:8080/echo")
 if err != nil {
-	return err
+	log.Fatal(err)
 }
 defer conn.Close()
-```
 
-The browser handles the handshake, framing, Ping/Pong and compression, so
-headers, TLS, proxies and control frames are out of the program's hands, and
-dial failures carry no detail. See the package documentation for the full list.
-Its tests run in Node.js 22 or later against a native Go server as part of
-`go test ./...`, and are skipped when Node is not installed. The
-[`browser` example](examples/browser) is a complete page and server.
-
-## Connection details and JSON
-
-`Conn.LocalAddr` and `Conn.RemoteAddr` return the transport's addresses.
-`Conn.ConnectionState` returns the TLS state of a `wss` client connection or of
-a server connection upgraded from HTTPS, such as the peer's certificates.
-
-The optional `wsjson` package reads and writes one JSON value per text
-message, kept separate so the core package carries no encoding helpers:
-
-```go
-var event struct{ Kind string }
-if err := wsjson.Read(ctx, conn, &event); err != nil {
-	return err
+if err := conn.WriteMessage(websocket.TextMessage, []byte("hello")); err != nil {
+	log.Fatal(err)
 }
-err := wsjson.Write(ctx, conn, map[string]string{"ack": event.Kind})
-```
-
-## Limits and connection lifetime
-
-Connections default to `DefaultMaxMessageSize`, 1 MiB (1,048,576 bytes). Set
-`MaxMessageSize` on a `Dialer`, `Upgrader` or `ConnConfig` to choose an
-application-appropriate budget. Zero means the default and a negative value
-opts into unlimited incoming payloads.
-
-Limits apply to each incoming data-frame wire payload and the reassembled decoded
-message. Headers, masking keys and interleaved controls do not consume the message
-budget; outgoing messages are not capped. Built-in compression bounds each
-encoded frame and the decoded message. Incompressible data can fit the decoded
-budget but exceed the encoded budget in a single frame, so allow headroom when
-choosing a compression limit. The wire limit is per frame, not aggregate
-compressed input.
-
-A payload cap is not a total-memory, CPU, fragment-count, concurrency or lifetime
-limit. Applications still need connection/lifetime controls for slow peers and
-empty-fragment or control-frame floods. See [migration notes](MIGRATION.md) for
-the intentional changes to high-level defaults.
-
-`Dial`'s context covers TCP connection establishment, TLS, any proxy tunnel, and
-the HTTP upgrade. It is detached after a successful handshake. It does not cancel
-later reads or writes. Bound a single call with `ReadMessageContext` or
-`WriteMessageContext`: an already-done context returns its error without touching
-the connection, while one that ends mid-call aborts the connection (like a timeout)
-and returns an error matching both the context's cause and the I/O failure. Call
-`Close` to interrupt connection I/O, or set transport deadlines with
-`SetDeadline`, `SetReadDeadline`, and `SetWriteDeadline`. There is no default
-message timeout. A zero `time.Time` clears a deadline; otherwise it applies to
-future and currently blocked transport I/O in that direction. `SetDeadline`
-sets both directions. The setters return the underlying transport error unchanged.
-
-`ReadMessage` may synchronously write an automatic Pong. A read deadline alone
-does not bound that write; set an appropriate write deadline too, or use
-`SetDeadline` for a shared transport budget. Any read error, including a timeout,
-is terminal: clearing the deadline afterward does not make the connection
-reusable. A write timeout wraps its underlying cause, such as `os.ErrDeadlineExceeded`;
-close the connection afterward, because a partial frame cannot be retried safely.
-
-Deadlines are transport controls, not per-call contexts or whole-method timeouts.
-They do not preempt compression work, lock waits or custom transport
-`Close` implementations, and already buffered data may still be consumed.
-`NewConn` takes over WebSocket framing and I/O and closes its transport on `Close`
-or read failure; do not read or write framed bytes directly on that transport.
-
-Reads and writes are independently serialized. `Close` can run concurrently with
-either, as can all three deadline setters. Deadlines are shared transport state;
-callers must coordinate competing updates. The library does not mutate the byte
-slice passed to `WriteMessage`.
-
-`Close` makes a best-effort normal close notification, limited to one second when
-no other writer is active, then closes the transport. That notification replaces
-any caller write deadline with a one-second deadline, so an earlier deadline is
-not a strict bound on graceful `Close`. Read-failure cleanup instead preserves
-caller deadlines. `Close` does not wait for the peer's closing handshake.
-A second call returns an error matching `net.ErrClosed`.
-
-`CloseWithStatus(code, reason)` is `Close` with a chosen status code and a
-reason of at most 123 bytes of UTF-8. It rejects codes that may not be sent,
-such as 1005, 1006 and 1015, with `ErrInvalidCloseStatus` before any I/O.
-When the peer closes, `ReadMessage` returns a `*CloseError` with the peer's
-`Code` and `Reason`; `CloseStatus(err)` extracts the code, or returns -1. A
-`CloseError` still matches `io.EOF` with `errors.Is`.
-
-```go
-conn.CloseWithStatus(websocket.StatusPolicyViolation, "quota exceeded")
-
-_, _, err := conn.ReadMessage()
-if websocket.CloseStatus(err) == websocket.StatusGoingAway {
-	// The peer is shutting down; reconnect elsewhere.
-}
-```
-
-`CloseWrite(code, reason)` starts the closing handshake without closing the
-transport, like `net.TCPConn.CloseWrite`: it sends the Close frame and ends the
-write side, while `ReadMessage` keeps delivering what the peer sent before it
-answered, then returns the peer's `*CloseError`. Later writes, Pings and Close
-frames return errors matching `net.ErrClosed`. It does not wait, so bound the
-drain with `ReadMessageContext` or a read deadline, and call `Close` if the peer
-never answers. `Shutdown(ctx, code, reason)` instead discards the peer's
-remaining messages and waits for its answer. Close the connection after any
-write error.
-
-## Subprotocols
-
-`Dialer.Subprotocols` offers application protocols, in order of preference.
-`Upgrader.Subprotocols` lists the protocols a server supports, in its own order
-of preference; `Upgrade` selects the first one the client offered,
-or none. Both sides read the result with `Conn.Subprotocol()`, which is `""`
-when nothing was selected.
-
-```go
-// Client
-dialer := &websocket.Dialer{Subprotocols: []string{"v2.chat", "v1.chat"}}
-conn, _, err := dialer.Dial(ctx, "wss://example.com/socket")
-
-// Server
-upgrader := &websocket.Upgrader{Subprotocols: []string{"v2.chat", "v1.chat"}}
-conn, err := upgrader.Upgrade(w, r)
-if err == nil && conn.Subprotocol() == "" {
-	conn.CloseWithStatus(websocket.StatusPolicyViolation, "unsupported subprotocol")
-}
-```
-
-Protocols are case-sensitive HTTP tokens and must be unique. Setting
-`Sec-WebSocket-Protocol` through `Dialer.Header` or `Upgrader.Header` still
-works, but combining it with `Subprotocols` is an error.
-
-## Streaming large messages
-
-`NextWriter(messageType)` returns an `io.WriteCloser` for one message, so a large
-payload can be sent without holding it in memory. Each `Write` may send complete
-frames, and `Close` sends the final one. Until `Close`, other data messages wait;
-pings and pongs can still go out between the message's frames.
-
-```go
-w, err := conn.NextWriter(websocket.BinaryMessage)
+_, data, err := conn.ReadMessage()
 if err != nil {
-	return err
+	log.Fatal(err)
 }
-if _, err := io.Copy(w, file); err != nil {
-	return err
-}
-return w.Close()
+fmt.Printf("%s\n", data)
 ```
 
-Text is checked as UTF-8 across writes, including a rune split between two
-`Write` calls. A failure ends the writer. If part of the message was already
-sent, the connection can't continue, so close it.
-
-`NextReader()` is the reading side. It returns the next data message's type and
-an `io.Reader` that ends with `io.EOF`. Uncompressed messages stream frame by
-frame, with UTF-8 and the message size limit checked as data arrives, so raise
-`MaxMessageSize` for large streams. Compressed messages are still decoded
-whole before the first byte is returned.
+Options go in a `Dialer` or `Upgrader`, which can be shared:
 
 ```go
-typ, r, err := conn.NextReader()
-if err != nil {
-	return err
+upgrader := &websocket.Upgrader{
+	Subprotocols:   []string{"chat.v2", "chat.v1"},
+	Compression:    &websocket.Compression{},
+	MaxMessageSize: 64 << 10,
 }
-_, err = io.Copy(file, r)
-```
-
-Calling `NextReader` or `ReadMessage` again drops whatever is left of the
-previous message.
-
-## Compression
-
-`permessage-deflate` ([RFC 7692]) is opt-in: set `Compression` on a `Dialer` or
-`Upgrader`. Each connection gets its own compression state, so one `Dialer` or
-`Upgrader` can be shared.
-
-```go
-dialer := &websocket.Dialer{Compression: &websocket.Compression{}}
-conn, _, err := dialer.Dial(ctx, "wss://example.com/ws")
-
-upgrader := &websocket.Upgrader{Compression: &websocket.Compression{MemoryLimit: 16 << 10}}
 conn, err := upgrader.Upgrade(w, r)
 ```
 
-- **Fragmentation.** Messages are compressed and decompressed as one DEFLATE
-  stream across any number of frames ([Section 6]). Large outgoing messages are
-  sent as 64 KiB frames, so the encoded message is never buffered whole.
-- **Context takeover.** Both directions reuse history between messages
-  ([Section 7.1.1]) unless a `*_no_context_takeover` parameter is negotiated, so
-  repetitive traffic compresses to a few bytes per message.
-- **Window sizes.** Every window from 8 to 15 bits ([Section 7.1.2]) is supported
-  for sending and receiving. A client offers a bare `client_max_window_bits` by
-  default so the server may choose; `Compression.ClientMaxWindowBits` and
-  `Compression.ServerMaxWindowBits` set explicit bounds in either role.
-- **Level and threshold.** `Compression.Level` takes a `compress/flate` level.
-  `Compression.Threshold` sends shorter messages uncompressed, which
-  [Section 6] allows per message.
-- **Memory.** The state a connection keeps between messages depends on the mode.
-  Buffers used while a message is encoded or decoded come from pools shared by
-  all connections and are not part of this.
+## Examples
 
-  | Mode | Kept per idle connection |
-  | --- | --- |
-  | Default (`MemoryLimit: 0`, meaning 64 KiB) | Up to 64 KiB: 32 KiB of send and 32 KiB of receive history |
-  | `MemoryLimit: n` | At most `n` bytes of send and receive history |
-  | `MemoryLimit: -1` (unlimited) | A whole compressor (about 0.5–1 MiB, by level) plus up to 32 KiB of receive history |
-  | `no_context_takeover` in both directions | Nothing |
+Every example is a tested program; run one with `go run ./examples/<name>`.
 
-  A memory limit is enforced through negotiation: each direction gets half and
-  uses the largest window that fits, or no context takeover when none does. The
-  default limit fits full 32 KiB windows, so it changes nothing on the wire.
-  With a limit, the sender borrows a pooled encoder for each message and
-  re-indexes its retained history first. That costs CPU per message: tens of
-  microseconds for a small message, and about twice the time of the unlimited
-  mode for large ones, in exchange for a much smaller footprint per connection
-  and usually a better ratio. `MemoryLimit: -1` selects the faster mode for
-  clients or servers with few connections.
-- **Manual handshakes.** A `Conn` from `NewConn` compresses when
-  `ConnConfig.Extensions` holds the agreed `permessage-deflate` response value;
-  `ConnConfig.Compression` tunes it. permessage-deflate is the only extension
-  the package implements.
+| Example | Shows |
+| --- | --- |
+| [`echo`](examples/echo) | A server with a size limit, bounded writes and a graceful shutdown |
+| [`client`](examples/client) | A `wscat`-style command-line client with headers, subprotocols and compression |
+| [`keepalive`](examples/keepalive) | Pinging clients on an interval and dropping those that stop answering |
+| [`chat`](examples/chat) | Broadcasting to every client, with a bounded send queue each |
+| [`pubsub`](examples/pubsub) | Topic subscriptions over a small JSON protocol |
+| [`rpc`](examples/rpc) | A JSON-RPC 2.0 server that runs calls concurrently |
+| [`tunnel`](examples/tunnel) | Forwarding TCP connections, such as SSH, over WebSocket with `NetConn` |
+| [`browser`](examples/browser) | A Go WebAssembly page that talks to a Go server |
 
-Received data is checked as it decodes, but Go's inflater can hold up to 32 KiB of
-output before exposing it, so invalid UTF-8 or an exceeded small limit may be
-detected only once more compressed input arrives. A size limit does not bound CPU
-time; use transport deadlines for untrusted peers.
+The [package documentation](https://pkg.go.dev/github.com/picatz/websocket#pkg-examples)
+has smaller runnable examples for each API.
 
-[Section 5]: https://www.rfc-editor.org/rfc/rfc7692#section-5
-[Section 6]: https://www.rfc-editor.org/rfc/rfc7692#section-6
-[Section 7.1.1]: https://www.rfc-editor.org/rfc/rfc7692#section-7.1.1
-[Section 7.1.2]: https://www.rfc-editor.org/rfc/rfc7692#section-7.1.2
+## Documentation
 
-## Tunnelling stream protocols
+The [package overview](https://pkg.go.dev/github.com/picatz/websocket) is the
+guide. Each topic below links to its section:
 
-`NetConn(ctx, conn, websocket.BinaryMessage)` wraps a connection as a
-`net.Conn`, so stream protocols such as gRPC, SSH or HTTP/2 can run over a
-WebSocket. Each `Write` sends one message and `Read` returns the payloads back
-to back. A normal or going-away close reads as `io.EOF`; any other close status
-is returned as the peer's `*CloseError`, so `io.Copy` doesn't mistake an
-aborted stream for a complete one. Use after `Close` matches
-`net.ErrClosed`. Ending `ctx` aborts the connection.
+- [Reading, writing and concurrency](https://pkg.go.dev/github.com/picatz/websocket#hdr-Reading__writing_and_concurrency):
+  one reader per connection, any number of writers, and streaming.
+- [Errors](https://pkg.go.dev/github.com/picatz/websocket#hdr-Errors): which
+  errors end a connection and how to tell them apart.
+- [Contexts and deadlines](https://pkg.go.dev/github.com/picatz/websocket#hdr-Contexts_and_deadlines):
+  bounding calls, and keepalives with `Ping`.
+- [Closing](https://pkg.go.dev/github.com/picatz/websocket#hdr-Closing): when
+  to use `Close`, `CloseWrite` or `Shutdown`.
+- [Limits and security](https://pkg.go.dev/github.com/picatz/websocket#hdr-Limits_and_security):
+  message limits, the Origin policy, and the HTTP errors `Upgrade` writes.
+- [Proxies and custom transports](https://pkg.go.dev/github.com/picatz/websocket#hdr-Proxies_and_custom_transports):
+  `Dialer.Proxy`, custom dialers and `NewConn`.
+- [Compression](https://pkg.go.dev/github.com/picatz/websocket#hdr-Compression):
+  permessage-deflate and its memory and CPU trade-off.
 
-```go
-transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-	conn, _, err := websocket.Dial(ctx, "wss://example.com/tunnel")
-	if err != nil {
-		return nil, err
-	}
-	return websocket.NetConn(context.Background(), conn, websocket.BinaryMessage), nil
-}}
-```
+Two subpackages build on the core:
 
-Deadlines delegate to the WebSocket, so a read timeout ends the connection,
-unlike a TCP connection. Each message is buffered whole and is subject to the
-incoming size limit.
+- [`wsjson`](https://pkg.go.dev/github.com/picatz/websocket/wsjson) reads and
+  writes one JSON value per text message.
+- [`browser`](https://pkg.go.dev/github.com/picatz/websocket/browser) is the
+  client for programs compiled with `GOOS=js GOARCH=wasm`. It drives the
+  host's own `WebSocket` object with the same message API.
 
-## Client proxies and custom dialers
-
-`Dial` connects directly by default. `Dialer.Proxy` has the same function type as
-`http.Transport.Proxy`, so `http.ProxyFromEnvironment` honors `HTTP_PROXY`,
-`HTTPS_PROXY` and `NO_PROXY` (a `wss` URL is selected like `https`):
-
-```go
-dialer := &websocket.Dialer{Proxy: http.ProxyFromEnvironment}
-conn, _, err := dialer.Dial(ctx, "wss://example.com/socket")
-```
-
-`http` and `https` proxies are supported through an HTTP/1.1 `CONNECT` tunnel; the
-WebSocket handshake and `wss` TLS then run end to end inside it. An `https` proxy
-is verified with a clone of `Dialer.TLSClientConfig` whose `ServerName` is the proxy host.
-Proxy URL credentials are sent only to the proxy as Basic `Proxy-Authorization`
-and are never included in errors. The `CONNECT` response head shares the
-`Dialer.MaxResponseHeaderBytes` budget; a non-200 status, or data sent before the
-tunnel is used, fails with an error matching `ErrBadHandshake` whose text names the proxy.
-
-`Dialer.NetDialContext` replaces the TCP dialer used to reach the server or proxy,
-for example to use a SOCKS dialer, a Unix socket, or an in-memory test transport.
-
-## Browser origins and proxies
-
-`Upgrade` allows a missing Origin for native clients. Otherwise it requires one
-valid HTTP/HTTPS Origin matching the request's scheme, host and effective port.
-The scheme comes only from the actual `r.TLS` connection; authority comes from
-`r.Host`. It ignores `Forwarded`, `X-Forwarded-*` and `r.URL.Scheme`. A default
-HTTP/HTTPS port is equivalent to its omission. Host case and IPv6 spelling are
-normalized; trailing dots and loopback aliases remain distinct.
-
-Set `Upgrader.CheckOrigin` to a `func(r *http.Request, origin string) bool` to replace
-that decision with an exact public-origin allowlist, including behind a
-TLS-terminating proxy. The callback receives a canonical origin, `""` for absent,
-or `"null"` for an opaque origin. Explicitly decide whether to allow those cases;
-`null` does not identify one trusted website. A nil callback keeps the default.
-See [migration examples](MIGRATION.md).
-
-Before any callback, empty, multiple, list-valued or malformed fields are denied.
-Tuple hosts use ASCII RFC 3986 reg-name characters except percent escapes and
-commas, or bracketed IPv6 without a zone. Unicode hosts must use ASCII/punycode.
-Userinfo, paths (even `/`), queries, fragments and invalid ports are rejected.
-Comma rejection is an intentional single-origin policy, including commas in a
-reg-name. There is no DNS resolution or IDNA conversion.
-
-On rejection, `Upgrade` returns `ErrOriginNotAllowed` before extension negotiation
-or hijacking, and writes HTTP 403.
-
-When `Upgrade` fails before taking over the connection, it writes the HTTP error
-response itself, so the handler only logs and returns: 403 for a rejected
-Origin, 405 with `Allow: GET` for another method, 426 with
-`Sec-WebSocket-Version: 13` for an unsupported version, 500 when hijacking is
-unavailable or the `Upgrader` is invalid, and 400 for any other malformed
-handshake. The 400, 405 and 426 errors match `ErrBadHandshake`, so a handler can
-tell a bad client from a rejected origin or its own misconfiguration. If the
-connection fails after `Upgrade` took it over, the error also matches
-`ErrBadHandshake` and nothing is written.
-Set `Upgrader.Error` to write a different body, for example JSON; the required
-`Allow` and `Sec-WebSocket-Version` fields are already set when it runs.
+[MIGRATION.md](MIGRATION.md) lists the API changes made on the way to v0.1.0.
 
 ## Conformance
 
@@ -544,71 +172,17 @@ run's artifact holds the full Autobahn report for 30 days; see
 [`conformance/autobahn`](conformance/autobahn) to reproduce it locally with
 Docker.
 
-## Protocol limitations
+## Performance
 
-- Authenticate and authorize requests and validate the authoritative Host in your
-  HTTP handler. `Upgrade` enforces the Origin policy described above; Origin is
-  not authentication, and non-browser clients can omit or forge it
-- Subprotocol offers must contain unique, case-sensitive HTTP tokens. `Dial`
-  rejects unsolicited, unoffered, malformed, or multiple server selections.
-  `Upgrade` validates offers and any caller-provided selection before hijacking.
-  A server may select one offered token or omit selection; the application
-  remains responsible for choosing a protocol and implementing it
-- Custom request/response headers reject invalid HTTP field names and values
-  (including CR/LF, NUL, and other forbidden control bytes) before dialing or
-  hijacking. Generated handshake fields and HTTP body-framing fields are reserved
-  case-insensitively; see `Dialer.Header` and `Upgrader.Header` for the lists.
-  Ordinary repeated fields (including `Set-Cookie`) are preserved. Callers still
-  own ordinary field-specific semantics
-- Once a compressed message has started, a failure while sending it (a
-  transport error) poisons later
-  writes, because the frame stream and compression context cannot be resumed
-- Any `ReadMessage` error terminates the connection. The detecting call preserves
-  its original error; later reads and valid writes fail with `io.ErrClosedPipe`.
-  Known protocol, invalid UTF-8, and configured size violations make a single
-  best-effort Close notification with status 1002, 1007, or 1009 when the writer
-  is idle and safe. A busy or failed writer, or a transport or callback error,
-  instead causes an immediate transport abort. No additional
-  peer data is processed after failure
-- Automatic failure notification has a one-second transport-abort watchdog and
-  preserves existing transport deadlines. For `Dial` and concrete `*tls.Conn`
-  inputs to `NewConn`/`Upgrade`, abnormal shutdown closes the raw transport;
-  ordinary and valid-peer closure retain TLS shutdown behavior. A custom
-  transport or an outer wrapper hiding TLS may block in `Close`, which the
-  library cannot bound
-- Neither the tests nor the [Autobahn baseline](#conformance) are a formal
-  RFC 6455 or RFC 7692 compliance certification
-
-See [RFC 6455] for framing and [RFC 7692] for compression semantics.
-
-## Error Handling
-
-Every error from `ReadMessage` ends the connection. Test what ended it with
-`errors.Is`:
-
-```go
-_, _, err := conn.ReadMessage()
-switch {
-case websocket.CloseStatus(err) != -1:
-	// The peer closed; the code and reason are in *websocket.CloseError.
-case errors.Is(err, websocket.ErrProtocol):
-	// The peer broke the protocol, or sent a message larger than
-	// MaxMessageSize (errors.Is(err, websocket.ErrMessageTooLarge)).
-case errors.Is(err, net.ErrClosed):
-	// This side closed the connection.
-default:
-	// The transport failed or a deadline passed.
-}
-```
+[BENCHMARKS.md](BENCHMARKS.md) explains how to measure the framing, masking
+and transport costs, and compares this package with other Go WebSocket
+libraries.
 
 ## Development
 
-Tests and executable examples use in-memory connections or local loopback
-servers. They do not depend on public echo services or external credentials.
-`TestPMDIndependentZlibWindow` additionally uses Python 3's standard-library
-`zlib` module as an independent window oracle, and reports a skip if Python 3
-is absent. The Go library has no additional runtime dependency. This check
-covers independent unfragmented messages, not complete PMD conformance.
+Tests and examples use in-memory connections or local loopback servers, with no
+external services or credentials. A few tests use Python 3's `zlib` or Node.js
+22 as independent peers, and are skipped when those are not installed.
 
 ```console
 go test ./...
@@ -617,8 +191,3 @@ go vet ./...
 GOARCH=386 CGO_ENABLED=0 go test ./...
 go test . -run '^$' -fuzz '^FuzzReadMessage$' -fuzztime=30s
 ```
-
-The regression suite covers malformed lengths, frame masking and reserved bits,
-fragmentation and message limits, text/close payload validation, bounded
-DEFLATE output, buffered handshake data, TLS options, handshake cancellation,
-and concurrent connection shutdown.
