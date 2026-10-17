@@ -1874,9 +1874,11 @@ func WithUpgradeOriginCheck(check func(r *http.Request, origin string) bool) Upg
 // The error says which response was sent:
 //
 //   - ErrOriginNotAllowed: 403 Forbidden.
-//   - ErrBadHandshake: the client's request was malformed, 400 Bad Request, or
-//     its version unsupported (ErrUnsupportedVersion), 426 Upgrade Required
-//     with Sec-WebSocket-Version: 13 (RFC 6455 section 4.4).
+//   - ErrBadHandshake: the client's request was at fault. A non-GET request
+//     (ErrInvalidMethod) gets 405 Method Not Allowed with Allow: GET, an
+//     unsupported version (ErrUnsupportedVersion) 426 Upgrade Required with
+//     Sec-WebSocket-Version: 13 (RFC 6455 section 4.4), and any other
+//     malformed request 400 Bad Request.
 //   - ErrNotHijacker, or invalid server options (ErrInvalidHandshakeHeader):
 //     500 Internal Server Error.
 //   - ErrHandshakeFailed: nothing, as the transport may already be hijacked.

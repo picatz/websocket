@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 )
 
@@ -24,7 +25,7 @@ func TestUpgradeErrorStatus(t *testing.T) {
 		{ErrNotHijacker, http.StatusInternalServerError},
 		{fmt.Errorf("%w: %w", ErrInvalidHandshakeHeader, ErrInvalidSubprotocol), http.StatusInternalServerError},
 		{ErrInvalidSubprotocol, http.StatusBadRequest}, // from the client's offer
-		{ErrInvalidMethod, http.StatusBadRequest},
+		{ErrInvalidMethod, http.StatusMethodNotAllowed},
 		{ErrMissingSecKey, http.StatusBadRequest},
 		{ErrInvalidExtension, http.StatusBadRequest},
 		{errors.New("other"), http.StatusBadRequest},
@@ -49,18 +50,20 @@ func TestUpgradeWritesErrorResponses(t *testing.T) {
 	defer srv.Close()
 
 	for _, tt := range []struct {
-		name    string
-		header  http.Header
-		status  int
-		version string
+		name   string
+		method string
+		header http.Header
+		status int
+		want   http.Header // response fields that must be present
 	}{
-		{"plain GET", nil, http.StatusBadRequest, ""},
-		{"cross origin", http.Header{"Origin": {"https://evil.test"}}, http.StatusForbidden, ""},
-		{"old version", http.Header{"Sec-WebSocket-Version": {"8"}}, http.StatusUpgradeRequired, "13"},
-		{"bad key", http.Header{"Sec-WebSocket-Key": {"short"}}, http.StatusBadRequest, ""},
+		{"plain GET", http.MethodGet, nil, http.StatusBadRequest, nil},
+		{"cross origin", http.MethodGet, http.Header{"Origin": {"https://evil.test"}}, http.StatusForbidden, nil},
+		{"old version", http.MethodGet, http.Header{"Sec-WebSocket-Version": {"8"}}, http.StatusUpgradeRequired, http.Header{"Sec-Websocket-Version": {"13"}}},
+		{"bad key", http.MethodGet, http.Header{"Sec-WebSocket-Key": {"short"}}, http.StatusBadRequest, nil},
+		{"POST", http.MethodPost, http.Header{}, http.StatusMethodNotAllowed, http.Header{"Allow": {"GET"}}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL, nil)
+			req, _ := http.NewRequestWithContext(t.Context(), tt.method, srv.URL, nil)
 			if tt.header != nil {
 				req.Header = upgradeRequest().Header
 				for k, v := range tt.header {
@@ -73,8 +76,16 @@ func TestUpgradeWritesErrorResponses(t *testing.T) {
 			}
 			defer resp.Body.Close()
 			body, _ := io.ReadAll(resp.Body)
-			if resp.StatusCode != tt.status || resp.Header.Get("Sec-WebSocket-Version") != tt.version {
-				t.Fatalf("response = %d, version %q; want %d, %q", resp.StatusCode, resp.Header.Get("Sec-WebSocket-Version"), tt.status, tt.version)
+			if resp.StatusCode != tt.status {
+				t.Fatalf("status = %d, want %d", resp.StatusCode, tt.status)
+			}
+			for k, v := range tt.want {
+				if got := resp.Header.Values(k); !slices.Equal(got, v) {
+					t.Fatalf("%s = %q, want %q", k, got, v)
+				}
+			}
+			if tt.want.Get("Sec-WebSocket-Version") == "" && resp.Header.Get("Sec-WebSocket-Version") != "" {
+				t.Fatalf("unexpected Sec-WebSocket-Version on %d", resp.StatusCode)
 			}
 			if want := "WebSocket: " + http.StatusText(tt.status) + "\n"; string(body) != want {
 				t.Fatalf("body = %q, want %q", body, want)

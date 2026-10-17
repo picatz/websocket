@@ -10,6 +10,7 @@ import (
 // it writes nothing:
 //
 //   - ErrOriginNotAllowed: 403 Forbidden.
+//   - ErrInvalidMethod: 405 Method Not Allowed, with Allow: GET.
 //   - ErrUnsupportedVersion: 426 Upgrade Required, with
 //     Sec-WebSocket-Version: 13 (RFC 6455 section 4.4).
 //   - ErrNotHijacker, and invalid caller configuration such as a reserved
@@ -24,6 +25,8 @@ func upgradeErrorStatus(err error) int {
 		return 0
 	case errors.Is(err, ErrOriginNotAllowed):
 		return http.StatusForbidden
+	case errors.Is(err, ErrInvalidMethod):
+		return http.StatusMethodNotAllowed
 	case errors.Is(err, ErrUnsupportedVersion):
 		return http.StatusUpgradeRequired
 	case errors.Is(err, ErrNotHijacker), errors.Is(err, ErrInvalidHandshakeHeader):
@@ -42,10 +45,13 @@ func writeUpgradeError(w http.ResponseWriter, err error) error {
 	if status == 0 {
 		return err
 	}
-	if (status == http.StatusBadRequest || status == http.StatusUpgradeRequired) && !errors.Is(err, ErrBadHandshake) {
+	if status != http.StatusForbidden && status < http.StatusInternalServerError && !errors.Is(err, ErrBadHandshake) {
 		err = fmt.Errorf("%w: %w", ErrBadHandshake, err)
 	}
-	if status == http.StatusUpgradeRequired {
+	switch status {
+	case http.StatusMethodNotAllowed:
+		w.Header().Set("Allow", http.MethodGet)
+	case http.StatusUpgradeRequired:
 		w.Header().Set("Sec-WebSocket-Version", "13")
 	}
 	http.Error(w, "WebSocket: "+http.StatusText(status), status)

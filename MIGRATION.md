@@ -170,12 +170,13 @@ handler mapped them to an HTTP status. It now writes the response itself:
 | Error | Response |
 |---|---|
 | `ErrOriginNotAllowed` | 403 |
+| `ErrInvalidMethod` | 405, with `Allow: GET` |
 | `ErrUnsupportedVersion` | 426, with `Sec-WebSocket-Version: 13` |
 | `ErrNotHijacker`, `ErrInvalidHandshakeHeader` (the server's own options) | 500 |
 | `ErrHandshakeFailed` | nothing: the transport may already be hijacked |
 | any other malformed handshake | 400 |
 
-The 400 and 426 errors also match `ErrBadHandshake`, the same sentinel `Dial`
+The 400, 405 and 426 errors also match `ErrBadHandshake`, the same sentinel `Dial`
 uses for a failed handshake, so `errors.Is(err, websocket.ErrBadHandshake)`
 means the client sent a request Upgrade could not accept.
 
