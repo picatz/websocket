@@ -146,7 +146,7 @@ func TestReadMessageControlsAtLimit(t *testing.T) {
 				c.SetPongHandler(func(s string) error { received = s; return nil })
 				op, data, err := c.ReadMessage()
 				if opcode == CloseMessage {
-					if err != io.EOF {
+					if ce, ok := errors.AsType[*CloseError](err); !ok || ce.Code != StatusNormalClosure || ce.Reason != string(control[2:]) {
 						t.Fatalf("close = %v", err)
 					}
 				} else if err != nil || op != BinaryMessage || string(data) != "ab" || received != string(control) {

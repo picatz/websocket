@@ -75,7 +75,7 @@ func TestCloseControlKeepsReadsAndPongAvailable(t *testing.T) {
 	if err != nil || opcode != TextMessage || string(data) != "¢" {
 		t.Fatalf("read in flight: %v %x %v", opcode, data, err)
 	}
-	if _, _, err := c.ReadMessage(); err != io.EOF {
+	if _, _, err := c.ReadMessage(); CloseStatus(err) != StatusNoStatusReceived {
 		t.Fatal(err)
 	}
 	wire := frameConn(c.conn.(*memoryConn).written.Bytes(), true, 0)

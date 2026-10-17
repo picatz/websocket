@@ -509,6 +509,7 @@ func (c *Conn) handleControl(frame *Frame) (peerClosed bool, err error) {
 		if err := validateIncomingClosePayload(frame.Payload); err != nil {
 			return false, err
 		}
+		c.peerClose = newCloseError(frame.Payload)
 		_ = c.closeWithPayload(frame.Payload)
 		return true, nil
 	case PingMessage:
