@@ -178,26 +178,51 @@ The [`benchmarks`](benchmarks) directory is a separate Go module that runs the
 same workloads against this package, [`coder/websocket`], [`gorilla/websocket`]
 and [`gobwas/ws`]. It is separate so the core module keeps no third-party
 dependencies. Each adapter uses its library's documented message API, with
-compression off and a 1 MiB read limit. `TestEcho` checks that every adapter
-round-trips every payload before any number is taken.
+compression off and a 1 MiB read limit (gobwas/ws can only limit a frame,
+which is the same for these single-frame messages). `TestEcho` checks that
+every adapter round-trips every payload, and `TestReadLimit` that every server
+rejects a larger message, before any number is taken.
+
+`go.mod` replaces this module with the parent directory, so its
+pseudo-version does not say what was measured. Each run prints the checkout's
+commit (`picatz-commit`, with `-dirty` for uncommitted changes), the Go
+version and the other libraries' versions as configuration lines, which
+benchstat keeps with the results.
+
+Run each sample as its own round, so that drift on a shared machine spreads
+over every library instead of landing on whichever ran last, and compare
+with [benchstat]:
 
 ```sh
 cd benchmarks
 go test ./...
-go test -run '^$' -bench 'Echo|Handshake' -benchmem -count=10 | tee new.txt
-go test -run '^$' -bench 'IdleConn' -benchtime=1x -count=10 | tee -a new.txt
+for i in $(seq 10); do
+  go test -run '^$' -bench 'Echo|Handshake' -benchmem -count=1
+  go test -run '^$' -bench 'IdleConn' -benchtime=1x -count=1
+done | tee new.txt
+benchstat -col /lib new.txt
 ```
 
 - `Echo`: one client write and one echoed read of a binary message over one
   loopback TCP connection. Both endpoints use the library under test, so the
-  time and allocations cover both sides.
+  time and allocations cover both sides. Each op is one round trip, and MB/s
+  counts the payload once per round trip, although it crosses the
+  connection twice.
 - `EchoParallel`: the same with 1 KiB messages and one connection per parallel
-  worker against one server.
-- `Handshake`: TCP connect, the HTTP upgrade on both sides, and close.
-- `IdleConn`: server heap and stack bytes held per idle connection after a GC,
-  over 500 connections from raw TCP clients, so no client library memory is
-  counted. The baseline row hijacks the request and blocks in a read while
-  keeping net/http's buffers.
+  worker (GOMAXPROCS of them) against one server. Its time per op is wall
+  time divided by all workers' round trips, so it measures throughput, not
+  the latency of one round trip.
+- `Handshake`: TCP connect, the HTTP upgrade on both sides, and the client's
+  close. The client sends a Close frame and closes the TCP connection without
+  waiting for the reply. coder/websocket cannot do that: it either waits for
+  the closing handshake or closes without a Close frame, and the adapter does
+  the latter, so its row skips one frame write.
+- `IdleConn`: growth of the whole process's Go heap and stacks per idle
+  connection after a GC, over 500 connections opened by raw TCP clients in
+  the same process. It includes each client socket's Go state, which is the
+  same for every row, so the difference from the baseline row is what the
+  library adds. Kernel socket buffers are not counted. The baseline hijacks
+  the request and blocks in a read while keeping net/http's buffers.
 
 ### Indicative results
 
@@ -207,7 +232,9 @@ linux/amd64, Go 1.27.0, coder v1.8.15, gorilla v1.5.3, gobwas v1.4.0), taken on
 [`benchmarks/results`](benchmarks/results/2026-10-17-linux-amd64.txt). A shared VM
 is not a fixed, quiet machine, so differences under roughly 15% in time are
 within noise. Allocation counts are deterministic and the most reliable column.
-Rerun on your own hardware before drawing conclusions.
+Rerun on your own hardware before drawing conclusions. These runs predate the
+read limit for gobwas/ws and the Close frame in gorilla's and gobwas's
+Handshake close.
 
 Echo round trip, time per op (lower is better):
 
@@ -254,3 +281,4 @@ handler runs. A `Dial`ed connection holds only its read buffer.
 [`coder/websocket`]: https://github.com/coder/websocket
 [`gorilla/websocket`]: https://github.com/gorilla/websocket
 [`gobwas/ws`]: https://github.com/gobwas/ws
+[benchstat]: https://pkg.go.dev/golang.org/x/perf/cmd/benchstat

@@ -233,3 +233,22 @@ func rawHandshake(tb testing.TB, addr string) net.Conn {
 	}
 	return conn
 }
+
+// TestReadLimit checks every server enforces readLimit, so the read paths
+// being compared do the same bounds checks: a larger message must end the
+// connection instead of being echoed.
+func TestReadLimit(t *testing.T) {
+	for _, lib := range libraries {
+		t.Run(lib.name, func(t *testing.T) {
+			srv := httptest.NewServer(lib.echo)
+			defer srv.Close()
+			c := dial(t, lib, srv)
+			if err := c.write(payload(readLimit + 1)); err != nil {
+				return // The server may close before the write completes.
+			}
+			if got, err := c.read(); err == nil {
+				t.Fatalf("server echoed %d bytes over the %d byte limit", len(got), readLimit)
+			}
+		})
+	}
+}
