@@ -209,15 +209,10 @@ func (c *Conn) onMessage(ev js.Value) {
 	c.mu.Unlock()
 }
 
-func (c *Conn) onClose(js.Value) {
+func (c *Conn) onClose(ev js.Value) {
 	c.mu.Lock()
 	if c.err == nil {
-		if c.closed {
-			c.err = io.ErrClosedPipe
-		} else {
-			// Like websocket.Conn, a peer close ends reading with io.EOF.
-			c.err = io.EOF
-		}
+		c.err = closeEventError(ev, c.closed)
 	}
 	c.signal()
 	c.mu.Unlock()
@@ -225,6 +220,24 @@ func (c *Conn) onClose(js.Value) {
 	close(c.done)
 	// Release once this callback, itself one of the listeners, has returned.
 	go c.releaseListeners()
+}
+
+// closeEventError converts a close event into ReadMessage's terminal error.
+// After a local Close it is io.ErrClosedPipe. A clean close from the peer is a
+// *websocket.CloseError carrying the peer's code and reason, which matches
+// io.EOF like websocket.Conn's. A close without a closing handshake, which the
+// host reports as code 1006 (Abnormal Closure), matches io.ErrUnexpectedEOF.
+//
+// https://websockets.spec.whatwg.org/#the-closeevent-interface
+func closeEventError(ev js.Value, closedLocally bool) error {
+	if closedLocally {
+		return io.ErrClosedPipe
+	}
+	code := websocket.StatusCode(ev.Get("code").Int())
+	if !ev.Get("wasClean").Bool() || code == websocket.StatusAbnormalClosure {
+		return fmt.Errorf("browser: connection closed without a closing handshake: %w", io.ErrUnexpectedEOF)
+	}
+	return &websocket.CloseError{Code: code, Reason: ev.Get("reason").String()}
 }
 
 // releaseListeners detaches and frees the event handlers. Once detached, the
@@ -337,17 +350,41 @@ func (c *Conn) Subprotocol() string {
 	return c.ws.Get("protocol").String()
 }
 
-// BufferedAmount returns the number of bytes written but not yet sent by the
-// host. A writer can poll it to apply its own backpressure.
-func (c *Conn) BufferedAmount() int {
-	return c.ws.Get("bufferedAmount").Int()
-}
-
 // Close starts the closing handshake with status 1000 (Normal Closure). Unlike
 // websocket.Conn.Close it does not wait or block; the host completes the
 // handshake. Messages already received stay readable. Repeated calls return
 // websocket.ErrAlreadyClosed.
 func (c *Conn) Close() error {
+	return c.close(websocket.StatusNormalClosure, "")
+}
+
+// CloseWithStatus is Close with an explicit status code and reason. Hosts only
+// let programs send 1000 (Normal Closure) and 3000 through 4999, a narrower
+// range than websocket.Conn.CloseWithStatus accepts. The reason must be valid
+// UTF-8 of at most 123 bytes. Otherwise it returns an error matching
+// websocket.ErrInvalidCloseStatus and leaves the connection open.
+//
+// https://websockets.spec.whatwg.org/#dom-websocket-close
+func (c *Conn) CloseWithStatus(code websocket.StatusCode, reason string) error {
+	if code != websocket.StatusNormalClosure && (code < 3000 || code > 4999) {
+		return fmt.Errorf("%w: hosts only send 1000 and 3000-4999, not %d", websocket.ErrInvalidCloseStatus, int(code))
+	}
+	if len(reason) > maxCloseReason {
+		return fmt.Errorf("%w: reason is %d bytes, limit is %d", websocket.ErrInvalidCloseStatus, len(reason), maxCloseReason)
+	}
+	if !utf8.ValidString(reason) {
+		return fmt.Errorf("%w: reason is not valid UTF-8", websocket.ErrInvalidCloseStatus)
+	}
+	return c.close(code, reason)
+}
+
+// maxCloseReason is the largest close reason that fits in a control frame
+// after the two-byte status code.
+//
+// https://datatracker.ietf.org/doc/html/rfc6455#section-5.5
+const maxCloseReason = 125 - 2
+
+func (c *Conn) close(code websocket.StatusCode, reason string) error {
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -357,7 +394,7 @@ func (c *Conn) Close() error {
 	open := c.err == nil
 	c.mu.Unlock()
 	if open {
-		c.ws.Call("close", websocket.StatusNormalClosure)
+		c.ws.Call("close", int(code), reason)
 	}
 	return nil
 }

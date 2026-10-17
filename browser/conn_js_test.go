@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -58,9 +59,6 @@ func TestEcho(t *testing.T) {
 			t.Fatalf("ReadMessage = %v, %d bytes, %v; want %v, %d bytes", opcode, len(data), err, tc.opcode, len(tc.data))
 		}
 	}
-	if conn.BufferedAmount() < 0 {
-		t.Fatal("negative BufferedAmount")
-	}
 }
 
 func TestWriteValidation(t *testing.T) {
@@ -91,8 +89,12 @@ func TestPeerClose(t *testing.T) {
 			t.Fatalf("ReadMessage = %q, %v; want %q", data, err, want)
 		}
 	}
-	if _, _, err := conn.ReadMessage(); err != io.EOF {
-		t.Fatalf("after peer close: err = %v, want io.EOF", err)
+	_, _, err := conn.ReadMessage()
+	if !errors.Is(err, io.EOF) || websocket.CloseStatus(err) != websocket.StatusGoingAway {
+		t.Fatalf("after peer close: err = %v, want a CloseError with StatusGoingAway", err)
+	}
+	if ce, ok := errors.AsType[*websocket.CloseError](err); !ok || ce.Reason != "bye" {
+		t.Fatalf("after peer close: err = %#v, want reason %q", err, "bye")
 	}
 	if err := conn.WriteMessage(websocket.TextMessage, []byte("late")); err != io.ErrClosedPipe {
 		t.Fatalf("write after peer close: err = %v, want io.ErrClosedPipe", err)
@@ -148,3 +150,70 @@ func TestReadContext(t *testing.T) {
 		t.Fatalf("write after canceled read: err = %v, want io.ErrClosedPipe", err)
 	}
 }
+
+func TestCloseWithStatus(t *testing.T) {
+	conn := dial(t, "/echo")
+	for _, tc := range []struct {
+		code   websocket.StatusCode
+		reason string
+	}{
+		{websocket.StatusGoingAway, ""}, // valid on the wire, but hosts refuse it
+		{2999, ""},
+		{5000, ""},
+		{4000, strings.Repeat("x", 124)},
+		{4000, "\xff"},
+	} {
+		if err := conn.CloseWithStatus(tc.code, tc.reason); !errors.Is(err, websocket.ErrInvalidCloseStatus) {
+			t.Fatalf("CloseWithStatus(%d, %d bytes) = %v, want ErrInvalidCloseStatus", tc.code, len(tc.reason), err)
+		}
+	}
+	// Rejected statuses leave the connection open.
+	if err := conn.WriteMessage(websocket.TextMessage, []byte("ping")); err != nil {
+		t.Fatalf("WriteMessage after rejected status: %v", err)
+	}
+	if _, data, err := conn.ReadMessage(); err != nil || string(data) != "ping" {
+		t.Fatalf("ReadMessage = %q, %v", data, err)
+	}
+
+	if err := conn.CloseWithStatus(4000, strings.Repeat("x", 123)); err != nil {
+		t.Fatalf("CloseWithStatus: %v", err)
+	}
+	if err := conn.CloseWithStatus(4000, ""); !errors.Is(err, websocket.ErrAlreadyClosed) {
+		t.Fatalf("second close: err = %v, want ErrAlreadyClosed", err)
+	}
+}
+
+func TestCloseWithStatusReachesPeer(t *testing.T) {
+	conn := dial(t, "/closestatus")
+	if err := conn.CloseWithStatus(4321, "done"); err != nil {
+		t.Fatal(err)
+	}
+	// Wait for the handshake to finish; the server records what it received.
+	_, _, _ = conn.ReadMessage()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	check, err := browser.Dial(ctx, serverURL(t, "/lastclose"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer check.Close()
+	if _, data, err := check.ReadMessage(); err != nil || string(data) != "4321 done" {
+		t.Fatalf("server saw %q, %v; want %q", data, err, "4321 done")
+	}
+}
+
+// conn is the method set shared by browser.Conn and websocket.Conn. Both must
+// implement it with identical signatures, so code written against it works
+// with either. Subprotocol joins it once websocket.Conn has that method.
+type conn interface {
+	ReadMessage() (websocket.Opcode, []byte, error)
+	ReadMessageContext(context.Context) (websocket.Opcode, []byte, error)
+	WriteMessage(websocket.Opcode, []byte) error
+	Close() error
+	CloseWithStatus(websocket.StatusCode, string) error
+}
+
+var (
+	_ conn = (*browser.Conn)(nil)
+	_ conn = (*websocket.Conn)(nil)
+)

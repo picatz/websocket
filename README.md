@@ -155,8 +155,10 @@ conn.SetPongHandler(func(appData string) error {
 
 Programs compiled with `GOOS=js GOARCH=wasm` cannot open TCP connections, so
 `Dial` is not available to them. The [`browser`](browser) subpackage drives the
-host's own `WebSocket` object instead, with the same `ReadMessage`,
-`WriteMessage` and `Close` methods and the same `Opcode` values:
+host's own `WebSocket` object instead. Its methods are a subset of
+`*websocket.Conn`'s with identical signatures, and a peer close is a
+`*websocket.CloseError`. The intended direction is for `websocket.Dial` itself
+to work under `GOOS=js`:
 
 ```go
 conn, err := browser.Dial(ctx, "wss://example.com/socket", browser.WithSubprotocols("chat"))

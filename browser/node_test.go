@@ -3,6 +3,8 @@
 package browser_test
 
 import (
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,6 +13,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/picatz/websocket"
 )
@@ -89,7 +92,7 @@ func testServer() http.Handler {
 		_, _, _ = conn.ReadMessage()
 	})
 
-	// /goodbye sends two messages and closes normally.
+	// /goodbye sends two messages and closes with StatusGoingAway.
 	mux.HandleFunc("/goodbye", func(w http.ResponseWriter, r *http.Request) {
 		conn, err := websocket.Upgrade(w, r, anyOrigin)
 		if err != nil {
@@ -97,7 +100,43 @@ func testServer() http.Handler {
 		}
 		_ = conn.WriteMessage(websocket.TextMessage, []byte("one"))
 		_ = conn.WriteMessage(websocket.BinaryMessage, []byte("two"))
-		conn.Close()
+		_ = conn.CloseWithStatus(websocket.StatusGoingAway, "bye")
+		// Wait for the client's reply so the close is clean.
+		_, _, _ = conn.ReadMessage()
+	})
+
+	// /closestatus records the client's close code and reason, which
+	// /lastclose then sends back as "<code> <reason>".
+	var lastClose = make(chan string, 1)
+	mux.HandleFunc("/closestatus", func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Upgrade(w, r, anyOrigin)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		for {
+			_, _, err := conn.ReadMessage()
+			if ce, ok := errors.AsType[*websocket.CloseError](err); ok {
+				lastClose <- fmt.Sprintf("%d %s", int(ce.Code), ce.Reason)
+			}
+			if err != nil {
+				return
+			}
+		}
+	})
+	mux.HandleFunc("/lastclose", func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Upgrade(w, r, anyOrigin)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		select {
+		case got := <-lastClose:
+			_ = conn.WriteMessage(websocket.TextMessage, []byte(got))
+		case <-time.After(5 * time.Second):
+			_ = conn.WriteMessage(websocket.TextMessage, []byte("no close received"))
+		}
+		_, _, _ = conn.ReadMessage()
 	})
 
 	// /reject fails the handshake.

@@ -30,11 +30,20 @@
 //     until ReadMessage takes them. WithMaxMessageSize bounds each message, and
 //     reading promptly bounds the queue.
 //   - WriteMessage returns once the host accepts the message for sending, not
-//     when it reaches the network. Conn.BufferedAmount reports bytes still
-//     queued by the host.
-//   - Control frames cannot be sent or observed.
+//     when it reaches the network.
+//   - Control frames cannot be sent or observed, so there is no Ping: the host
+//     answers the peer's Pings itself. CloseWithStatus accepts only the codes
+//     hosts let programs send, 1000 and 3000 through 4999.
 //
-// This package builds only for GOOS=js; on other platforms it is empty.
+// Conn's methods are a subset of websocket.Conn's, with identical signatures,
+// so code written against that subset works with either. A peer close is
+// reported as a *websocket.CloseError, so websocket.CloseStatus works too.
+//
+// This package is a stepping stone. The intended direction is for
+// websocket.Dial itself to work under GOOS=js, returning a *websocket.Conn
+// backed by the host, at which point this package becomes a thin alias or is
+// retired. Until then it builds only for GOOS=js; on other platforms it is
+// empty.
 //
 // [WHATWG WebSockets standard]: https://websockets.spec.whatwg.org/
 package browser
