@@ -1,0 +1,550 @@
+picatz-commit: 658bf727a0c0fe795f245b51de151ae93d349eae
+go: go1.27.2
+coder/websocket: v1.8.15
+gobwas/ws: v1.4.0
+gorilla/websocket: v1.5.3
+goos: linux
+goarch: amd64
+pkg: github.com/picatz/websocket/benchmarks
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkEcho/size=16/lib=picatz-4         	  119331	      9656 ns/op	   1.66 MB/s	         3.372 gc-cpu-ns/op	      8548 p50-ns	     22379 p99-ns	      32 B/op	       2 allocs/op
+BenchmarkEcho/size=16/lib=coder-4          	   97531	     14380 ns/op	   1.11 MB/s	       158.4 gc-cpu-ns/op	     15014 p50-ns	     46049 p99-ns	    1024 B/op	       2 allocs/op
+BenchmarkEcho/size=16/lib=gorilla-4        	  126442	     12223 ns/op	   1.31 MB/s	       154.4 gc-cpu-ns/op	     11972 p50-ns	     37162 p99-ns	    1088 B/op	       5 allocs/op
+BenchmarkEcho/size=16/lib=gobwas-4         	   49278	     22571 ns/op	   0.71 MB/s	       234.1 gc-cpu-ns/op	     17996 p50-ns	     61209 p99-ns	    1544 B/op	      11 allocs/op
+BenchmarkEcho/size=1024/lib=picatz-4       	  113226	     12360 ns/op	  82.85 MB/s	       243.3 gc-cpu-ns/op	     13012 p50-ns	     42815 p99-ns	    2051 B/op	       2 allocs/op
+BenchmarkEcho/size=1024/lib=coder-4        	   64891	     16910 ns/op	  60.56 MB/s	       525.1 gc-cpu-ns/op	     14160 p50-ns	     62268 p99-ns	    4352 B/op	       8 allocs/op
+BenchmarkEcho/size=1024/lib=gorilla-4      	   88380	     14402 ns/op	  71.10 MB/s	       542.7 gc-cpu-ns/op	     13236 p50-ns	     56358 p99-ns	    4416 B/op	      11 allocs/op
+BenchmarkEcho/size=1024/lib=gobwas-4       	   50362	     24028 ns/op	  42.62 MB/s	       539.3 gc-cpu-ns/op	     19884 p50-ns	     72914 p99-ns	    4858 B/op	      16 allocs/op
+BenchmarkEcho/size=16384/lib=picatz-4      	   34184	     39044 ns/op	 419.63 MB/s	      5334 gc-cpu-ns/op	     29907 p50-ns	    219743 p99-ns	   41576 B/op	       4 allocs/op
+BenchmarkEcho/size=16384/lib=coder-4       	   14374	     84307 ns/op	 194.34 MB/s	     11162 gc-cpu-ns/op	     68256 p50-ns	    364588 p99-ns	   75520 B/op	      26 allocs/op
+BenchmarkEcho/size=16384/lib=gorilla-4     	   16693	     67363 ns/op	 243.22 MB/s	     12171 gc-cpu-ns/op	     49919 p50-ns	    347593 p99-ns	   75656 B/op	      31 allocs/op
+BenchmarkEcho/size=16384/lib=gobwas-4      	   14830	     78886 ns/op	 207.69 MB/s	     13772 gc-cpu-ns/op	     59397 p50-ns	    394619 p99-ns	   76640 B/op	      34 allocs/op
+BenchmarkEcho/size=262144/lib=picatz-4     	    3447	    372387 ns/op	 703.96 MB/s	    132100 gc-cpu-ns/op	    299336 p50-ns	   1306692 p99-ns	  705807 B/op	      10 allocs/op
+BenchmarkEcho/size=262144/lib=coder-4      	    1452	    877566 ns/op	 298.72 MB/s	    277440 gc-cpu-ns/op	    817933 p50-ns	   2115066 p99-ns	 1259267 B/op	      40 allocs/op
+BenchmarkEcho/size=262144/lib=gorilla-4    	    1124	    994387 ns/op	 263.62 MB/s	    328515 gc-cpu-ns/op	    925737 p50-ns	   2663849 p99-ns	 1259402 B/op	      45 allocs/op
+BenchmarkEcho/size=262144/lib=gobwas-4     	    1335	    870394 ns/op	 301.18 MB/s	    366313 gc-cpu-ns/op	    792575 p50-ns	   2574814 p99-ns	 1521915 B/op	      49 allocs/op
+BenchmarkEchoParallel/size=1024/lib=picatz-4         	  135088	      8544 ns/op	 119.86 MB/s	       581.4 gc-cpu-ns/op	    2050 B/op	       2 allocs/op
+BenchmarkEchoParallel/size=1024/lib=coder-4          	  129072	     10651 ns/op	  96.14 MB/s	      1474 gc-cpu-ns/op	    4353 B/op	       8 allocs/op
+BenchmarkEchoParallel/size=1024/lib=gorilla-4        	  132502	     10732 ns/op	  95.41 MB/s	      1529 gc-cpu-ns/op	    4417 B/op	      11 allocs/op
+BenchmarkEchoParallel/size=1024/lib=gobwas-4         	   71505	     16084 ns/op	  63.67 MB/s	      1878 gc-cpu-ns/op	    4859 B/op	      16 allocs/op
+BenchmarkHandshake/lib=picatz-4                      	    6398	    178929 ns/op	   18569 B/op	      90 allocs/op
+BenchmarkHandshake/lib=coder-4                       	    4726	    275950 ns/op	   32376 B/op	     231 allocs/op
+BenchmarkHandshake/lib=gorilla-4                     	    6459	    184715 ns/op	   30352 B/op	     131 allocs/op
+BenchmarkHandshake/lib=gobwas-4                      	    7204	    155025 ns/op	   13124 B/op	      87 allocs/op
+BenchmarkBroadcast/size=1024/clients=100/lib=picatz-4         	    2380	    571872 ns/op	 179.06 MB/s	     71968 gc-cpu-ns/op	  102661 B/op	     100 allocs/op
+BenchmarkBroadcast/size=1024/clients=100/lib=coder-4          	    1584	    706004 ns/op	 145.04 MB/s	    154212 gc-cpu-ns/op	  217622 B/op	     400 allocs/op
+BenchmarkBroadcast/size=1024/clients=100/lib=gorilla-4        	    2061	    572194 ns/op	 178.96 MB/s	    128180 gc-cpu-ns/op	  218442 B/op	     500 allocs/op
+BenchmarkBroadcast/size=1024/clients=100/lib=gobwas-4         	    1090	   1034638 ns/op	  98.97 MB/s	    181700 gc-cpu-ns/op	  240030 B/op	     700 allocs/op
+PASS
+ok  	github.com/picatz/websocket/benchmarks	35.192s
+picatz-commit: 658bf727a0c0fe795f245b51de151ae93d349eae
+go: go1.27.2
+coder/websocket: v1.8.15
+gobwas/ws: v1.4.0
+gorilla/websocket: v1.5.3
+goos: linux
+goarch: amd64
+pkg: github.com/picatz/websocket/benchmarks
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkIdleConn/lib=baseline-4         	       1	     17629 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=picatz-4           	       1	     19071 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=coder-4            	       1	     21447 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=gorilla-4          	       1	     17433 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=gobwas-4           	       1	     15794 B/conn	         1.000 goroutines/conn
+PASS
+ok  	github.com/picatz/websocket/benchmarks	0.821s
+picatz-commit: 658bf727a0c0fe795f245b51de151ae93d349eae
+go: go1.27.2
+coder/websocket: v1.8.15
+gobwas/ws: v1.4.0
+gorilla/websocket: v1.5.3
+goos: linux
+goarch: amd64
+pkg: github.com/picatz/websocket/benchmarks
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkEcho/size=16/lib=picatz-4         	  112900	     10071 ns/op	   1.59 MB/s	         6.309 gc-cpu-ns/op	      8581 p50-ns	     26773 p99-ns	      32 B/op	       2 allocs/op
+BenchmarkEcho/size=16/lib=coder-4          	   97317	     12154 ns/op	   1.32 MB/s	       134.4 gc-cpu-ns/op	      9680 p50-ns	     32737 p99-ns	    1024 B/op	       2 allocs/op
+BenchmarkEcho/size=16/lib=gorilla-4        	  128073	      9440 ns/op	   1.69 MB/s	       129.5 gc-cpu-ns/op	      8112 p50-ns	     28652 p99-ns	    1088 B/op	       5 allocs/op
+BenchmarkEcho/size=16/lib=gobwas-4         	   65664	     19847 ns/op	   0.81 MB/s	       215.6 gc-cpu-ns/op	     16461 p50-ns	     52810 p99-ns	    1544 B/op	      11 allocs/op
+BenchmarkEcho/size=1024/lib=picatz-4       	  111621	     12681 ns/op	  80.75 MB/s	       255.7 gc-cpu-ns/op	      9462 p50-ns	     41364 p99-ns	    2050 B/op	       2 allocs/op
+BenchmarkEcho/size=1024/lib=coder-4        	   76923	     17756 ns/op	  57.67 MB/s	       546.3 gc-cpu-ns/op	     17558 p50-ns	     68018 p99-ns	    4352 B/op	       8 allocs/op
+BenchmarkEcho/size=1024/lib=gorilla-4      	   84224	     13330 ns/op	  76.82 MB/s	       555.3 gc-cpu-ns/op	      9773 p50-ns	     57194 p99-ns	    4416 B/op	      11 allocs/op
+BenchmarkEcho/size=1024/lib=gobwas-4       	   44200	     25554 ns/op	  40.07 MB/s	       581.1 gc-cpu-ns/op	     20421 p50-ns	     77050 p99-ns	    4858 B/op	      16 allocs/op
+BenchmarkEcho/size=16384/lib=picatz-4      	   31971	     36872 ns/op	 444.34 MB/s	      5140 gc-cpu-ns/op	     27518 p50-ns	    219985 p99-ns	   41527 B/op	       4 allocs/op
+BenchmarkEcho/size=16384/lib=coder-4       	   13578	     87198 ns/op	 187.89 MB/s	     11642 gc-cpu-ns/op	     68304 p50-ns	    405124 p99-ns	   75520 B/op	      26 allocs/op
+BenchmarkEcho/size=16384/lib=gorilla-4     	   19018	     64344 ns/op	 254.63 MB/s	     11719 gc-cpu-ns/op	     46152 p50-ns	    342272 p99-ns	   75656 B/op	      31 allocs/op
+BenchmarkEcho/size=16384/lib=gobwas-4      	   16480	     74980 ns/op	 218.51 MB/s	     12776 gc-cpu-ns/op	     57072 p50-ns	    375622 p99-ns	   76637 B/op	      34 allocs/op
+BenchmarkEcho/size=262144/lib=picatz-4     	    2847	    357842 ns/op	 732.57 MB/s	    131653 gc-cpu-ns/op	    299833 p50-ns	   1011268 p99-ns	  706084 B/op	      10 allocs/op
+BenchmarkEcho/size=262144/lib=coder-4      	    1318	   1009072 ns/op	 259.79 MB/s	    314934 gc-cpu-ns/op	    914183 p50-ns	   2743543 p99-ns	 1259266 B/op	      40 allocs/op
+BenchmarkEcho/size=262144/lib=gorilla-4    	    1020	   1121872 ns/op	 233.67 MB/s	    336377 gc-cpu-ns/op	   1012683 p50-ns	   3265969 p99-ns	 1259402 B/op	      45 allocs/op
+BenchmarkEcho/size=262144/lib=gobwas-4     	    1518	    791899 ns/op	 331.03 MB/s	    332023 gc-cpu-ns/op	    719934 p50-ns	   2330783 p99-ns	 1521916 B/op	      49 allocs/op
+BenchmarkEchoParallel/size=1024/lib=picatz-4         	  137323	      8323 ns/op	 123.03 MB/s	       491.7 gc-cpu-ns/op	    2050 B/op	       2 allocs/op
+BenchmarkEchoParallel/size=1024/lib=coder-4          	  129607	     10101 ns/op	 101.38 MB/s	      1251 gc-cpu-ns/op	    4353 B/op	       8 allocs/op
+BenchmarkEchoParallel/size=1024/lib=gorilla-4        	  118060	      8591 ns/op	 119.20 MB/s	      1049 gc-cpu-ns/op	    4417 B/op	      11 allocs/op
+BenchmarkEchoParallel/size=1024/lib=gobwas-4         	   87387	     13808 ns/op	  74.16 MB/s	      1722 gc-cpu-ns/op	    4859 B/op	      16 allocs/op
+BenchmarkHandshake/lib=picatz-4                      	    7449	    177731 ns/op	   18567 B/op	      90 allocs/op
+BenchmarkHandshake/lib=coder-4                       	    4072	    250958 ns/op	   32374 B/op	     231 allocs/op
+BenchmarkHandshake/lib=gorilla-4                     	    5978	    194020 ns/op	   30346 B/op	     131 allocs/op
+BenchmarkHandshake/lib=gobwas-4                      	    8773	    155367 ns/op	   13125 B/op	      87 allocs/op
+BenchmarkBroadcast/size=1024/clients=100/lib=picatz-4         	    1982	    610750 ns/op	 167.66 MB/s	     76917 gc-cpu-ns/op	  102657 B/op	     100 allocs/op
+BenchmarkBroadcast/size=1024/clients=100/lib=coder-4          	    1683	    707610 ns/op	 144.71 MB/s	    146951 gc-cpu-ns/op	  217624 B/op	     400 allocs/op
+BenchmarkBroadcast/size=1024/clients=100/lib=gorilla-4        	    1789	    628394 ns/op	 162.96 MB/s	    139248 gc-cpu-ns/op	  218437 B/op	     500 allocs/op
+BenchmarkBroadcast/size=1024/clients=100/lib=gobwas-4         	    1156	   1025122 ns/op	  99.89 MB/s	    175540 gc-cpu-ns/op	  240036 B/op	     700 allocs/op
+PASS
+ok  	github.com/picatz/websocket/benchmarks	34.293s
+picatz-commit: 658bf727a0c0fe795f245b51de151ae93d349eae
+go: go1.27.2
+coder/websocket: v1.8.15
+gobwas/ws: v1.4.0
+gorilla/websocket: v1.5.3
+goos: linux
+goarch: amd64
+pkg: github.com/picatz/websocket/benchmarks
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkIdleConn/lib=baseline-4         	       1	     17826 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=picatz-4           	       1	     20185 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=coder-4            	       1	     20709 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=gorilla-4          	       1	     17154 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=gobwas-4           	       1	     15221 B/conn	         1.000 goroutines/conn
+PASS
+ok  	github.com/picatz/websocket/benchmarks	0.788s
+picatz-commit: 658bf727a0c0fe795f245b51de151ae93d349eae
+go: go1.27.2
+coder/websocket: v1.8.15
+gobwas/ws: v1.4.0
+gorilla/websocket: v1.5.3
+goos: linux
+goarch: amd64
+pkg: github.com/picatz/websocket/benchmarks
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkEcho/size=16/lib=picatz-4         	  125954	      9695 ns/op	   1.65 MB/s	         2.938 gc-cpu-ns/op	      8580 p50-ns	     24942 p99-ns	      32 B/op	       2 allocs/op
+BenchmarkEcho/size=16/lib=coder-4          	   89541	     12134 ns/op	   1.32 MB/s	       132.4 gc-cpu-ns/op	      9553 p50-ns	     35475 p99-ns	    1024 B/op	       2 allocs/op
+BenchmarkEcho/size=16/lib=gorilla-4        	  114598	     11100 ns/op	   1.44 MB/s	       139.5 gc-cpu-ns/op	      8455 p50-ns	     34624 p99-ns	    1088 B/op	       5 allocs/op
+BenchmarkEcho/size=16/lib=gobwas-4         	   59846	     21989 ns/op	   0.73 MB/s	       229.0 gc-cpu-ns/op	     17685 p50-ns	     57388 p99-ns	    1544 B/op	      11 allocs/op
+BenchmarkEcho/size=1024/lib=picatz-4       	  114045	     12695 ns/op	  80.66 MB/s	       319.8 gc-cpu-ns/op	      9651 p50-ns	     43836 p99-ns	    2050 B/op	       2 allocs/op
+BenchmarkEcho/size=1024/lib=coder-4        	   65544	     16339 ns/op	  62.67 MB/s	       502.1 gc-cpu-ns/op	     12524 p50-ns	     63517 p99-ns	    4352 B/op	       8 allocs/op
+BenchmarkEcho/size=1024/lib=gorilla-4      	   94374	     12855 ns/op	  79.66 MB/s	       502.6 gc-cpu-ns/op	      9650 p50-ns	     51095 p99-ns	    4416 B/op	      11 allocs/op
+BenchmarkEcho/size=1024/lib=gobwas-4       	   50748	     26580 ns/op	  38.53 MB/s	       638.8 gc-cpu-ns/op	     20625 p50-ns	     84479 p99-ns	    4858 B/op	      16 allocs/op
+BenchmarkEcho/size=16384/lib=picatz-4      	   30795	     39795 ns/op	 411.71 MB/s	      5249 gc-cpu-ns/op	     30857 p50-ns	    225616 p99-ns	   41564 B/op	       4 allocs/op
+BenchmarkEcho/size=16384/lib=coder-4       	   13173	     90168 ns/op	 181.71 MB/s	     11579 gc-cpu-ns/op	     70940 p50-ns	    389496 p99-ns	   75520 B/op	      26 allocs/op
+BenchmarkEcho/size=16384/lib=gorilla-4     	   16044	     73167 ns/op	 223.93 MB/s	     12904 gc-cpu-ns/op	     52900 p50-ns	    389178 p99-ns	   75656 B/op	      31 allocs/op
+BenchmarkEcho/size=16384/lib=gobwas-4      	   15172	     79949 ns/op	 204.93 MB/s	     13054 gc-cpu-ns/op	     60840 p50-ns	    385942 p99-ns	   76653 B/op	      34 allocs/op
+BenchmarkEcho/size=262144/lib=picatz-4     	    3194	    382720 ns/op	 684.95 MB/s	    138787 gc-cpu-ns/op	    313245 p50-ns	   1020509 p99-ns	  706349 B/op	      10 allocs/op
+BenchmarkEcho/size=262144/lib=coder-4      	    1324	    843406 ns/op	 310.82 MB/s	    264169 gc-cpu-ns/op	    791986 p50-ns	   1827958 p99-ns	 1259266 B/op	      40 allocs/op
+BenchmarkEcho/size=262144/lib=gorilla-4    	    1350	    913525 ns/op	 286.96 MB/s	    291814 gc-cpu-ns/op	    852132 p50-ns	   2323093 p99-ns	 1259406 B/op	      45 allocs/op
+BenchmarkEcho/size=262144/lib=gobwas-4     	    1704	    777616 ns/op	 337.11 MB/s	    342262 gc-cpu-ns/op	    727510 p50-ns	   1854626 p99-ns	 1521916 B/op	      49 allocs/op
+BenchmarkEchoParallel/size=1024/lib=picatz-4         	  138999	      7939 ns/op	 128.98 MB/s	       438.1 gc-cpu-ns/op	    2050 B/op	       2 allocs/op
+BenchmarkEchoParallel/size=1024/lib=coder-4          	  140791	      9429 ns/op	 108.60 MB/s	      1154 gc-cpu-ns/op	    4353 B/op	       8 allocs/op
+BenchmarkEchoParallel/size=1024/lib=gorilla-4        	  131743	      8532 ns/op	 120.02 MB/s	      1098 gc-cpu-ns/op	    4417 B/op	      11 allocs/op
+BenchmarkEchoParallel/size=1024/lib=gobwas-4         	   88507	     13384 ns/op	  76.51 MB/s	      1443 gc-cpu-ns/op	    4859 B/op	      16 allocs/op
+BenchmarkHandshake/lib=picatz-4                      	    6937	    165203 ns/op	   18571 B/op	      90 allocs/op
+BenchmarkHandshake/lib=coder-4                       	    5024	    245134 ns/op	   32360 B/op	     231 allocs/op
+BenchmarkHandshake/lib=gorilla-4                     	    6496	    211372 ns/op	   30347 B/op	     131 allocs/op
+BenchmarkHandshake/lib=gobwas-4                      	    7376	    173614 ns/op	   13125 B/op	      87 allocs/op
+BenchmarkBroadcast/size=1024/clients=100/lib=picatz-4         	    1993	    593230 ns/op	 172.61 MB/s	     75229 gc-cpu-ns/op	  102641 B/op	     100 allocs/op
+BenchmarkBroadcast/size=1024/clients=100/lib=coder-4          	    1531	    696854 ns/op	 146.95 MB/s	    144826 gc-cpu-ns/op	  217620 B/op	     400 allocs/op
+BenchmarkBroadcast/size=1024/clients=100/lib=gorilla-4        	    1790	    649125 ns/op	 157.75 MB/s	    144508 gc-cpu-ns/op	  218441 B/op	     500 allocs/op
+BenchmarkBroadcast/size=1024/clients=100/lib=gobwas-4         	     978	   1126215 ns/op	  90.92 MB/s	    187295 gc-cpu-ns/op	  240032 B/op	     700 allocs/op
+PASS
+ok  	github.com/picatz/websocket/benchmarks	34.573s
+picatz-commit: 658bf727a0c0fe795f245b51de151ae93d349eae
+go: go1.27.2
+coder/websocket: v1.8.15
+gobwas/ws: v1.4.0
+gorilla/websocket: v1.5.3
+goos: linux
+goarch: amd64
+pkg: github.com/picatz/websocket/benchmarks
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkIdleConn/lib=baseline-4         	       1	     17433 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=picatz-4           	       1	     19481 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=coder-4            	       1	     20546 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=gorilla-4          	       1	     17285 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=gobwas-4           	       1	     15172 B/conn	         1.000 goroutines/conn
+PASS
+ok  	github.com/picatz/websocket/benchmarks	0.851s
+picatz-commit: 658bf727a0c0fe795f245b51de151ae93d349eae
+go: go1.27.2
+coder/websocket: v1.8.15
+gobwas/ws: v1.4.0
+gorilla/websocket: v1.5.3
+goos: linux
+goarch: amd64
+pkg: github.com/picatz/websocket/benchmarks
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkEcho/size=16/lib=picatz-4         	  124058	      9271 ns/op	   1.73 MB/s	         2.693 gc-cpu-ns/op	      8579 p50-ns	     22637 p99-ns	      32 B/op	       2 allocs/op
+BenchmarkEcho/size=16/lib=coder-4          	  100336	     12224 ns/op	   1.31 MB/s	       143.2 gc-cpu-ns/op	     10132 p50-ns	     38508 p99-ns	    1024 B/op	       2 allocs/op
+BenchmarkEcho/size=16/lib=gorilla-4        	  101596	     10589 ns/op	   1.51 MB/s	       145.3 gc-cpu-ns/op	      8334 p50-ns	     31284 p99-ns	    1088 B/op	       5 allocs/op
+BenchmarkEcho/size=16/lib=gobwas-4         	   51493	     22652 ns/op	   0.71 MB/s	       225.0 gc-cpu-ns/op	     17967 p50-ns	     58695 p99-ns	    1544 B/op	      11 allocs/op
+BenchmarkEcho/size=1024/lib=picatz-4       	  108624	     12984 ns/op	  78.86 MB/s	       255.9 gc-cpu-ns/op	     10052 p50-ns	     43664 p99-ns	    2050 B/op	       2 allocs/op
+BenchmarkEcho/size=1024/lib=coder-4        	   79018	     15287 ns/op	  66.99 MB/s	       501.0 gc-cpu-ns/op	     11528 p50-ns	     57899 p99-ns	    4352 B/op	       8 allocs/op
+BenchmarkEcho/size=1024/lib=gorilla-4      	   88208	     15522 ns/op	  65.97 MB/s	       560.2 gc-cpu-ns/op	      9634 p50-ns	     56604 p99-ns	    4416 B/op	      11 allocs/op
+BenchmarkEcho/size=1024/lib=gobwas-4       	   42859	     27897 ns/op	  36.71 MB/s	       613.7 gc-cpu-ns/op	     21841 p50-ns	     82076 p99-ns	    4858 B/op	      16 allocs/op
+BenchmarkEcho/size=16384/lib=picatz-4      	   30548	     41326 ns/op	 396.46 MB/s	      6497 gc-cpu-ns/op	     30966 p50-ns	    230963 p99-ns	   41521 B/op	       4 allocs/op
+BenchmarkEcho/size=16384/lib=coder-4       	   14494	     83666 ns/op	 195.83 MB/s	     11023 gc-cpu-ns/op	     67008 p50-ns	    373803 p99-ns	   75520 B/op	      26 allocs/op
+BenchmarkEcho/size=16384/lib=gorilla-4     	   17424	     70593 ns/op	 232.09 MB/s	     12840 gc-cpu-ns/op	     50767 p50-ns	    373315 p99-ns	   75656 B/op	      31 allocs/op
+BenchmarkEcho/size=16384/lib=gobwas-4      	   15698	     75803 ns/op	 216.14 MB/s	     12712 gc-cpu-ns/op	     57618 p50-ns	    378907 p99-ns	   76631 B/op	      34 allocs/op
+BenchmarkEcho/size=262144/lib=picatz-4     	    3331	    330358 ns/op	 793.51 MB/s	    116559 gc-cpu-ns/op	    280833 p50-ns	    828183 p99-ns	  706272 B/op	      10 allocs/op
+BenchmarkEcho/size=262144/lib=coder-4      	    1497	    814312 ns/op	 321.92 MB/s	    261577 gc-cpu-ns/op	    753207 p50-ns	   2002229 p99-ns	 1259266 B/op	      40 allocs/op
+BenchmarkEcho/size=262144/lib=gorilla-4    	    1392	    843034 ns/op	 310.95 MB/s	    273278 gc-cpu-ns/op	    789685 p50-ns	   1971551 p99-ns	 1259401 B/op	      45 allocs/op
+BenchmarkEcho/size=262144/lib=gobwas-4     	    1642	    772181 ns/op	 339.49 MB/s	    334602 gc-cpu-ns/op	    713292 p50-ns	   2068057 p99-ns	 1521916 B/op	      49 allocs/op
+BenchmarkEchoParallel/size=1024/lib=picatz-4         	  156750	      8273 ns/op	 123.78 MB/s	       460.1 gc-cpu-ns/op	    2050 B/op	       2 allocs/op
+BenchmarkEchoParallel/size=1024/lib=coder-4          	  111158	      9948 ns/op	 102.93 MB/s	      1246 gc-cpu-ns/op	    4353 B/op	       8 allocs/op
+BenchmarkEchoParallel/size=1024/lib=gorilla-4        	  131988	      9014 ns/op	 113.60 MB/s	      1196 gc-cpu-ns/op	    4417 B/op	      11 allocs/op
+BenchmarkEchoParallel/size=1024/lib=gobwas-4         	   87853	     13255 ns/op	  77.25 MB/s	      1201 gc-cpu-ns/op	    4859 B/op	      16 allocs/op
+BenchmarkHandshake/lib=picatz-4                      	    8186	    154568 ns/op	   18572 B/op	      90 allocs/op
+BenchmarkHandshake/lib=coder-4                       	    5665	    215192 ns/op	   32373 B/op	     231 allocs/op
+BenchmarkHandshake/lib=gorilla-4                     	    6999	    179651 ns/op	   30347 B/op	     131 allocs/op
+BenchmarkHandshake/lib=gobwas-4                      	    8493	    163047 ns/op	   13126 B/op	      87 allocs/op
+BenchmarkBroadcast/size=1024/clients=100/lib=picatz-4         	    2347	    573443 ns/op	 178.57 MB/s	     71765 gc-cpu-ns/op	  102645 B/op	     100 allocs/op
+BenchmarkBroadcast/size=1024/clients=100/lib=coder-4          	    1442	    795808 ns/op	 128.67 MB/s	    167575 gc-cpu-ns/op	  217629 B/op	     400 allocs/op
+BenchmarkBroadcast/size=1024/clients=100/lib=gorilla-4        	    1620	    743121 ns/op	 137.80 MB/s	    169525 gc-cpu-ns/op	  218464 B/op	     500 allocs/op
+BenchmarkBroadcast/size=1024/clients=100/lib=gobwas-4         	     952	   1224823 ns/op	  83.60 MB/s	    205965 gc-cpu-ns/op	  240046 B/op	     700 allocs/op
+PASS
+ok  	github.com/picatz/websocket/benchmarks	34.866s
+picatz-commit: 658bf727a0c0fe795f245b51de151ae93d349eae
+go: go1.27.2
+coder/websocket: v1.8.15
+gobwas/ws: v1.4.0
+gorilla/websocket: v1.5.3
+goos: linux
+goarch: amd64
+pkg: github.com/picatz/websocket/benchmarks
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkIdleConn/lib=baseline-4         	       1	     17662 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=picatz-4           	       1	     20038 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=coder-4            	       1	     21725 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=gorilla-4          	       1	     17089 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=gobwas-4           	       1	     14746 B/conn	         1.000 goroutines/conn
+PASS
+ok  	github.com/picatz/websocket/benchmarks	0.895s
+picatz-commit: 658bf727a0c0fe795f245b51de151ae93d349eae
+go: go1.27.2
+coder/websocket: v1.8.15
+gobwas/ws: v1.4.0
+gorilla/websocket: v1.5.3
+goos: linux
+goarch: amd64
+pkg: github.com/picatz/websocket/benchmarks
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkEcho/size=16/lib=picatz-4         	  117238	     10694 ns/op	   1.50 MB/s	         3.131 gc-cpu-ns/op	      8800 p50-ns	     28545 p99-ns	      32 B/op	       2 allocs/op
+BenchmarkEcho/size=16/lib=coder-4          	   90057	     13971 ns/op	   1.15 MB/s	       159.9 gc-cpu-ns/op	     10478 p50-ns	     46033 p99-ns	    1024 B/op	       2 allocs/op
+BenchmarkEcho/size=16/lib=gorilla-4        	  100941	     11449 ns/op	   1.40 MB/s	       145.2 gc-cpu-ns/op	      9097 p50-ns	     43248 p99-ns	    1088 B/op	       5 allocs/op
+BenchmarkEcho/size=16/lib=gobwas-4         	   49204	     21369 ns/op	   0.75 MB/s	       210.9 gc-cpu-ns/op	     17021 p50-ns	     62611 p99-ns	    1544 B/op	      11 allocs/op
+BenchmarkEcho/size=1024/lib=picatz-4       	   87338	     13543 ns/op	  75.61 MB/s	       268.0 gc-cpu-ns/op	     10365 p50-ns	     46871 p99-ns	    2050 B/op	       2 allocs/op
+BenchmarkEcho/size=1024/lib=coder-4        	   77120	     17516 ns/op	  58.46 MB/s	       528.2 gc-cpu-ns/op	     16822 p50-ns	     69588 p99-ns	    4352 B/op	       8 allocs/op
+BenchmarkEcho/size=1024/lib=gorilla-4      	   97939	     13368 ns/op	  76.60 MB/s	       533.7 gc-cpu-ns/op	      9836 p50-ns	     56655 p99-ns	    4416 B/op	      11 allocs/op
+BenchmarkEcho/size=1024/lib=gobwas-4       	   46592	     25570 ns/op	  40.05 MB/s	       599.5 gc-cpu-ns/op	     20491 p50-ns	     84702 p99-ns	    4858 B/op	      16 allocs/op
+BenchmarkEcho/size=16384/lib=picatz-4      	   33772	     40083 ns/op	 408.75 MB/s	      5221 gc-cpu-ns/op	     30813 p50-ns	    223870 p99-ns	   41550 B/op	       4 allocs/op
+BenchmarkEcho/size=16384/lib=coder-4       	   12393	     96378 ns/op	 170.00 MB/s	     12204 gc-cpu-ns/op	     73394 p50-ns	    415646 p99-ns	   75520 B/op	      26 allocs/op
+BenchmarkEcho/size=16384/lib=gorilla-4     	   17314	     71872 ns/op	 227.96 MB/s	     12937 gc-cpu-ns/op	     51831 p50-ns	    382130 p99-ns	   75656 B/op	      31 allocs/op
+BenchmarkEcho/size=16384/lib=gobwas-4      	   14943	     80416 ns/op	 203.74 MB/s	     13832 gc-cpu-ns/op	     58931 p50-ns	    407899 p99-ns	   76653 B/op	      34 allocs/op
+BenchmarkEcho/size=262144/lib=picatz-4     	    3202	    367226 ns/op	 713.85 MB/s	    129589 gc-cpu-ns/op	    307968 p50-ns	    916069 p99-ns	  706249 B/op	      10 allocs/op
+BenchmarkEcho/size=262144/lib=coder-4      	    1293	    983592 ns/op	 266.52 MB/s	    321489 gc-cpu-ns/op	    895096 p50-ns	   2959393 p99-ns	 1259270 B/op	      40 allocs/op
+BenchmarkEcho/size=262144/lib=gorilla-4    	    1161	    884722 ns/op	 296.30 MB/s	    281811 gc-cpu-ns/op	    824825 p50-ns	   1977216 p99-ns	 1259403 B/op	      45 allocs/op
+BenchmarkEcho/size=262144/lib=gobwas-4     	    1615	    727144 ns/op	 360.51 MB/s	    306909 gc-cpu-ns/op	    665191 p50-ns	   2245608 p99-ns	 1521916 B/op	      49 allocs/op
+BenchmarkEchoParallel/size=1024/lib=picatz-4         	  142442	      8118 ns/op	 126.13 MB/s	       453.5 gc-cpu-ns/op	    2050 B/op	       2 allocs/op
+BenchmarkEchoParallel/size=1024/lib=coder-4          	  120075	      8765 ns/op	 116.83 MB/s	      1051 gc-cpu-ns/op	    4353 B/op	       8 allocs/op
+BenchmarkEchoParallel/size=1024/lib=gorilla-4        	  152386	      8731 ns/op	 117.28 MB/s	      1116 gc-cpu-ns/op	    4416 B/op	      11 allocs/op
+BenchmarkEchoParallel/size=1024/lib=gobwas-4         	   99674	     13399 ns/op	  76.42 MB/s	      1519 gc-cpu-ns/op	    4859 B/op	      16 allocs/op
+BenchmarkHandshake/lib=picatz-4                      	    5683	    179093 ns/op	   18568 B/op	      90 allocs/op
+BenchmarkHandshake/lib=coder-4                       	    3590	    288915 ns/op	   32361 B/op	     231 allocs/op
+BenchmarkHandshake/lib=gorilla-4                     	    4692	    223978 ns/op	   30344 B/op	     131 allocs/op
+BenchmarkHandshake/lib=gobwas-4                      	    6150	    200177 ns/op	   13121 B/op	      87 allocs/op
+BenchmarkBroadcast/size=1024/clients=100/lib=picatz-4         	    1978	    592799 ns/op	 172.74 MB/s	     76227 gc-cpu-ns/op	  102647 B/op	     100 allocs/op
+BenchmarkBroadcast/size=1024/clients=100/lib=coder-4          	    1712	    622972 ns/op	 164.37 MB/s	    138495 gc-cpu-ns/op	  217627 B/op	     400 allocs/op
+BenchmarkBroadcast/size=1024/clients=100/lib=gorilla-4        	    1906	    614353 ns/op	 166.68 MB/s	    141210 gc-cpu-ns/op	  218437 B/op	     500 allocs/op
+BenchmarkBroadcast/size=1024/clients=100/lib=gobwas-4         	    1046	   1037967 ns/op	  98.65 MB/s	    170309 gc-cpu-ns/op	  240028 B/op	     700 allocs/op
+PASS
+ok  	github.com/picatz/websocket/benchmarks	33.744s
+picatz-commit: 658bf727a0c0fe795f245b51de151ae93d349eae
+go: go1.27.2
+coder/websocket: v1.8.15
+gobwas/ws: v1.4.0
+gorilla/websocket: v1.5.3
+goos: linux
+goarch: amd64
+pkg: github.com/picatz/websocket/benchmarks
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkIdleConn/lib=baseline-4         	       1	     17760 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=picatz-4           	       1	     19137 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=coder-4            	       1	     20972 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=gorilla-4          	       1	     17236 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=gobwas-4           	       1	     15499 B/conn	         1.000 goroutines/conn
+PASS
+ok  	github.com/picatz/websocket/benchmarks	0.752s
+picatz-commit: 658bf727a0c0fe795f245b51de151ae93d349eae
+go: go1.27.2
+coder/websocket: v1.8.15
+gobwas/ws: v1.4.0
+gorilla/websocket: v1.5.3
+goos: linux
+goarch: amd64
+pkg: github.com/picatz/websocket/benchmarks
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkEcho/size=16/lib=picatz-4         	  139838	     10662 ns/op	   1.50 MB/s	         2.442 gc-cpu-ns/op	      9141 p50-ns	     31477 p99-ns	      32 B/op	       2 allocs/op
+BenchmarkEcho/size=16/lib=coder-4          	  105969	     12144 ns/op	   1.32 MB/s	       136.9 gc-cpu-ns/op	      9666 p50-ns	     35502 p99-ns	    1024 B/op	       2 allocs/op
+BenchmarkEcho/size=16/lib=gorilla-4        	  113786	     10372 ns/op	   1.54 MB/s	       132.4 gc-cpu-ns/op	      8400 p50-ns	     33689 p99-ns	    1088 B/op	       5 allocs/op
+BenchmarkEcho/size=16/lib=gobwas-4         	   59964	     21333 ns/op	   0.75 MB/s	       198.2 gc-cpu-ns/op	     17100 p50-ns	     56190 p99-ns	    1544 B/op	      11 allocs/op
+BenchmarkEcho/size=1024/lib=picatz-4       	   97105	     10821 ns/op	  94.63 MB/s	       212.9 gc-cpu-ns/op	      8913 p50-ns	     35105 p99-ns	    2050 B/op	       2 allocs/op
+BenchmarkEcho/size=1024/lib=coder-4        	   90582	     14604 ns/op	  70.12 MB/s	       491.9 gc-cpu-ns/op	     11687 p50-ns	     56601 p99-ns	    4352 B/op	       8 allocs/op
+BenchmarkEcho/size=1024/lib=gorilla-4      	  105783	     12808 ns/op	  79.95 MB/s	       520.8 gc-cpu-ns/op	      9938 p50-ns	     57160 p99-ns	    4416 B/op	      11 allocs/op
+BenchmarkEcho/size=1024/lib=gobwas-4       	   39949	     26688 ns/op	  38.37 MB/s	       605.6 gc-cpu-ns/op	     20648 p50-ns	     82942 p99-ns	    4858 B/op	      16 allocs/op
+BenchmarkEcho/size=16384/lib=picatz-4      	   32096	     40783 ns/op	 401.74 MB/s	      5497 gc-cpu-ns/op	     31197 p50-ns	    239244 p99-ns	   41562 B/op	       4 allocs/op
+BenchmarkEcho/size=16384/lib=coder-4       	   15159	     81080 ns/op	 202.07 MB/s	     11680 gc-cpu-ns/op	     65135 p50-ns	    365450 p99-ns	   75520 B/op	      26 allocs/op
+BenchmarkEcho/size=16384/lib=gorilla-4     	   19677	     62704 ns/op	 261.29 MB/s	     11490 gc-cpu-ns/op	     43498 p50-ns	    336348 p99-ns	   75656 B/op	      31 allocs/op
+BenchmarkEcho/size=16384/lib=gobwas-4      	   15177	     79198 ns/op	 206.87 MB/s	     13508 gc-cpu-ns/op	     59154 p50-ns	    392928 p99-ns	   76645 B/op	      34 allocs/op
+BenchmarkEcho/size=262144/lib=picatz-4     	    3122	    378344 ns/op	 692.87 MB/s	    124531 gc-cpu-ns/op	    328358 p50-ns	    924475 p99-ns	  706767 B/op	      10 allocs/op
+BenchmarkEcho/size=262144/lib=coder-4      	    1166	    979867 ns/op	 267.53 MB/s	    314647 gc-cpu-ns/op	    909031 p50-ns	   2486537 p99-ns	 1259271 B/op	      40 allocs/op
+BenchmarkEcho/size=262144/lib=gorilla-4    	    1186	    922029 ns/op	 284.31 MB/s	    293850 gc-cpu-ns/op	    870053 p50-ns	   1987133 p99-ns	 1259404 B/op	      45 allocs/op
+BenchmarkEcho/size=262144/lib=gobwas-4     	    1528	    866697 ns/op	 302.46 MB/s	    371237 gc-cpu-ns/op	    766924 p50-ns	   2368118 p99-ns	 1521915 B/op	      49 allocs/op
+BenchmarkEchoParallel/size=1024/lib=picatz-4         	  140685	      8782 ns/op	 116.61 MB/s	       546.2 gc-cpu-ns/op	    2050 B/op	       2 allocs/op
+BenchmarkEchoParallel/size=1024/lib=coder-4          	  120906	     10248 ns/op	  99.92 MB/s	      1259 gc-cpu-ns/op	    4353 B/op	       8 allocs/op
+BenchmarkEchoParallel/size=1024/lib=gorilla-4        	  128338	      9509 ns/op	 107.68 MB/s	      1267 gc-cpu-ns/op	    4417 B/op	      11 allocs/op
+BenchmarkEchoParallel/size=1024/lib=gobwas-4         	   87475	     13747 ns/op	  74.49 MB/s	      1427 gc-cpu-ns/op	    4859 B/op	      16 allocs/op
+BenchmarkHandshake/lib=picatz-4                      	    6666	    158071 ns/op	   18567 B/op	      90 allocs/op
+BenchmarkHandshake/lib=coder-4                       	    4836	    264127 ns/op	   32359 B/op	     231 allocs/op
+BenchmarkHandshake/lib=gorilla-4                     	    6232	    185101 ns/op	   30344 B/op	     131 allocs/op
+BenchmarkHandshake/lib=gobwas-4                      	    7738	    154634 ns/op	   13127 B/op	      87 allocs/op
+BenchmarkBroadcast/size=1024/clients=100/lib=picatz-4         	    1908	    574641 ns/op	 178.20 MB/s	     68911 gc-cpu-ns/op	  102636 B/op	     100 allocs/op
+BenchmarkBroadcast/size=1024/clients=100/lib=coder-4          	    1711	    666540 ns/op	 153.63 MB/s	    142066 gc-cpu-ns/op	  217627 B/op	     400 allocs/op
+BenchmarkBroadcast/size=1024/clients=100/lib=gorilla-4        	    2198	    541461 ns/op	 189.12 MB/s	    123316 gc-cpu-ns/op	  218431 B/op	     500 allocs/op
+BenchmarkBroadcast/size=1024/clients=100/lib=gobwas-4         	    1292	    986396 ns/op	 103.81 MB/s	    170816 gc-cpu-ns/op	  240042 B/op	     700 allocs/op
+PASS
+ok  	github.com/picatz/websocket/benchmarks	34.679s
+picatz-commit: 658bf727a0c0fe795f245b51de151ae93d349eae
+go: go1.27.2
+coder/websocket: v1.8.15
+gobwas/ws: v1.4.0
+gorilla/websocket: v1.5.3
+goos: linux
+goarch: amd64
+pkg: github.com/picatz/websocket/benchmarks
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkIdleConn/lib=baseline-4         	       1	     17695 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=picatz-4           	       1	     19448 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=coder-4            	       1	     21332 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=gorilla-4          	       1	     17334 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=gobwas-4           	       1	     14893 B/conn	         1.000 goroutines/conn
+PASS
+ok  	github.com/picatz/websocket/benchmarks	0.816s
+picatz-commit: 658bf727a0c0fe795f245b51de151ae93d349eae
+go: go1.27.2
+coder/websocket: v1.8.15
+gobwas/ws: v1.4.0
+gorilla/websocket: v1.5.3
+goos: linux
+goarch: amd64
+pkg: github.com/picatz/websocket/benchmarks
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkEcho/size=16/lib=picatz-4         	  103797	     10295 ns/op	   1.55 MB/s	         4.121 gc-cpu-ns/op	      8656 p50-ns	     28490 p99-ns	      32 B/op	       2 allocs/op
+BenchmarkEcho/size=16/lib=coder-4          	   87381	     12745 ns/op	   1.26 MB/s	       141.5 gc-cpu-ns/op	      9889 p50-ns	     38897 p99-ns	    1024 B/op	       2 allocs/op
+BenchmarkEcho/size=16/lib=gorilla-4        	  115106	     10588 ns/op	   1.51 MB/s	       152.4 gc-cpu-ns/op	      8458 p50-ns	     32292 p99-ns	    1088 B/op	       5 allocs/op
+BenchmarkEcho/size=16/lib=gobwas-4         	   62454	     20252 ns/op	   0.79 MB/s	       219.2 gc-cpu-ns/op	     16819 p50-ns	     53594 p99-ns	    1544 B/op	      11 allocs/op
+BenchmarkEcho/size=1024/lib=picatz-4       	   84594	     13298 ns/op	  77.00 MB/s	       239.6 gc-cpu-ns/op	     11533 p50-ns	     48152 p99-ns	    2050 B/op	       2 allocs/op
+BenchmarkEcho/size=1024/lib=coder-4        	   76749	     15843 ns/op	  64.64 MB/s	       573.7 gc-cpu-ns/op	     11613 p50-ns	     60561 p99-ns	    4352 B/op	       8 allocs/op
+BenchmarkEcho/size=1024/lib=gorilla-4      	   75918	     13903 ns/op	  73.66 MB/s	       548.4 gc-cpu-ns/op	     12675 p50-ns	     57152 p99-ns	    4416 B/op	      11 allocs/op
+BenchmarkEcho/size=1024/lib=gobwas-4       	   52447	     26003 ns/op	  39.38 MB/s	       534.8 gc-cpu-ns/op	     20733 p50-ns	     77534 p99-ns	    4858 B/op	      16 allocs/op
+BenchmarkEcho/size=16384/lib=picatz-4      	   30345	     39173 ns/op	 418.24 MB/s	      5238 gc-cpu-ns/op	     30895 p50-ns	    227922 p99-ns	   41511 B/op	       4 allocs/op
+BenchmarkEcho/size=16384/lib=coder-4       	   14556	     79636 ns/op	 205.74 MB/s	     10634 gc-cpu-ns/op	     65567 p50-ns	    347610 p99-ns	   75520 B/op	      26 allocs/op
+BenchmarkEcho/size=16384/lib=gorilla-4     	   20746	     61264 ns/op	 267.43 MB/s	     11390 gc-cpu-ns/op	     41562 p50-ns	    330658 p99-ns	   75656 B/op	      31 allocs/op
+BenchmarkEcho/size=16384/lib=gobwas-4      	   16916	     72254 ns/op	 226.76 MB/s	     12577 gc-cpu-ns/op	     56597 p50-ns	    338631 p99-ns	   76653 B/op	      34 allocs/op
+BenchmarkEcho/size=262144/lib=picatz-4     	    3572	    381608 ns/op	 686.95 MB/s	    126119 gc-cpu-ns/op	    325996 p50-ns	   1029448 p99-ns	  706949 B/op	      10 allocs/op
+BenchmarkEcho/size=262144/lib=coder-4      	    1322	    978986 ns/op	 267.77 MB/s	    323482 gc-cpu-ns/op	    891345 p50-ns	   2862911 p99-ns	 1259266 B/op	      40 allocs/op
+BenchmarkEcho/size=262144/lib=gorilla-4    	    1267	    983062 ns/op	 266.66 MB/s	    318793 gc-cpu-ns/op	    923480 p50-ns	   2560792 p99-ns	 1259402 B/op	      45 allocs/op
+BenchmarkEcho/size=262144/lib=gobwas-4     	    1376	    756187 ns/op	 346.67 MB/s	    322425 gc-cpu-ns/op	    693651 p50-ns	   2469647 p99-ns	 1521915 B/op	      49 allocs/op
+BenchmarkEchoParallel/size=1024/lib=picatz-4         	  144913	      8291 ns/op	 123.51 MB/s	       480.9 gc-cpu-ns/op	    2050 B/op	       2 allocs/op
+BenchmarkEchoParallel/size=1024/lib=coder-4          	  118854	      9557 ns/op	 107.15 MB/s	      1181 gc-cpu-ns/op	    4353 B/op	       8 allocs/op
+BenchmarkEchoParallel/size=1024/lib=gorilla-4        	  122876	      9519 ns/op	 107.57 MB/s	      1202 gc-cpu-ns/op	    4417 B/op	      11 allocs/op
+BenchmarkEchoParallel/size=1024/lib=gobwas-4         	   81116	     14011 ns/op	  73.09 MB/s	      1387 gc-cpu-ns/op	    4859 B/op	      16 allocs/op
+BenchmarkHandshake/lib=picatz-4                      	    6319	    188440 ns/op	   18561 B/op	      90 allocs/op
+BenchmarkHandshake/lib=coder-4                       	    4556	    300997 ns/op	   32379 B/op	     231 allocs/op
+BenchmarkHandshake/lib=gorilla-4                     	    5232	    194642 ns/op	   30345 B/op	     131 allocs/op
+BenchmarkHandshake/lib=gobwas-4                      	    6679	    198654 ns/op	   13121 B/op	      87 allocs/op
+BenchmarkBroadcast/size=1024/clients=100/lib=picatz-4         	    1766	    583479 ns/op	 175.50 MB/s	     73194 gc-cpu-ns/op	  102641 B/op	     100 allocs/op
+BenchmarkBroadcast/size=1024/clients=100/lib=coder-4          	    1752	    707942 ns/op	 144.64 MB/s	    144065 gc-cpu-ns/op	  217619 B/op	     400 allocs/op
+BenchmarkBroadcast/size=1024/clients=100/lib=gorilla-4        	    1744	    612052 ns/op	 167.31 MB/s	    139931 gc-cpu-ns/op	  218438 B/op	     500 allocs/op
+BenchmarkBroadcast/size=1024/clients=100/lib=gobwas-4         	    1101	   1102304 ns/op	  92.90 MB/s	    186256 gc-cpu-ns/op	  240042 B/op	     700 allocs/op
+PASS
+ok  	github.com/picatz/websocket/benchmarks	33.979s
+picatz-commit: 658bf727a0c0fe795f245b51de151ae93d349eae
+go: go1.27.2
+coder/websocket: v1.8.15
+gobwas/ws: v1.4.0
+gorilla/websocket: v1.5.3
+goos: linux
+goarch: amd64
+pkg: github.com/picatz/websocket/benchmarks
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkIdleConn/lib=baseline-4         	       1	     17613 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=picatz-4           	       1	     19808 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=coder-4            	       1	     21201 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=gorilla-4          	       1	     17367 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=gobwas-4           	       1	     15286 B/conn	         1.000 goroutines/conn
+PASS
+ok  	github.com/picatz/websocket/benchmarks	0.784s
+picatz-commit: 658bf727a0c0fe795f245b51de151ae93d349eae
+go: go1.27.2
+coder/websocket: v1.8.15
+gobwas/ws: v1.4.0
+gorilla/websocket: v1.5.3
+goos: linux
+goarch: amd64
+pkg: github.com/picatz/websocket/benchmarks
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkEcho/size=16/lib=picatz-4         	  116865	      9966 ns/op	   1.61 MB/s	         3.797 gc-cpu-ns/op	      8656 p50-ns	     25881 p99-ns	      32 B/op	       2 allocs/op
+BenchmarkEcho/size=16/lib=coder-4          	  103316	     11499 ns/op	   1.39 MB/s	       131.6 gc-cpu-ns/op	      9663 p50-ns	     31145 p99-ns	    1024 B/op	       2 allocs/op
+BenchmarkEcho/size=16/lib=gorilla-4        	  117037	      9870 ns/op	   1.62 MB/s	       130.0 gc-cpu-ns/op	      8076 p50-ns	     30657 p99-ns	    1088 B/op	       5 allocs/op
+BenchmarkEcho/size=16/lib=gobwas-4         	   62695	     19773 ns/op	   0.81 MB/s	       202.4 gc-cpu-ns/op	     16454 p50-ns	     52404 p99-ns	    1544 B/op	      11 allocs/op
+BenchmarkEcho/size=1024/lib=picatz-4       	  101394	     11752 ns/op	  87.13 MB/s	       218.7 gc-cpu-ns/op	      9306 p50-ns	     38417 p99-ns	    2051 B/op	       2 allocs/op
+BenchmarkEcho/size=1024/lib=coder-4        	   85149	     14278 ns/op	  71.72 MB/s	       470.5 gc-cpu-ns/op	     11312 p50-ns	     52800 p99-ns	    4352 B/op	       8 allocs/op
+BenchmarkEcho/size=1024/lib=gorilla-4      	   98094	     13321 ns/op	  76.87 MB/s	       534.6 gc-cpu-ns/op	     12950 p50-ns	     54931 p99-ns	    4416 B/op	      11 allocs/op
+BenchmarkEcho/size=1024/lib=gobwas-4       	   51206	     25282 ns/op	  40.50 MB/s	       564.9 gc-cpu-ns/op	     20557 p50-ns	     77588 p99-ns	    4858 B/op	      16 allocs/op
+BenchmarkEcho/size=16384/lib=picatz-4      	   31694	     40642 ns/op	 403.13 MB/s	      5475 gc-cpu-ns/op	     31576 p50-ns	    241365 p99-ns	   41572 B/op	       4 allocs/op
+BenchmarkEcho/size=16384/lib=coder-4       	   13099	     91698 ns/op	 178.67 MB/s	     12434 gc-cpu-ns/op	     72403 p50-ns	    403230 p99-ns	   75520 B/op	      26 allocs/op
+BenchmarkEcho/size=16384/lib=gorilla-4     	   18127	     67562 ns/op	 242.50 MB/s	     12588 gc-cpu-ns/op	     49008 p50-ns	    351264 p99-ns	   75656 B/op	      31 allocs/op
+BenchmarkEcho/size=16384/lib=gobwas-4      	   17080	     72927 ns/op	 224.66 MB/s	     12581 gc-cpu-ns/op	     56478 p50-ns	    358828 p99-ns	   76638 B/op	      34 allocs/op
+BenchmarkEcho/size=262144/lib=picatz-4     	    3201	    364972 ns/op	 718.26 MB/s	    121139 gc-cpu-ns/op	    315984 p50-ns	    887446 p99-ns	  706995 B/op	      10 allocs/op
+BenchmarkEcho/size=262144/lib=coder-4      	    1299	    870777 ns/op	 301.05 MB/s	    273446 gc-cpu-ns/op	    796014 p50-ns	   2123284 p99-ns	 1259271 B/op	      40 allocs/op
+BenchmarkEcho/size=262144/lib=gorilla-4    	    1651	    866405 ns/op	 302.57 MB/s	    263427 gc-cpu-ns/op	    806761 p50-ns	   1958264 p99-ns	 1259402 B/op	      45 allocs/op
+BenchmarkEcho/size=262144/lib=gobwas-4     	    1489	    719344 ns/op	 364.42 MB/s	    298858 gc-cpu-ns/op	    665326 p50-ns	   1986939 p99-ns	 1521915 B/op	      49 allocs/op
+BenchmarkEchoParallel/size=1024/lib=picatz-4         	  141818	      8322 ns/op	 123.04 MB/s	       478.4 gc-cpu-ns/op	    2050 B/op	       2 allocs/op
+BenchmarkEchoParallel/size=1024/lib=coder-4          	  123660	      9018 ns/op	 113.56 MB/s	      1127 gc-cpu-ns/op	    4353 B/op	       8 allocs/op
+BenchmarkEchoParallel/size=1024/lib=gorilla-4        	  126088	      8657 ns/op	 118.29 MB/s	      1184 gc-cpu-ns/op	    4417 B/op	      11 allocs/op
+BenchmarkEchoParallel/size=1024/lib=gobwas-4         	   91280	     13593 ns/op	  75.33 MB/s	      1493 gc-cpu-ns/op	    4859 B/op	      16 allocs/op
+BenchmarkHandshake/lib=picatz-4                      	    6081	    167575 ns/op	   18573 B/op	      90 allocs/op
+BenchmarkHandshake/lib=coder-4                       	    3572	    284827 ns/op	   32380 B/op	     231 allocs/op
+BenchmarkHandshake/lib=gorilla-4                     	    8025	    171398 ns/op	   30345 B/op	     131 allocs/op
+BenchmarkHandshake/lib=gobwas-4                      	    7516	    156874 ns/op	   13124 B/op	      87 allocs/op
+BenchmarkBroadcast/size=1024/clients=100/lib=picatz-4         	    2158	    558169 ns/op	 183.46 MB/s	     69231 gc-cpu-ns/op	  102651 B/op	     100 allocs/op
+BenchmarkBroadcast/size=1024/clients=100/lib=coder-4          	    1798	    641401 ns/op	 159.65 MB/s	    135554 gc-cpu-ns/op	  217618 B/op	     400 allocs/op
+BenchmarkBroadcast/size=1024/clients=100/lib=gorilla-4        	    2023	    545591 ns/op	 187.69 MB/s	    126553 gc-cpu-ns/op	  218441 B/op	     500 allocs/op
+BenchmarkBroadcast/size=1024/clients=100/lib=gobwas-4         	    1233	    969810 ns/op	 105.59 MB/s	    169474 gc-cpu-ns/op	  240023 B/op	     700 allocs/op
+PASS
+ok  	github.com/picatz/websocket/benchmarks	34.024s
+picatz-commit: 658bf727a0c0fe795f245b51de151ae93d349eae
+go: go1.27.2
+coder/websocket: v1.8.15
+gobwas/ws: v1.4.0
+gorilla/websocket: v1.5.3
+goos: linux
+goarch: amd64
+pkg: github.com/picatz/websocket/benchmarks
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkIdleConn/lib=baseline-4         	       1	     17973 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=picatz-4           	       1	     19120 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=coder-4            	       1	     21479 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=gorilla-4          	       1	     17269 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=gobwas-4           	       1	     15368 B/conn	         1.000 goroutines/conn
+PASS
+ok  	github.com/picatz/websocket/benchmarks	0.793s
+picatz-commit: 658bf727a0c0fe795f245b51de151ae93d349eae
+go: go1.27.2
+coder/websocket: v1.8.15
+gobwas/ws: v1.4.0
+gorilla/websocket: v1.5.3
+goos: linux
+goarch: amd64
+pkg: github.com/picatz/websocket/benchmarks
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkEcho/size=16/lib=picatz-4         	  131430	      8971 ns/op	   1.78 MB/s	         3.241 gc-cpu-ns/op	      7951 p50-ns	     23549 p99-ns	      32 B/op	       2 allocs/op
+BenchmarkEcho/size=16/lib=coder-4          	  108826	     11851 ns/op	   1.35 MB/s	       131.8 gc-cpu-ns/op	      9966 p50-ns	     38824 p99-ns	    1024 B/op	       2 allocs/op
+BenchmarkEcho/size=16/lib=gorilla-4        	  132462	     10111 ns/op	   1.58 MB/s	       135.7 gc-cpu-ns/op	      8221 p50-ns	     31823 p99-ns	    1088 B/op	       5 allocs/op
+BenchmarkEcho/size=16/lib=gobwas-4         	   56420	     22335 ns/op	   0.72 MB/s	       213.0 gc-cpu-ns/op	     18938 p50-ns	     60836 p99-ns	    1544 B/op	      11 allocs/op
+BenchmarkEcho/size=1024/lib=picatz-4       	  111572	     12462 ns/op	  82.17 MB/s	       233.8 gc-cpu-ns/op	      9594 p50-ns	     40067 p99-ns	    2050 B/op	       2 allocs/op
+BenchmarkEcho/size=1024/lib=coder-4        	   71608	     15937 ns/op	  64.25 MB/s	       481.6 gc-cpu-ns/op	     12045 p50-ns	     61289 p99-ns	    4352 B/op	       8 allocs/op
+BenchmarkEcho/size=1024/lib=gorilla-4      	   94934	     13218 ns/op	  77.47 MB/s	       493.2 gc-cpu-ns/op	     10356 p50-ns	     59996 p99-ns	    4416 B/op	      11 allocs/op
+BenchmarkEcho/size=1024/lib=gobwas-4       	   36708	     30366 ns/op	  33.72 MB/s	       629.0 gc-cpu-ns/op	     28160 p50-ns	     90789 p99-ns	    4858 B/op	      16 allocs/op
+BenchmarkEcho/size=16384/lib=picatz-4      	   35198	     36086 ns/op	 454.03 MB/s	      4976 gc-cpu-ns/op	     26590 p50-ns	    206064 p99-ns	   41544 B/op	       4 allocs/op
+BenchmarkEcho/size=16384/lib=coder-4       	   14486	     83277 ns/op	 196.74 MB/s	     11370 gc-cpu-ns/op	     67386 p50-ns	    375421 p99-ns	   75520 B/op	      26 allocs/op
+BenchmarkEcho/size=16384/lib=gorilla-4     	   18600	     64985 ns/op	 252.12 MB/s	     11990 gc-cpu-ns/op	     46068 p50-ns	    353951 p99-ns	   75656 B/op	      31 allocs/op
+BenchmarkEcho/size=16384/lib=gobwas-4      	   15901	     73748 ns/op	 222.16 MB/s	     13118 gc-cpu-ns/op	     56536 p50-ns	    368315 p99-ns	   76645 B/op	      34 allocs/op
+BenchmarkEcho/size=262144/lib=picatz-4     	    3385	    353192 ns/op	 742.21 MB/s	    131959 gc-cpu-ns/op	    274674 p50-ns	   1018888 p99-ns	  705549 B/op	      10 allocs/op
+BenchmarkEcho/size=262144/lib=coder-4      	    1105	    937237 ns/op	 279.70 MB/s	    323514 gc-cpu-ns/op	    869370 p50-ns	   2192569 p99-ns	 1259266 B/op	      40 allocs/op
+BenchmarkEcho/size=262144/lib=gorilla-4    	    1638	    791786 ns/op	 331.08 MB/s	    257580 gc-cpu-ns/op	    741050 p50-ns	   1714380 p99-ns	 1259403 B/op	      45 allocs/op
+BenchmarkEcho/size=262144/lib=gobwas-4     	    1834	    660383 ns/op	 396.96 MB/s	    282443 gc-cpu-ns/op	    626463 p50-ns	   1355155 p99-ns	 1521914 B/op	      49 allocs/op
+BenchmarkEchoParallel/size=1024/lib=picatz-4         	  123271	      8499 ns/op	 120.48 MB/s	       461.8 gc-cpu-ns/op	    2050 B/op	       2 allocs/op
+BenchmarkEchoParallel/size=1024/lib=coder-4          	  121682	     10441 ns/op	  98.07 MB/s	      1215 gc-cpu-ns/op	    4353 B/op	       8 allocs/op
+BenchmarkEchoParallel/size=1024/lib=gorilla-4        	  135836	      9085 ns/op	 112.71 MB/s	      1206 gc-cpu-ns/op	    4417 B/op	      11 allocs/op
+BenchmarkEchoParallel/size=1024/lib=gobwas-4         	   84952	     13415 ns/op	  76.33 MB/s	      1383 gc-cpu-ns/op	    4859 B/op	      16 allocs/op
+BenchmarkHandshake/lib=picatz-4                      	    7803	    154530 ns/op	   18567 B/op	      90 allocs/op
+BenchmarkHandshake/lib=coder-4                       	    5462	    264991 ns/op	   32361 B/op	     231 allocs/op
+BenchmarkHandshake/lib=gorilla-4                     	    5619	    198549 ns/op	   30349 B/op	     131 allocs/op
+BenchmarkHandshake/lib=gobwas-4                      	    8605	    160200 ns/op	   13124 B/op	      87 allocs/op
+BenchmarkBroadcast/size=1024/clients=100/lib=picatz-4         	    2292	    533463 ns/op	 191.95 MB/s	     66746 gc-cpu-ns/op	  102656 B/op	     100 allocs/op
+BenchmarkBroadcast/size=1024/clients=100/lib=coder-4          	    2084	    629188 ns/op	 162.75 MB/s	    137137 gc-cpu-ns/op	  217621 B/op	     400 allocs/op
+BenchmarkBroadcast/size=1024/clients=100/lib=gorilla-4        	    2106	    557026 ns/op	 183.83 MB/s	    127257 gc-cpu-ns/op	  218436 B/op	     500 allocs/op
+BenchmarkBroadcast/size=1024/clients=100/lib=gobwas-4         	    1041	   1074876 ns/op	  95.27 MB/s	    191528 gc-cpu-ns/op	  240041 B/op	     700 allocs/op
+PASS
+ok  	github.com/picatz/websocket/benchmarks	34.887s
+picatz-commit: 658bf727a0c0fe795f245b51de151ae93d349eae
+go: go1.27.2
+coder/websocket: v1.8.15
+gobwas/ws: v1.4.0
+gorilla/websocket: v1.5.3
+goos: linux
+goarch: amd64
+pkg: github.com/picatz/websocket/benchmarks
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkIdleConn/lib=baseline-4         	       1	     17777 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=picatz-4           	       1	     19530 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=coder-4            	       1	     20759 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=gorilla-4          	       1	     17351 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=gobwas-4           	       1	     15008 B/conn	         1.000 goroutines/conn
+PASS
+ok  	github.com/picatz/websocket/benchmarks	0.814s
+picatz-commit: 658bf727a0c0fe795f245b51de151ae93d349eae
+go: go1.27.2
+coder/websocket: v1.8.15
+gobwas/ws: v1.4.0
+gorilla/websocket: v1.5.3
+goos: linux
+goarch: amd64
+pkg: github.com/picatz/websocket/benchmarks
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkEcho/size=16/lib=picatz-4         	  108338	     10884 ns/op	   1.47 MB/s	         3.458 gc-cpu-ns/op	      8877 p50-ns	     32730 p99-ns	      32 B/op	       2 allocs/op
+BenchmarkEcho/size=16/lib=coder-4          	   84771	     14049 ns/op	   1.14 MB/s	       168.8 gc-cpu-ns/op	     10031 p50-ns	     37461 p99-ns	    1024 B/op	       2 allocs/op
+BenchmarkEcho/size=16/lib=gorilla-4        	  111744	     10446 ns/op	   1.53 MB/s	       152.3 gc-cpu-ns/op	      8282 p50-ns	     29452 p99-ns	    1088 B/op	       5 allocs/op
+BenchmarkEcho/size=16/lib=gobwas-4         	   59985	     20446 ns/op	   0.78 MB/s	       226.5 gc-cpu-ns/op	     16918 p50-ns	     56947 p99-ns	    1544 B/op	      11 allocs/op
+BenchmarkEcho/size=1024/lib=picatz-4       	   98767	     11539 ns/op	  88.74 MB/s	       237.2 gc-cpu-ns/op	      9381 p50-ns	     40293 p99-ns	    2050 B/op	       2 allocs/op
+BenchmarkEcho/size=1024/lib=coder-4        	   79545	     15269 ns/op	  67.07 MB/s	       526.5 gc-cpu-ns/op	     11515 p50-ns	     58480 p99-ns	    4352 B/op	       8 allocs/op
+BenchmarkEcho/size=1024/lib=gorilla-4      	   73790	     14345 ns/op	  71.39 MB/s	       555.7 gc-cpu-ns/op	      9910 p50-ns	     61845 p99-ns	    4416 B/op	      11 allocs/op
+BenchmarkEcho/size=1024/lib=gobwas-4       	   34646	     29335 ns/op	  34.91 MB/s	       621.3 gc-cpu-ns/op	     26252 p50-ns	     89916 p99-ns	    4858 B/op	      16 allocs/op
+BenchmarkEcho/size=16384/lib=picatz-4      	   28821	     39960 ns/op	 410.01 MB/s	      5266 gc-cpu-ns/op	     30827 p50-ns	    225396 p99-ns	   41545 B/op	       4 allocs/op
+BenchmarkEcho/size=16384/lib=coder-4       	   13233	     90811 ns/op	 180.42 MB/s	     12215 gc-cpu-ns/op	     69885 p50-ns	    414104 p99-ns	   75520 B/op	      26 allocs/op
+BenchmarkEcho/size=16384/lib=gorilla-4     	   16185	     70557 ns/op	 232.21 MB/s	     12414 gc-cpu-ns/op	     50053 p50-ns	    394275 p99-ns	   75656 B/op	      31 allocs/op
+BenchmarkEcho/size=16384/lib=gobwas-4      	   15571	     77684 ns/op	 210.91 MB/s	     12913 gc-cpu-ns/op	     58953 p50-ns	    375837 p99-ns	   76646 B/op	      34 allocs/op
+BenchmarkEcho/size=262144/lib=picatz-4     	    3518	    412628 ns/op	 635.30 MB/s	    145856 gc-cpu-ns/op	    287541 p50-ns	   1078600 p99-ns	  705817 B/op	      10 allocs/op
+BenchmarkEcho/size=262144/lib=coder-4      	    1381	    800638 ns/op	 327.42 MB/s	    257266 gc-cpu-ns/op	    741175 p50-ns	   1860307 p99-ns	 1259265 B/op	      40 allocs/op
+BenchmarkEcho/size=262144/lib=gorilla-4    	    1336	    880267 ns/op	 297.80 MB/s	    276116 gc-cpu-ns/op	    798673 p50-ns	   2380952 p99-ns	 1259403 B/op	      45 allocs/op
+BenchmarkEcho/size=262144/lib=gobwas-4     	    1800	    700370 ns/op	 374.29 MB/s	    296382 gc-cpu-ns/op	    665287 p50-ns	   1490440 p99-ns	 1521914 B/op	      49 allocs/op
+BenchmarkEchoParallel/size=1024/lib=picatz-4         	  162597	      7980 ns/op	 128.32 MB/s	       467.0 gc-cpu-ns/op	    2050 B/op	       2 allocs/op
+BenchmarkEchoParallel/size=1024/lib=coder-4          	  126921	      9321 ns/op	 109.86 MB/s	      1200 gc-cpu-ns/op	    4353 B/op	       8 allocs/op
+BenchmarkEchoParallel/size=1024/lib=gorilla-4        	  158701	      8238 ns/op	 124.31 MB/s	      1041 gc-cpu-ns/op	    4416 B/op	      11 allocs/op
+BenchmarkEchoParallel/size=1024/lib=gobwas-4         	   92162	     12613 ns/op	  81.19 MB/s	      1224 gc-cpu-ns/op	    4858 B/op	      16 allocs/op
+BenchmarkHandshake/lib=picatz-4                      	    7407	    152455 ns/op	   18571 B/op	      90 allocs/op
+BenchmarkHandshake/lib=coder-4                       	    5106	    237567 ns/op	   32366 B/op	     231 allocs/op
+BenchmarkHandshake/lib=gorilla-4                     	    5431	    196437 ns/op	   30345 B/op	     131 allocs/op
+BenchmarkHandshake/lib=gobwas-4                      	    6289	    177572 ns/op	   13136 B/op	      87 allocs/op
+BenchmarkBroadcast/size=1024/clients=100/lib=picatz-4         	    1634	    615544 ns/op	 166.36 MB/s	     73924 gc-cpu-ns/op	  102665 B/op	     100 allocs/op
+BenchmarkBroadcast/size=1024/clients=100/lib=coder-4          	    1797	    662720 ns/op	 154.51 MB/s	    140356 gc-cpu-ns/op	  217635 B/op	     400 allocs/op
+BenchmarkBroadcast/size=1024/clients=100/lib=gorilla-4        	    2149	    560778 ns/op	 182.60 MB/s	    127916 gc-cpu-ns/op	  218436 B/op	     500 allocs/op
+BenchmarkBroadcast/size=1024/clients=100/lib=gobwas-4         	    1156	   1055747 ns/op	  96.99 MB/s	    176636 gc-cpu-ns/op	  240039 B/op	     700 allocs/op
+PASS
+ok  	github.com/picatz/websocket/benchmarks	33.610s
+picatz-commit: 658bf727a0c0fe795f245b51de151ae93d349eae
+go: go1.27.2
+coder/websocket: v1.8.15
+gobwas/ws: v1.4.0
+gorilla/websocket: v1.5.3
+goos: linux
+goarch: amd64
+pkg: github.com/picatz/websocket/benchmarks
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkIdleConn/lib=baseline-4         	       1	     17596 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=picatz-4           	       1	     19546 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=coder-4            	       1	     20152 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=gorilla-4          	       1	     17334 B/conn	         1.000 goroutines/conn
+BenchmarkIdleConn/lib=gobwas-4           	       1	     15466 B/conn	         1.000 goroutines/conn
+PASS
+ok  	github.com/picatz/websocket/benchmarks	0.775s
