@@ -11,10 +11,11 @@
 // WithUpgradeOriginCheck to replace that decision, for example with an exact
 // public-origin allowlist behind a TLS-terminating proxy. Malformed/multiple
 // fields are rejected before a callback. When Upgrade fails before hijacking, it
-// writes the HTTP error response itself (403 for ErrOriginNotAllowed; see
-// UpgradeErrorStatus) and the handler should just return. Authentication, authorization,
-// and authoritative Host validation remain application responsibilities. Origin
-// is not authentication and non-browser clients can omit or forge it.
+// writes the HTTP error response itself (403 for ErrOriginNotAllowed, 400 or
+// 426 for a request matching ErrBadHandshake) and the handler should just
+// return. Authentication, authorization, and authoritative Host validation
+// remain application responsibilities. Origin is not authentication and
+// non-browser clients can omit or forge it.
 //
 // The Dial context covers TCP, TLS, any proxy tunnel, and the HTTP upgrade
 // handshake. Once Dial succeeds, canceling that context does not cancel message

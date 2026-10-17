@@ -27,8 +27,8 @@ func TestUpgradeErrorStatus(t *testing.T) {
 		{ErrInvalidExtension, http.StatusBadRequest},
 		{errors.New("other"), http.StatusBadRequest},
 	} {
-		if got := UpgradeErrorStatus(tt.err); got != tt.want {
-			t.Errorf("UpgradeErrorStatus(%v) = %d, want %d", tt.err, got, tt.want)
+		if got := upgradeErrorStatus(tt.err); got != tt.want {
+			t.Errorf("upgradeErrorStatus(%v) = %d, want %d", tt.err, got, tt.want)
 		}
 	}
 }
@@ -36,10 +36,13 @@ func TestUpgradeErrorStatus(t *testing.T) {
 // Over a real server, the handler only returns and the client still sees the
 // right status, headers and a fixed body that carries no error details.
 func TestUpgradeWritesErrorResponses(t *testing.T) {
+	errs := make(chan error, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if conn, err := Upgrade(w, r); err == nil {
+		conn, err := Upgrade(w, r)
+		if err == nil {
 			conn.Close()
 		}
+		errs <- err
 	}))
 	defer srv.Close()
 
@@ -73,6 +76,11 @@ func TestUpgradeWritesErrorResponses(t *testing.T) {
 			}
 			if want := "WebSocket: " + http.StatusText(tt.status) + "\n"; string(body) != want {
 				t.Fatalf("body = %q, want %q", body, want)
+			}
+			// The client's fault matches ErrBadHandshake; a policy rejection does not.
+			err = <-errs
+			if bad := tt.status != http.StatusForbidden; errors.Is(err, ErrBadHandshake) != bad || errors.Is(err, ErrOriginNotAllowed) == bad {
+				t.Fatalf("Upgrade error = %v; want ErrBadHandshake %v", err, bad)
 			}
 		})
 	}

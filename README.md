@@ -477,9 +477,10 @@ When `Upgrade` fails before taking over the connection, it writes the HTTP error
 response itself, so the handler only logs and returns: 403 for a rejected
 Origin, 426 with `Sec-WebSocket-Version: 13` for an unsupported version, 500
 when hijacking is unavailable or the server's own options are invalid, and 400
-for any other malformed handshake. `UpgradeErrorStatus(err)` reports the status
-it chose. After `ErrHandshakeFailed` the transport may have been hijacked, so
-nothing is written.
+for any other malformed handshake. The 400 and 426 errors match
+`ErrBadHandshake`, so a handler can tell a bad client from a rejected origin or
+its own misconfiguration. After `ErrHandshakeFailed` the transport may have been
+hijacked, so nothing is written.
 
 ## Protocol limitations
 

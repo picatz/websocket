@@ -273,7 +273,7 @@ func TestUpgradeMiddlewareValidatesBeforeUnwrap(t *testing.T) {
 		{"extensions", func(r *http.Request) { r.Header.Set("Sec-WebSocket-Extensions", "invalid;") }, nil, ErrInvalidExtension},
 		{"custom response", nil, []UpgradeOption{WithResponseHeader(http.Header{"X-Test": {"bad\r\nheader"}})}, ErrInvalidHandshakeHeader},
 	} {
-		status := UpgradeErrorStatus(tc.want)
+		status := upgradeErrorStatus(tc.want)
 		t.Run(tc.name, func(t *testing.T) {
 			r := upgradeRequest()
 			if tc.change != nil {

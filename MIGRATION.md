@@ -175,11 +175,14 @@ handler mapped them to an HTTP status. It now writes the response itself:
 | `ErrHandshakeFailed` | nothing: the transport may already be hijacked |
 | any other malformed handshake | 400 |
 
+The 400 and 426 errors also match `ErrBadHandshake`, the same sentinel `Dial`
+uses for a failed handshake, so `errors.Is(err, websocket.ErrBadHandshake)`
+means the client sent a request Upgrade could not accept.
+
 Delete the handler's own error mapping and just return. A handler that still
 calls `http.Error` after `Upgrade` fails now sends a second, ignored status
 (`net/http` logs "superfluous response.WriteHeader") and appends its text to
-the body. `UpgradeErrorStatus(err)` returns the status that was written, for
-logging or metrics.
+the body.
 
 ```go
 // Before
@@ -194,7 +197,7 @@ if err != nil {
 // After
 conn, err := websocket.Upgrade(w, r)
 if err != nil {
-	log.Printf("upgrade: %v (HTTP %d)", err, websocket.UpgradeErrorStatus(err))
+	log.Printf("upgrade: %v", err)
 	return
 }
 ```

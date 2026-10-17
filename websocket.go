@@ -1871,8 +1871,17 @@ func WithUpgradeOriginCheck(check func(r *http.Request, origin string) bool) Upg
 //
 // When Upgrade fails before taking over the connection, it writes the HTTP
 // error response itself and returns the error; the handler should just return.
-// See UpgradeErrorStatus for the status codes. After ErrHandshakeFailed the
-// transport may already be hijacked, so nothing is written.
+// The error says which response was sent:
+//
+//   - ErrOriginNotAllowed: 403 Forbidden.
+//   - ErrBadHandshake: the client's request was malformed, 400 Bad Request, or
+//     its version unsupported (ErrUnsupportedVersion), 426 Upgrade Required
+//     with Sec-WebSocket-Version: 13 (RFC 6455 section 4.4).
+//   - ErrNotHijacker, or invalid server options (ErrInvalidHandshakeHeader):
+//     500 Internal Server Error.
+//   - ErrHandshakeFailed: nothing, as the transport may already be hijacked.
+//
+// https://datatracker.ietf.org/doc/html/rfc6455#section-4.2.1
 //
 // It requires an HTTP/1.1 connection with hijacking support. Middleware may
 // implement http.Hijacker directly or expose the underlying http.ResponseWriter
@@ -1881,9 +1890,9 @@ func WithUpgradeOriginCheck(check func(r *http.Request, origin string) bool) Upg
 func Upgrade(w http.ResponseWriter, r *http.Request, options ...UpgradeOption) (*Conn, error) {
 	conn, err := upgrade(w, r, options)
 	if err != nil {
-		writeUpgradeError(w, err)
+		return nil, writeUpgradeError(w, err)
 	}
-	return conn, err
+	return conn, nil
 }
 
 func upgrade(w http.ResponseWriter, r *http.Request, options []UpgradeOption) (*Conn, error) {

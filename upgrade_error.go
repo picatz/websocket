@@ -2,10 +2,11 @@ package websocket
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 )
 
-// UpgradeErrorStatus returns the HTTP status Upgrade writes for err, or 0 when
+// upgradeErrorStatus returns the HTTP status Upgrade writes for err, or 0 when
 // it writes nothing:
 //
 //   - ErrOriginNotAllowed: 403 Forbidden.
@@ -17,7 +18,7 @@ import (
 //   - Any other error, which is a malformed client handshake: 400 Bad Request.
 //
 // https://datatracker.ietf.org/doc/html/rfc6455#section-4.2.1
-func UpgradeErrorStatus(err error) int {
+func upgradeErrorStatus(err error) int {
 	switch {
 	case err == nil, errors.Is(err, ErrHandshakeFailed):
 		return 0
@@ -32,15 +33,21 @@ func UpgradeErrorStatus(err error) int {
 	}
 }
 
-// writeUpgradeError writes the response UpgradeErrorStatus selects. Bodies are
-// fixed text: error details stay in the returned error for the server's logs.
-func writeUpgradeError(w http.ResponseWriter, err error) {
-	status := UpgradeErrorStatus(err)
+// writeUpgradeError writes the response upgradeErrorStatus selects and returns
+// err, wrapped with ErrBadHandshake when the client's request was at fault.
+// Bodies are fixed text: error details stay in the returned error for the
+// server's logs.
+func writeUpgradeError(w http.ResponseWriter, err error) error {
+	status := upgradeErrorStatus(err)
 	if status == 0 {
-		return
+		return err
+	}
+	if (status == http.StatusBadRequest || status == http.StatusUpgradeRequired) && !errors.Is(err, ErrBadHandshake) {
+		err = fmt.Errorf("%w: %w", ErrBadHandshake, err)
 	}
 	if status == http.StatusUpgradeRequired {
 		w.Header().Set("Sec-WebSocket-Version", "13")
 	}
 	http.Error(w, "WebSocket: "+http.StatusText(status), status)
+	return err
 }
