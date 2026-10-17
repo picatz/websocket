@@ -239,8 +239,6 @@ encoded frame and the decoded message. Incompressible data can fit the decoded
 budget but exceed the encoded budget in a single frame, so allow headroom when
 choosing a compression limit. The wire limit is per frame, not aggregate
 compressed input.
-Custom extensions must bound their own intermediate allocations; their final
-results are checked but extension code is trusted.
 
 A payload cap is not a total-memory, CPU, fragment-count, concurrency or lifetime
 limit. Applications still need connection/lifetime controls for slow peers and
@@ -267,7 +265,7 @@ reusable. A write timeout wraps its underlying cause, such as `os.ErrDeadlineExc
 close the connection afterward, because a partial frame cannot be retried safely.
 
 Deadlines are transport controls, not per-call contexts or whole-method timeouts.
-They do not preempt callbacks, extension work, lock waits or custom transport
+They do not preempt compression work, lock waits or custom transport
 `Close` implementations, and already buffered data may still be consumed.
 `NewConn` takes over WebSocket framing and I/O and closes its transport on `Close`
 or read failure; do not read or write framed bytes directly on that transport.
@@ -551,7 +549,6 @@ Docker.
 - Authenticate and authorize requests and validate the authoritative Host in your
   HTTP handler. `Upgrade` enforces the Origin policy described above; Origin is
   not authentication, and non-browser clients can omit or forge it
-- Extension negotiation is not comprehensively validated
 - Subprotocol offers must contain unique, case-sensitive HTTP tokens. `Dial`
   rejects unsolicited, unoffered, malformed, or multiple server selections.
   `Upgrade` validates offers and any caller-provided selection before hijacking.
@@ -577,9 +574,8 @@ Docker.
   preserves existing transport deadlines. For `Dial` and concrete `*tls.Conn`
   inputs to `NewConn`/`Upgrade`, abnormal shutdown closes the raw transport;
   ordinary and valid-peer closure retain TLS shutdown behavior. A custom
-  transport or an outer wrapper hiding TLS may block in `Close`; trusted
-  extension/handler callbacks can also block. These cannot be bounded by the
-  library
+  transport or an outer wrapper hiding TLS may block in `Close`, which the
+  library cannot bound
 - Neither the tests nor the [Autobahn baseline](#conformance) are a formal
   RFC 6455 or RFC 7692 compliance certification
 

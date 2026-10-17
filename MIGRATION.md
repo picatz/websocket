@@ -290,7 +290,7 @@ As in the root package, a zero `MaxMessageSize` now means
 `websocket.DefaultMaxMessageSize` and a negative one means unlimited.
 `WithMaxMessageSize(0)` used to mean unlimited.
 
-## Compression negotiation and composition
+## Compression negotiation
 
 `permessage-deflate` now sends with context takeover, fragments large compressed
 messages into 64 KiB frames, and supports every window from 8 to 15 bits. Peers
