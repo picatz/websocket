@@ -155,7 +155,7 @@ func TestNewConnSubprotocol(t *testing.T) {
 	if got := frameConn(nil, false, 0).Subprotocol(); got != "" {
 		t.Fatalf("Subprotocol = %q", got)
 	}
-	c := NewConn(&memoryConn{}, ConnConfig{Subprotocol: "chat"})
+	c := newTestConn(&memoryConn{}, ConnConfig{Subprotocol: "chat"})
 	if got := c.Subprotocol(); got != "chat" {
 		t.Fatalf("Subprotocol = %q, want the configured one", got)
 	}

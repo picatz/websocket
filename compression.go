@@ -60,7 +60,7 @@ type Compression struct {
 
 // extension validates c and creates one connection's permessage-deflate
 // extension from it.
-func (c *Compression) extension() (Extension, error) {
+func (c *Compression) extension() (frameExtension, error) {
 	switch {
 	case c.Level < flate.HuffmanOnly || c.Level > flate.BestCompression:
 		return nil, fmt.Errorf("%w: Compression.Level %d is outside -2 to 9", ErrInvalidConfig, c.Level)
@@ -71,27 +71,27 @@ func (c *Compression) extension() (Extension, error) {
 	case !validWindowBits(c.ServerMaxWindowBits):
 		return nil, fmt.Errorf("%w: Compression.ServerMaxWindowBits %d is outside 8 to 15", ErrInvalidConfig, c.ServerMaxWindowBits)
 	}
-	options := []PerMessageDeflateOption{
-		WithCompressionThreshold(c.Threshold),
-		WithClientMaxWindowBits(c.ClientMaxWindowBits),
-		WithServerMaxWindowBits(c.ServerMaxWindowBits),
+	options := []pmdOption{
+		withCompressionThreshold(c.Threshold),
+		withClientMaxWindowBits(c.ClientMaxWindowBits),
+		withServerMaxWindowBits(c.ServerMaxWindowBits),
 	}
 	if c.Level != 0 {
-		options = append(options, WithCompressionLevel(c.Level))
+		options = append(options, withCompressionLevel(c.Level))
 	}
 	switch {
 	case c.MemoryLimit > 0:
-		options = append(options, WithCompressionMemoryLimit(c.MemoryLimit))
+		options = append(options, withCompressionMemoryLimit(c.MemoryLimit))
 	case c.MemoryLimit < 0:
-		options = append(options, WithCompressionMemoryLimit(0))
+		options = append(options, withCompressionMemoryLimit(0))
 	}
 	if c.ClientNoContextTakeover {
-		options = append(options, WithClientNoContextTakeover())
+		options = append(options, withClientNoContextTakeover())
 	}
 	if c.ServerNoContextTakeover {
-		options = append(options, WithServerNoContextTakeover())
+		options = append(options, withServerNoContextTakeover())
 	}
-	return NewPerMessageDeflateExtension(options...), nil
+	return newPerMessageDeflate(options...), nil
 }
 
 func validWindowBits(bits int) bool { return bits == 0 || bits >= 8 && bits <= 15 }

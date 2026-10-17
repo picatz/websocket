@@ -12,7 +12,7 @@ import (
 
 func TestCloseSendsCloseFrame(t *testing.T) {
 	raw := &memoryConn{Reader: bytes.NewReader(nil)}
-	conn := NewConn(raw, ConnConfig{Server: true})
+	conn := newTestConn(raw, ConnConfig{Server: true})
 	if err := conn.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +41,7 @@ func TestCloseUnblocksStalledWriter(t *testing.T) {
 	raw, peer := net.Pipe()
 	defer peer.Close()
 	defer raw.Close()
-	c := NewConn(raw, ConnConfig{Server: true})
+	c := newTestConn(raw, ConnConfig{Server: true})
 	result := make(chan error, 1)
 	go func() { result <- c.WriteMessage(BinaryMessage, bytes.Repeat([]byte{'x'}, 8192)) }()
 	// Read only the header. The writer is still blocked on its payload.
@@ -79,7 +79,7 @@ func (w *payloadObserver) Write(p []byte) (int, error) {
 func TestWriteMessagePreservesPayloadDuringWrite(t *testing.T) {
 	data := []byte("shared payload")
 	observer := &payloadObserver{source: data, want: bytes.Clone(data), t: t}
-	c := NewConn(&benchmarkConn{reader: bytes.NewReader(nil), writer: observer}, ConnConfig{Server: false})
+	c := newTestConn(&benchmarkConn{reader: bytes.NewReader(nil), writer: observer}, ConnConfig{Server: false})
 	if err := c.WriteMessage(BinaryMessage, data); err != nil {
 		t.Fatal(err)
 	}

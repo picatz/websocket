@@ -117,7 +117,7 @@ func consumeExtensionQuotedToken(s string) (token, rest string, ok bool) {
 }
 
 // Validate names against actual wire offers rather than substring matches or
-// Extension.Name. Custom extensions retain ownership of their parameter and
+// frameExtension.Name. Custom extensions retain ownership of their parameter and
 // repetition semantics through Negotiate's complete-header callback.
 func validateExtensionSelection(selected, offered []extensionOffer) error {
 	names := make(map[string]bool, len(offered))
@@ -139,7 +139,7 @@ func validateExtensionSelection(selected, offered []extensionOffer) error {
 	return nil
 }
 
-func extensionOffers(extensions []Extension) (string, []extensionOffer, error) {
+func extensionOffers(extensions []frameExtension) (string, []extensionOffer, error) {
 	var values []string
 	for _, ext := range extensions {
 		if ext == nil {

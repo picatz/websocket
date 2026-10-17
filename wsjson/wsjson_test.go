@@ -14,7 +14,14 @@ import (
 func pipe(t *testing.T) (server, client *websocket.Conn) {
 	t.Helper()
 	a, b := net.Pipe()
-	server, client = websocket.NewConn(a, websocket.ConnConfig{Server: true}), websocket.NewConn(b, websocket.ConnConfig{})
+	server, err := websocket.NewConn(a, websocket.ConnConfig{Server: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err = websocket.NewConn(b, websocket.ConnConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	// Closing the pipe ends directly skips the one-second close handshake.
 	t.Cleanup(func() { _ = a.Close(); _ = b.Close() })
 	return server, client

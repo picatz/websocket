@@ -209,9 +209,8 @@ plain structs whose zero values are the defaults: `Dialer` for clients,
 concept on both sides, a struct can be built once and shared, and the
 package-level `Dial(ctx, url)` and `Upgrade(w, r)` use the zero value. In the
 `websocket` package, every `DialOption`, `UpgradeOption` and `ConnOption`, and
-their `With*` constructors, are removed. The `PerMessageDeflateOption`s remain
-for now, and the `browser` package keeps its options until it gets a matching
-`Dialer`.
+their `With*` constructors, are removed. The `browser` package keeps its
+options until it gets a matching `Dialer`.
 
 | Before | After |
 |---|---|
@@ -229,8 +228,8 @@ for now, and the `browser` package keeps its options until it gets a matching
 | `WithUpgradeOriginCheck(f)` | `Upgrader.CheckOrigin` |
 | `WithExtensions(NewPerMessageDeflateExtension(...))` | `Dialer.Compression` |
 | `WithUpgradeExtensions(NewPerMessageDeflateExtension(...))` | `Upgrader.Compression` |
-| `WithExtensions(custom...)`, `WithUpgradeExtensions(custom...)` | `NewExtensions` on either struct |
-| `NewConn(c, isServer, exts, WithMaxBytes(n))` | `NewConn(c, ConnConfig{Server: isServer, Extensions: exts, MaxMessageSize: n})` |
+| `WithExtensions(custom...)`, `WithUpgradeExtensions(custom...)` | removed; see [One compression path](#one-compression-path) |
+| `NewConn(c, isServer, exts, WithMaxBytes(n))` | `NewConn(c, ConnConfig{Server: isServer, MaxMessageSize: n})`, which also returns an error |
 
 ```go
 // Before
@@ -260,11 +259,9 @@ Behavior that changes with the move:
   Dial and Upgrade; set `MaxMessageSize: -1` to keep the old behavior.
 - **Extensions per connection.** An extension holds one connection's state, so
   a shared `Dialer` or `Upgrader` cannot hold one. `Compression` builds a fresh
-  permessage-deflate extension for every connection; `NewExtensions` is called
-  once per handshake and must return new instances. `Compression` is always
-  negotiated before them.
+  permessage-deflate extension for every connection.
 - **Compression settings.** `Compression` fields map to the old
-  `PerMessageDeflateOption`s: `Level`, `Threshold`, `MemoryLimit` (where -1
+  permessage-deflate options: `Level`, `Threshold`, `MemoryLimit` (where -1
   means no limit, the old `WithCompressionMemoryLimit(0)`), the two
   `*NoContextTakeover` flags and the two `*MaxWindowBits`. Invalid values
   return `ErrInvalidConfig`: Dial fails before connecting and Upgrade answers
@@ -289,9 +286,6 @@ that follow RFC 7692 need no change; these are the observable differences:
   accepts an offered `server_max_window_bits` below 15 instead of declining it,
   and includes a configured server window even when the client offered none
   (RFC 7692, Section 7.1.2.1).
-- Built-in compression combined with an enabled custom extension is supported
-  instead of failing with `ErrUnsupportedExtensionComposition`. That error now
-  means more than one enabled built-in instance, or an extension changing RSV1.
 - With context takeover, a failure part-way through sending a compressed
   message poisons later writes on that connection.
 - Each connection keeps at most `DefaultCompressionMemoryLimit` (64 KiB) of
@@ -321,9 +315,49 @@ They no longer match `io.ErrClosedPipe`. Replace checks for
 `errors.Is(err, net.ErrClosed)`. An `io.ErrClosedPipe` returned by a custom
 transport is still wrapped unchanged, as is any transport error.
 
-An error an outgoing extension returns from `ProcessOutgoingFrame` is now
-wrapped with `%w`, like incoming extension errors, so `errors.Is` and
-`errors.As` reach it. It still does not match `ErrWriteFailed`.
+## One compression path
+
+The package used to expose compression twice: as `Compression` on a `Dialer`
+or `Upgrader`, and as `NewPerMessageDeflateExtension` with its seven `With*`
+options, which a manual `NewConn` handshake needed. It also exported the
+`Extension` interface and `Frame` for custom frame extensions. Only
+`Compression` remains. Removed:
+
+- `NewPerMessageDeflateExtension`, `PerMessageDeflateOption`,
+  `WithClientNoContextTakeover`, `WithServerNoContextTakeover`,
+  `WithClientMaxWindowBits`, `WithServerMaxWindowBits`,
+  `WithCompressionLevel`, `WithCompressionThreshold` and
+  `WithCompressionMemoryLimit`. Set the matching `Compression` field.
+- `Extension`, `Frame`, `ErrUnsupportedExtensionComposition` and
+  `ErrFragmentedCompression`. permessage-deflate is the only extension the
+  package implements; an extension API may return later as an addition.
+
+`NewConn` now returns `(*Conn, error)`. A manual handshake hands over its
+agreement as the 101 response's `Sec-WebSocket-Extensions` value, the one the
+server sent or the client received, and NewConn takes the negotiated
+parameters from it:
+
+```go
+// Before
+pmd := websocket.NewPerMessageDeflateExtension()
+// ...negotiate with pmd.Negotiate and pmd.Offer during the handshake...
+conn := websocket.NewConn(c, websocket.ConnConfig{Server: true, Extensions: []websocket.Extension{pmd}})
+
+// After
+conn, err := websocket.NewConn(c, websocket.ConnConfig{
+	Server:      true,
+	Extensions:  "permessage-deflate; client_max_window_bits=15",
+	Compression: &websocket.Compression{Threshold: 256},
+})
+```
+
+The handshake must have followed RFC 7692 section 7: NewConn trusts the
+agreement rather than checking it against an offer. It returns
+`ErrInvalidExtension` for a malformed value or another extension, and
+`ErrInvalidConfig` for an invalid `Compression`. Without `Extensions`, a
+`ConnConfig` behaves as before and `NewConn` cannot fail.
+
+`github.com/picatz/openai` uses none of these and needs no change.
 
 ## Verification scope
 

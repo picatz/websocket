@@ -134,7 +134,7 @@ func TestUpgradeRejectsAmbiguousOriginBeforeCallback(t *testing.T) {
 			w := new(originWriter)
 			called := 0
 			ext := &negotiationExtension{name: "example", offer: "example"}
-			c, err := (&Upgrader{NewExtensions: func() []Extension { return []Extension{ext} }, CheckOrigin: func(*http.Request, string) bool { called++; return true }}).Upgrade(w, r)
+			c, err := upgradeExtensions(w, r, &Upgrader{CheckOrigin: func(*http.Request, string) bool { called++; return true }}, []frameExtension{ext})
 			if c != nil || err != ErrOriginNotAllowed || called != 0 || ext.calls != 0 || w.calls != 0 || w.status != http.StatusForbidden {
 				t.Fatalf("conn %v, error %v, policy %d, extension %d, hijacks %d, status %d", c, err, called, ext.calls, w.calls, w.status)
 			}
@@ -349,7 +349,7 @@ func TestUpgradeOriginDenialHasNoSideEffects(t *testing.T) {
 		}
 		w := new(originWriter)
 		ext := &negotiationExtension{name: "example", offer: "example"}
-		c, err := (&Upgrader{CheckOrigin: tc.check, NewExtensions: func() []Extension { return []Extension{ext} }}).Upgrade(w, r)
+		c, err := upgradeExtensions(w, r, &Upgrader{CheckOrigin: tc.check}, []frameExtension{ext})
 		if c != nil || err != ErrOriginNotAllowed || w.calls != 0 || ext.calls != 0 || w.status != http.StatusForbidden {
 			t.Fatalf("rejection: conn %v err %v hijacks %d extension %d status %d", c, err, w.calls, ext.calls, w.status)
 		}

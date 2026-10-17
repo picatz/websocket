@@ -113,7 +113,7 @@ func TestInterruptedReadAfterPeerReply(t *testing.T) {
 	a, b := net.Pipe()
 	defer b.Close()
 	gate := &closeGate{Conn: a, release: make(chan struct{})}
-	c := websocket.NewConn(gate, websocket.ConnConfig{})
+	c := mustNewConn(gate, websocket.ConnConfig{})
 
 	blocked := make(chan error, 1)
 	go func() {

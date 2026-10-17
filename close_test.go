@@ -28,7 +28,7 @@ func TestCloseWithStatusWire(t *testing.T) {
 	for _, server := range []bool{false, true} {
 		for _, tt := range tests {
 			raw := &memoryConn{Reader: bytes.NewReader(nil)}
-			c := NewConn(raw, ConnConfig{Server: server})
+			c := newTestConn(raw, ConnConfig{Server: server})
 			if err := c.CloseWithStatus(tt.code, tt.reason); err != nil {
 				t.Fatalf("server=%v %v: %v", server, tt.code, err)
 			}
@@ -45,7 +45,7 @@ func TestCloseWithStatusWire(t *testing.T) {
 
 func TestCloseSendsNormalClosure(t *testing.T) {
 	raw := &memoryConn{Reader: bytes.NewReader(nil)}
-	if err := NewConn(raw, ConnConfig{Server: true}).Close(); err != nil {
+	if err := newTestConn(raw, ConnConfig{Server: true}).Close(); err != nil {
 		t.Fatal(err)
 	}
 	if got := failureClosePayload(t, raw.written.Bytes(), true); !bytes.Equal(got, []byte{3, 232}) {
@@ -78,7 +78,7 @@ func TestCloseWithStatusRejectsInvalid(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(fmt.Sprintf("%d/%d", tt.code, len(tt.reason)), func(t *testing.T) {
 			raw := &memoryConn{Reader: bytes.NewReader(nil)}
-			c := NewConn(raw, ConnConfig{})
+			c := newTestConn(raw, ConnConfig{})
 			if err := c.CloseWithStatus(tt.code, tt.reason); !errors.Is(err, ErrInvalidCloseStatus) {
 				t.Fatalf("error = %v, want ErrInvalidCloseStatus", err)
 			}
@@ -105,7 +105,7 @@ func TestReadMessageReturnsPeerCloseError(t *testing.T) {
 			// An unfinished fragmented message does not hide the close status.
 			wire := append(failureWire(server, 0x02, []byte("a")), failureWire(server, 0x88, tt.payload)...)
 			raw := &memoryConn{Reader: bytes.NewReader(wire)}
-			c := NewConn(raw, ConnConfig{Server: server})
+			c := newTestConn(raw, ConnConfig{Server: server})
 			_, data, err := c.ReadMessage()
 			ce, ok := errors.AsType[*CloseError](err)
 			if !ok || *ce != tt.want || data != nil {
@@ -133,7 +133,7 @@ func TestReadMessageReturnsPeerCloseError(t *testing.T) {
 func TestReadMessageReturnsPeerCloseErrorDuringCompression(t *testing.T) {
 	compressed := defaultStoredDeflate([]byte("partial"))
 	wire := append(failureWire(false, 0x42, compressed), failureWire(false, 0x88, append([]byte{3, 233}, "away"...))...)
-	c := NewConn(&memoryConn{Reader: bytes.NewReader(wire)}, ConnConfig{Extensions: []Extension{defaultLimitPMD(t, false)}})
+	c := newTestConn(&memoryConn{Reader: bytes.NewReader(wire)}, ConnConfig{}, []frameExtension{defaultLimitPMD(t, false)}...)
 	_, _, err := c.ReadMessage()
 	if ce, ok := errors.AsType[*CloseError](err); !ok || ce.Code != StatusGoingAway || ce.Reason != "away" {
 		t.Fatalf("ReadMessage = %v, want StatusGoingAway close", err)
@@ -169,8 +169,8 @@ func TestCloseStatus(t *testing.T) {
 // including through ReadMessageContext.
 func TestCloseWithStatusRoundTrip(t *testing.T) {
 	a, b := net.Pipe()
-	server := NewConn(a, ConnConfig{Server: true})
-	client := NewConn(b, ConnConfig{})
+	server := newTestConn(a, ConnConfig{Server: true})
+	client := newTestConn(b, ConnConfig{})
 	t.Cleanup(func() { _ = server.Close(); _ = client.Close() })
 
 	done := make(chan error, 1)

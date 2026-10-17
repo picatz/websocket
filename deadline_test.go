@@ -68,7 +68,7 @@ func TestDeadlineForwarding(t *testing.T) {
 	transportErr := errors.New("transport does not support deadlines")
 	for _, closed := range []bool{false, true} {
 		raw := &deadlineRecordingConn{}
-		c := websocket.NewConn(raw, websocket.ConnConfig{Server: true})
+		c := mustNewConn(raw, websocket.ConnConfig{Server: true})
 		if closed {
 			if err := c.Close(); err != nil {
 				t.Fatal(err)
@@ -137,7 +137,7 @@ func deadlinePipe(t *testing.T, server bool) (*websocket.Conn, *deadlineObserved
 	if err := peer.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	return websocket.NewConn(raw, websocket.ConnConfig{Server: server}), raw, peer
+	return mustNewConn(raw, websocket.ConnConfig{Server: server}), raw, peer
 }
 
 func deadlineWait[T any](t *testing.T, ch <-chan T, what string) T {
@@ -465,7 +465,7 @@ func TestDeadlineConcurrentSettersAndClose(t *testing.T) {
 func TestDeadlineNormalCloseOverridesWriteDeadline(t *testing.T) {
 	for _, callerDeadline := range []time.Time{{}, time.Now().Add(-time.Hour), time.Now().Add(time.Hour)} {
 		raw := &deadlineRecordingConn{}
-		c := websocket.NewConn(raw, websocket.ConnConfig{Server: true})
+		c := mustNewConn(raw, websocket.ConnConfig{Server: true})
 		readDeadline := time.Now().Add(time.Minute)
 		deadlineSet(t, c.SetReadDeadline, readDeadline)
 		deadlineSet(t, c.SetWriteDeadline, callerDeadline)
@@ -489,7 +489,7 @@ func TestDeadlineNormalCloseOverridesWriteDeadline(t *testing.T) {
 
 func TestDeadlineFailurePreservesCallerDeadlines(t *testing.T) {
 	raw := &deadlineRecordingConn{reader: bytes.NewReader([]byte{0x83, 0x80})}
-	c := websocket.NewConn(raw, websocket.ConnConfig{Server: true})
+	c := mustNewConn(raw, websocket.ConnConfig{Server: true})
 	for _, setter := range []func(time.Time) error{c.SetDeadline, c.SetReadDeadline, c.SetWriteDeadline} {
 		deadlineSet(t, setter, time.Now().Add(-time.Second))
 	}

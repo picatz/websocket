@@ -289,8 +289,7 @@ either, as can all three deadline setters. Deadlines are shared transport state;
 callers must coordinate competing updates. The library does not mutate the byte
 slice passed to `WriteMessage`.
 Ping and pong handlers run from `ReadMessage`; a handler must not call
-`ReadMessage` recursively. Extension instances are connection-specific and must
-not be reused across connections.
+`ReadMessage` recursively.
 
 `Close` makes a best-effort normal close notification, limited to one second when
 no other writer is active, then closes the transport. That notification replaces
@@ -369,20 +368,20 @@ conn, err := upgrader.Upgrade(w, r)
   repetitive traffic compresses to a few bytes per message.
 - **Window sizes.** Every window from 8 to 15 bits ([Section 7.1.2]) is supported
   for sending and receiving. A client offers a bare `client_max_window_bits` by
-  default so the server may choose; `WithClientMaxWindowBits` and
-  `WithServerMaxWindowBits` set explicit bounds in either role.
-- **Level and threshold.** `WithCompressionLevel` takes a `compress/flate` level.
-  `WithCompressionThreshold(n)` sends messages shorter than `n` bytes uncompressed,
-  which [Section 6] allows per message.
+  default so the server may choose; `Compression.ClientMaxWindowBits` and
+  `Compression.ServerMaxWindowBits` set explicit bounds in either role.
+- **Level and threshold.** `Compression.Level` takes a `compress/flate` level.
+  `Compression.Threshold` sends shorter messages uncompressed, which
+  [Section 6] allows per message.
 - **Memory.** The state a connection keeps between messages depends on the mode.
   Buffers used while a message is encoded or decoded come from pools shared by
   all connections and are not part of this.
 
   | Mode | Kept per idle connection |
   | --- | --- |
-  | Default (`WithCompressionMemoryLimit(64<<10)`) | Up to 64 KiB: 32 KiB of send and 32 KiB of receive history |
-  | `WithCompressionMemoryLimit(n)` | At most `n` bytes of send and receive history |
-  | `WithCompressionMemoryLimit(0)` (unlimited) | A whole compressor (about 0.5–1 MiB, by level) plus up to 32 KiB of receive history |
+  | Default (`MemoryLimit: 0`, meaning 64 KiB) | Up to 64 KiB: 32 KiB of send and 32 KiB of receive history |
+  | `MemoryLimit: n` | At most `n` bytes of send and receive history |
+  | `MemoryLimit: -1` (unlimited) | A whole compressor (about 0.5–1 MiB, by level) plus up to 32 KiB of receive history |
   | `no_context_takeover` in both directions | Nothing |
 
   A memory limit is enforced through negotiation: each direction gets half and
@@ -392,14 +391,12 @@ conn, err := upgrader.Upgrade(w, r)
   re-indexes its retained history first. That costs CPU per message: tens of
   microseconds for a small message, and about twice the time of the unlimited
   mode for large ones, in exchange for a much smaller footprint per connection
-  and usually a better ratio. `WithCompressionMemoryLimit(0)` selects the
-  faster mode for clients or servers with few connections.
-- **Other extensions.** Custom frame extensions compose with compression. On
-  send, a message is compressed first, then each frame passes through the custom
-  extensions in registration order. On receive, each frame passes through them
-  first and is then decompressed. Built-in compression owns RSV1 ([Section 5]):
-  an extension that changes it fails with `ErrUnsupportedExtensionComposition`,
-  as does enabling more than one built-in instance.
+  and usually a better ratio. `MemoryLimit: -1` selects the faster mode for
+  clients or servers with few connections.
+- **Manual handshakes.** A `Conn` from `NewConn` compresses when
+  `ConnConfig.Extensions` holds the agreed `permessage-deflate` response value;
+  `ConnConfig.Compression` tunes it. permessage-deflate is the only extension
+  the package implements.
 
 Received data is checked as it decodes, but Go's inflater can hold up to 32 KiB of
 output before exposing it, so invalid UTF-8 or an exceeded small limit may be
@@ -537,20 +534,15 @@ Docker.
   case-insensitively; see `Dialer.Header` and `Upgrader.Header` for the lists.
   Ordinary repeated fields (including `Set-Cookie`) are preserved. Callers still
   own ordinary field-specific semantics
-- Direct built-in `ProcessIncomingFrame` and `ProcessOutgoingFrame` callbacks
-  accept complete Text/Binary messages only; nonfinal data and Continuation
-  callbacks return `ErrFragmentedCompression`. Controls and disabled callbacks
-  remain no-ops. Use `Conn` for fragmented wire messages. Do not use direct
-  callbacks concurrently with Conn I/O or share an instance between connections
 - Once a compressed message has started, a failure while sending it (a
-  transport error, or a custom extension rejecting a frame) poisons later
+  transport error) poisons later
   writes, because the frame stream and compression context cannot be resumed
 - Any `ReadMessage` error terminates the connection. The detecting call preserves
   its original error; later reads and valid writes fail with `io.ErrClosedPipe`.
   Known protocol, invalid UTF-8, and configured size violations make a single
   best-effort Close notification with status 1002, 1007, or 1009 when the writer
-  is idle and safe. A busy or failed writer, transport/callback error, or enabled
-  custom extension instead causes an immediate transport abort. No additional
+  is idle and safe. A busy or failed writer, or a transport or callback error,
+  instead causes an immediate transport abort. No additional
   peer data is processed after failure
 - Automatic failure notification has a one-second transport-abort watchdog and
   preserves existing transport deadlines. For `Dial` and concrete `*tls.Conn`
