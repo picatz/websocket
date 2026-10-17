@@ -180,7 +180,7 @@ func TestDialExtensionSelection(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 			defer cancel()
-			conn, resp, err := Dial(ctx, "ws"+srv.URL[4:], WithExtensions(extensions...))
+			conn, resp, err := (&Dialer{NewExtensions: func() []Extension { return extensions }}).Dial(ctx, "ws"+srv.URL[4:])
 			if conn != nil {
 				defer conn.conn.Close()
 			}
@@ -240,7 +240,7 @@ func TestDialRejectsInvalidExtensionOfferBeforeConnect(t *testing.T) {
 	defer func() { listener.Close(); <-done }()
 	for _, offer := range []string{"", "example;", "example\r\nInjected: true", `example; option="a,b"`} {
 		ext := &negotiationExtension{name: "example", offer: offer}
-		conn, resp, err := Dial(t.Context(), "ws://"+listener.Addr().String(), WithExtensions(ext))
+		conn, resp, err := (&Dialer{NewExtensions: func() []Extension { return []Extension{ext} }}).Dial(t.Context(), "ws://"+listener.Addr().String())
 		if conn != nil || resp != nil || !errors.Is(err, ErrInvalidExtension) || !errors.Is(err, ErrInvalidHandshakeHeader) || connects.Load() != 0 || ext.calls != 0 {
 			t.Fatalf("offer %q: Dial = %v, %v, %v; connects = %d, callbacks = %d", offer, conn, resp, err, connects.Load(), ext.calls)
 		}
@@ -255,13 +255,13 @@ func TestUpgradeExtensionFieldNames(t *testing.T) {
 		before := r.Header.Clone()
 		raw := &memoryConn{Reader: bytes.NewReader(nil)}
 		w := &hijackResponse{httptest.NewRecorder(), raw, bufio.NewReadWriter(bufio.NewReader(raw), bufio.NewWriter(raw))}
-		var options []UpgradeOption
+		u := &Upgrader{}
 		want := ""
 		if configure {
-			options = append(options, WithUpgradeExtensions(NewPerMessageDeflateExtension()))
+			u.Compression = &Compression{}
 			want = "permessage-deflate"
 		}
-		conn, err := Upgrade(w, r, options...)
+		conn, err := u.Upgrade(w, r)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -309,7 +309,7 @@ func TestUpgradeExtensionSelection(t *testing.T) {
 			ext := &negotiationExtension{name: "example", offer: tc.selection, enabled: true, err: tc.callback}
 			raw := &memoryConn{Reader: bytes.NewReader(nil)}
 			w := &extensionHijacker{hijackResponse: &hijackResponse{httptest.NewRecorder(), raw, bufio.NewReadWriter(bufio.NewReader(raw), bufio.NewWriter(raw))}}
-			conn, err := Upgrade(w, r, WithUpgradeExtensions(ext))
+			conn, err := (&Upgrader{NewExtensions: func() []Extension { return []Extension{ext} }}).Upgrade(w, r)
 			if (err == nil) != tc.valid {
 				t.Fatalf("Upgrade = %v, %v; valid = %v", conn, err, tc.valid)
 			}

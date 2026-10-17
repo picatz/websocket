@@ -40,7 +40,7 @@ func mustParsePMD(t *testing.T, params []extensionParameter) pmdParameters {
 func sendWire(t *testing.T, pmd *perMessageDeflate, messages ...[]byte) []byte {
 	t.Helper()
 	raw := &memoryConn{Reader: bytes.NewReader(nil)}
-	c := NewConn(raw, false, []Extension{pmd})
+	c := NewConn(raw, ConnConfig{Extensions: []Extension{pmd}})
 	for _, m := range messages {
 		if err := c.WriteMessage(BinaryMessage, m); err != nil {
 			t.Fatal(err)
@@ -81,7 +81,7 @@ func wireFrames(t *testing.T, wire []byte) []*Frame {
 // readAll decodes every message on wire with a server Conn using pmd.
 func readAll(t *testing.T, pmd *perMessageDeflate, wire []byte) [][]byte {
 	t.Helper()
-	c := NewConn(&memoryConn{Reader: bytes.NewReader(wire)}, true, []Extension{pmd})
+	c := NewConn(&memoryConn{Reader: bytes.NewReader(wire)}, ConnConfig{Server: true, Extensions: []Extension{pmd}})
 	var out [][]byte
 	for {
 		_, data, err := c.ReadMessage()
@@ -269,7 +269,7 @@ func TestPMDSendAllocations(t *testing.T) {
 	}
 	send, _ := pmdLink(t, "permessage-deflate")
 	raw := &memoryConn{Reader: bytes.NewReader(nil)}
-	c := NewConn(raw, false, []Extension{send})
+	c := NewConn(raw, ConnConfig{Extensions: []Extension{send}})
 	msg := bytes.Repeat([]byte("steady state message "), 100)
 	c.WriteMessage(BinaryMessage, msg)
 	allocs := testing.AllocsPerRun(100, func() {
@@ -357,7 +357,7 @@ func TestPMDMemoryLimitRetention(t *testing.T) {
 			done := make(chan struct{})
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				defer close(done)
-				c, err := Upgrade(w, r, WithUpgradeExtensions(server), WithUpgradeMaxMessageSize(-1))
+				c, err := (&Upgrader{NewExtensions: func() []Extension { return []Extension{server} }, MaxMessageSize: -1}).Upgrade(w, r)
 				if err != nil {
 					t.Error(err)
 					return
@@ -375,7 +375,7 @@ func TestPMDMemoryLimitRetention(t *testing.T) {
 				}
 			}))
 			defer srv.Close()
-			c, _, err := Dial(t.Context(), "ws"+srv.URL[4:], WithExtensions(client), WithMaxMessageSize(-1))
+			c, _, err := (&Dialer{NewExtensions: func() []Extension { return []Extension{client} }, MaxMessageSize: -1}).Dial(t.Context(), "ws"+srv.URL[4:])
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -465,7 +465,7 @@ func TestPMDComposesWithFrameExtensions(t *testing.T) {
 	text := bytes.Repeat([]byte("composed "), 1000)
 	serverXor := &xorExtension{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		c, err := Upgrade(w, r, WithUpgradeExtensions(NewPerMessageDeflateExtension(), serverXor), WithUpgradeMaxMessageSize(-1))
+		c, err := (&Upgrader{NewExtensions: func() []Extension { return []Extension{NewPerMessageDeflateExtension(), serverXor} }, MaxMessageSize: -1}).Upgrade(w, r)
 		if err != nil {
 			t.Error(err)
 			return
@@ -484,7 +484,7 @@ func TestPMDComposesWithFrameExtensions(t *testing.T) {
 	}))
 	defer srv.Close()
 	clientXor := &xorExtension{}
-	c, resp, err := Dial(t.Context(), "ws"+srv.URL[4:], WithExtensions(NewPerMessageDeflateExtension(), clientXor), WithMaxMessageSize(-1))
+	c, resp, err := (&Dialer{NewExtensions: func() []Extension { return []Extension{NewPerMessageDeflateExtension(), clientXor} }, MaxMessageSize: -1}).Dial(t.Context(), "ws"+srv.URL[4:])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -512,7 +512,7 @@ func TestPMDCompositionRejectsRSV1Changes(t *testing.T) {
 	}
 	custom := &xorExtension{enabled: true, tamperRSV1: true}
 	raw := &memoryConn{Reader: bytes.NewReader(nil)}
-	c := NewConn(raw, false, []Extension{pmd, custom})
+	c := NewConn(raw, ConnConfig{Extensions: []Extension{pmd, custom}})
 	err := c.WriteMessage(BinaryMessage, []byte("hello"))
 	if !errors.Is(err, ErrUnsupportedExtensionComposition) || raw.written.Len() != 0 {
 		t.Fatalf("RSV1 change = %v, wire %x", err, raw.written.Bytes())
@@ -527,7 +527,7 @@ func TestPMDCloseReleasesSendCompressor(t *testing.T) {
 	for _, limit := range []int{0, DefaultCompressionMemoryLimit} {
 		send, _ := pmdLink(t, "permessage-deflate", WithCompressionMemoryLimit(limit))
 		raw := &memoryConn{Reader: bytes.NewReader(nil)}
-		c := NewConn(raw, false, []Extension{send})
+		c := NewConn(raw, ConnConfig{Extensions: []Extension{send}})
 		if err := c.WriteMessage(BinaryMessage, []byte("hello hello")); err != nil {
 			t.Fatal(err)
 		}

@@ -3,7 +3,9 @@
 //
 // Dial opens a client connection to a ws or wss URL, and Upgrade takes over an
 // HTTP/1.1 request on a server. Both return a *Conn, which sends and receives
-// whole text and binary messages:
+// whole text and binary messages. A Dialer or Upgrader carries settings such
+// as subprotocols, compression and limits; their zero values are the package
+// defaults, and Dial and Upgrade use them:
 //
 //	conn, _, err := websocket.Dial(ctx, "wss://example.com/socket")
 //	if err != nil {
@@ -66,39 +68,39 @@
 //
 // # Limits and security
 //
-// Dial and Upgrade reject incoming messages larger than DefaultMaxMessageSize
-// (1 MiB) unless an option sets another limit; the limit applies to each frame
-// and to the reassembled, decompressed message. Dial also bounds the HTTP
-// response head to DefaultMaxResponseHeaderBytes. A connection from NewConn is
-// unlimited unless WithMaxBytes is given.
+// Connections reject incoming messages larger than DefaultMaxMessageSize
+// (1 MiB) unless MaxMessageSize sets another limit, where a negative value
+// means none; the limit applies to each frame and to the reassembled,
+// decompressed message. Dial also bounds the HTTP response head to
+// DefaultMaxResponseHeaderBytes.
 //
 // Upgrade accepts requests without an Origin header, as sent by non-browser
 // clients, and otherwise requires the Origin to match the request's host and
 // TLS scheme. It never trusts Forwarded or X-Forwarded-* headers, so behind a
-// TLS-terminating proxy use WithUpgradeOriginCheck with an exact allowlist.
+// TLS-terminating proxy set Upgrader.CheckOrigin to an exact allowlist.
 // Origin checks protect browsers from cross-site use; they are not
 // authentication.
 //
 // When Upgrade rejects a request it writes the HTTP error itself, so the
 // handler should just return: 403 for ErrOriginNotAllowed, and 400, 405 or 426
-// for a request matching ErrBadHandshake.
+// for a request matching ErrBadHandshake. Upgrader.Error replaces the body.
 //
 // # Proxies and custom transports
 //
-// Dial connects directly unless WithProxy selects an HTTP or HTTPS proxy, for
+// Dial connects directly unless Dialer.Proxy selects an HTTP or HTTPS proxy, for
 // example http.ProxyFromEnvironment. It then tunnels with CONNECT and runs the
 // handshake, and TLS for wss, end to end inside the tunnel. Redirects are
-// never followed. WithNetDialContext replaces the TCP dialer, for SOCKS, Unix
-// sockets or tests. NewConn runs the protocol over any net.Conn whose
-// handshake the caller has already performed.
+// never followed. Dialer.NetDialContext replaces the TCP dialer, for SOCKS,
+// Unix sockets or tests. NewConn runs the protocol over any net.Conn whose
+// handshake the caller has already performed, configured by a ConnConfig.
 //
 // # Compression
 //
-// NewPerMessageDeflateExtension opts into permessage-deflate on either side.
+// A non-nil Compression on a Dialer or Upgrader opts into permessage-deflate.
 // Messages are compressed as one DEFLATE stream across any number of frames,
 // with context takeover unless the peers negotiate otherwise and with any
-// window from 8 to 15 bits. Each connection needs its own instance; pass a
-// new one to every Dial or Upgrade. By default a connection keeps about 64 KiB of
+// window from 8 to 15 bits. Each connection gets its own compression state,
+// so one Dialer or Upgrader may be shared. By default a connection keeps about 64 KiB of
 // compression state between messages (DefaultCompressionMemoryLimit);
 // compressors are pooled across connections while idle.
 //

@@ -60,12 +60,12 @@ func TestNode(t *testing.T) {
 
 // testServer serves the endpoints the js/wasm tests dial.
 func testServer() http.Handler {
-	anyOrigin := websocket.WithUpgradeOriginCheck(func(*http.Request, string) bool { return true })
+	anyOrigin := &websocket.Upgrader{CheckOrigin: func(*http.Request, string) bool { return true }}
 	mux := http.NewServeMux()
 
 	// /echo returns every message unchanged.
 	mux.HandleFunc("/echo", func(w http.ResponseWriter, r *http.Request) {
-		conn, err := websocket.Upgrade(w, r, anyOrigin)
+		conn, err := anyOrigin.Upgrade(w, r)
 		if err != nil {
 			return
 		}
@@ -83,7 +83,7 @@ func testServer() http.Handler {
 
 	// /subprotocol selects "chat" and reports it back.
 	mux.HandleFunc("/subprotocol", func(w http.ResponseWriter, r *http.Request) {
-		conn, err := websocket.Upgrade(w, r, anyOrigin, websocket.WithResponseHeader(http.Header{"Sec-WebSocket-Protocol": {"chat"}}))
+		conn, err := (&websocket.Upgrader{CheckOrigin: anyOrigin.CheckOrigin, Subprotocols: []string{"chat"}}).Upgrade(w, r)
 		if err != nil {
 			return
 		}
@@ -94,7 +94,7 @@ func testServer() http.Handler {
 
 	// /goodbye sends two messages and closes with StatusGoingAway.
 	mux.HandleFunc("/goodbye", func(w http.ResponseWriter, r *http.Request) {
-		conn, err := websocket.Upgrade(w, r, anyOrigin)
+		conn, err := anyOrigin.Upgrade(w, r)
 		if err != nil {
 			return
 		}
@@ -109,7 +109,7 @@ func testServer() http.Handler {
 	// /lastclose then sends back as "<code> <reason>".
 	var lastClose = make(chan string, 1)
 	mux.HandleFunc("/closestatus", func(w http.ResponseWriter, r *http.Request) {
-		conn, err := websocket.Upgrade(w, r, anyOrigin)
+		conn, err := anyOrigin.Upgrade(w, r)
 		if err != nil {
 			return
 		}
@@ -125,7 +125,7 @@ func testServer() http.Handler {
 		}
 	})
 	mux.HandleFunc("/lastclose", func(w http.ResponseWriter, r *http.Request) {
-		conn, err := websocket.Upgrade(w, r, anyOrigin)
+		conn, err := anyOrigin.Upgrade(w, r)
 		if err != nil {
 			return
 		}
@@ -141,7 +141,7 @@ func testServer() http.Handler {
 
 	// /stall upgrades and never reads, until the client goes away.
 	mux.HandleFunc("/stall", func(w http.ResponseWriter, r *http.Request) {
-		conn, err := websocket.Upgrade(w, r, anyOrigin)
+		conn, err := anyOrigin.Upgrade(w, r)
 		if err != nil {
 			return
 		}
@@ -159,7 +159,7 @@ func testServer() http.Handler {
 
 	// /silent upgrades and then only reads, so a client read never completes.
 	mux.HandleFunc("/silent", func(w http.ResponseWriter, r *http.Request) {
-		conn, err := websocket.Upgrade(w, r, anyOrigin)
+		conn, err := anyOrigin.Upgrade(w, r)
 		if err != nil {
 			return
 		}

@@ -54,7 +54,7 @@ func TestUpgradeMiddlewareLoopback(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		inner := &middlewareResponseWriter{ResponseWriter: w}
 		outer := &middlewareResponseWriter{ResponseWriter: inner}
-		conn, err := Upgrade(outer, r, WithResponseHeader(http.Header{"X-Websocket-Test": {"wrapped"}}))
+		conn, err := (&Upgrader{Header: http.Header{"X-Websocket-Test": {"wrapped"}}}).Upgrade(outer, r)
 		if err != nil {
 			done <- err
 			http.Error(w, "upgrade failed", http.StatusInternalServerError)
@@ -106,7 +106,7 @@ func TestUpgradeMiddlewareLoopback(t *testing.T) {
 	if resp.Header.Get("Sec-WebSocket-Accept") != computeAcceptKey("dGhlIHNhbXBsZSBub25jZQ==") {
 		t.Fatal("invalid handshake accept")
 	}
-	client := NewConn(peer, false, nil)
+	client := NewConn(peer, ConnConfig{})
 	client.rw.Reader = reader
 	if opcode, data, err := client.ReadMessage(); err != nil || opcode != TextMessage || string(data) != "first" {
 		t.Fatalf("echo = %d, %q, %v", opcode, data, err)
@@ -261,7 +261,7 @@ func TestUpgradeMiddlewareValidatesBeforeUnwrap(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		change func(*http.Request)
-		opts   []UpgradeOption
+		u      *Upgrader
 		want   error
 	}{
 		{"connection", func(r *http.Request) { r.Header.Del("Connection") }, nil, ErrInvalidConnectionHeader},
@@ -271,7 +271,7 @@ func TestUpgradeMiddlewareValidatesBeforeUnwrap(t *testing.T) {
 		{"key", func(r *http.Request) { r.Header.Set("Sec-WebSocket-Key", "invalid") }, nil, ErrInvalidSecKey},
 		{"protocol", func(r *http.Request) { r.Header.Set("Sec-WebSocket-Protocol", "bad token") }, nil, ErrInvalidSubprotocol},
 		{"extensions", func(r *http.Request) { r.Header.Set("Sec-WebSocket-Extensions", "invalid;") }, nil, ErrInvalidExtension},
-		{"custom response", nil, []UpgradeOption{WithResponseHeader(http.Header{"X-Test": {"bad\r\nheader"}})}, ErrInvalidHandshakeHeader},
+		{"custom response", nil, &Upgrader{Header: http.Header{"X-Test": {"bad\r\nheader"}}}, ErrInvalidHandshakeHeader},
 	} {
 		status := upgradeErrorStatus(tc.want)
 		t.Run(tc.name, func(t *testing.T) {
@@ -281,7 +281,7 @@ func TestUpgradeMiddlewareValidatesBeforeUnwrap(t *testing.T) {
 			}
 			inner := &countingHijacker{ResponseRecorder: httptest.NewRecorder()}
 			outer := &middlewareResponseWriter{ResponseWriter: inner}
-			conn, err := Upgrade(outer, r, tc.opts...)
+			conn, err := tc.u.Upgrade(outer, r)
 			if conn != nil || !errors.Is(err, tc.want) {
 				t.Fatalf("Upgrade = %v, %v; want %v", conn, err, tc.want)
 			}

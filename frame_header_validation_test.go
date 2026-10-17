@@ -30,7 +30,7 @@ func (c *headerOnlyConn) Read(p []byte) (int, error) {
 func requireHeaderRejection(t *testing.T, wire []byte, server bool, limit int, extensions []Extension, want error) {
 	t.Helper()
 	raw := &headerOnlyConn{memoryConn: memoryConn{Reader: bytes.NewReader(wire)}}
-	c := NewConn(raw, server, extensions, WithMaxBytes(limit))
+	c := NewConn(raw, ConnConfig{Server: server, Extensions: extensions, MaxMessageSize: limit})
 	_, _, err := c.ReadMessage()
 	if !errors.Is(err, want) || raw.bodyReads != 0 {
 		t.Fatalf("ReadMessage = %v, reads after header = %d; want %v without reading a body", err, raw.bodyReads, want)
@@ -316,7 +316,7 @@ func TestCloseInterruptsFrameReadStages(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			raw := &stalledFrameConn{memoryConn: memoryConn{Reader: bytes.NewReader(tc.wire)}, waiting: make(chan struct{}), closed: make(chan struct{})}
 			defer raw.Close()
-			c := NewConn(raw, tc.server, nil, WithMaxBytes(2))
+			c := NewConn(raw, ConnConfig{Server: tc.server, MaxMessageSize: 2})
 			result := make(chan error, 1)
 			go func() { _, _, err := c.ReadMessage(); result <- err }()
 			select {

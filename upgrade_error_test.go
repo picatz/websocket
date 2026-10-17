@@ -118,3 +118,38 @@ func TestUpgradeHijackErrorIsWrapped(t *testing.T) {
 		t.Fatalf("wrote %d %q after a hijack failure", w.Code, w.Body.String())
 	}
 }
+
+// Upgrader.Error replaces the body, keeps the required header fields, and
+// receives the same error Upgrade returns.
+func TestUpgraderErrorHook(t *testing.T) {
+	var gotStatus int
+	var gotErr error
+	u := &Upgrader{Error: func(w http.ResponseWriter, r *http.Request, status int, err error) {
+		gotStatus, gotErr = status, err
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(`{"error":"upgrade required"}`))
+	}}
+	r := upgradeRequest()
+	r.Header.Set("Sec-WebSocket-Version", "8")
+	w := httptest.NewRecorder()
+	conn, err := u.Upgrade(w, r)
+	if conn != nil || !errors.Is(err, ErrBadHandshake) || !errors.Is(err, ErrUnsupportedVersion) {
+		t.Fatalf("Upgrade = %v, %v", conn, err)
+	}
+	if gotStatus != http.StatusUpgradeRequired || gotErr != err {
+		t.Fatalf("hook got %d, %v; want 426 and the returned error", gotStatus, gotErr)
+	}
+	if w.Code != http.StatusUpgradeRequired || w.Body.String() != `{"error":"upgrade required"}` {
+		t.Fatalf("response = %d %q", w.Code, w.Body.String())
+	}
+	if got := w.Header().Get("Sec-WebSocket-Version"); got != "13" {
+		t.Fatalf("Sec-WebSocket-Version = %q, want 13", got)
+	}
+
+	// The hook is not called when nothing is written.
+	gotStatus = 0
+	if _, err := u.Upgrade(failingHijacker{httptest.NewRecorder(), errors.New("broke")}, upgradeRequest()); !errors.Is(err, ErrHandshakeFailed) || gotStatus != 0 {
+		t.Fatalf("hook called with %d for %v", gotStatus, err)
+	}
+}
