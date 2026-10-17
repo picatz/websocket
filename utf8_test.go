@@ -109,7 +109,7 @@ func TestReadMessageUTF8RejectsBeforeFIN(t *testing.T) {
 					wire = append(wire, failureWire(server, 0x8a, nil)...)
 					wire = append(wire, failureWire(server, 0x00, invalid[split:])...)
 					raw := &failureMemoryConn{memoryConn: memoryConn{Reader: bytes.NewReader(wire)}}
-					c := NewConn(raw, server, nil)
+					c := NewConn(raw, ConnConfig{Server: server})
 					op, p, err := c.ReadMessage()
 					if op != 0 || p != nil || err != ErrInvalidFrame {
 						t.Fatalf("read = %v %x %v", op, p, err)
@@ -140,7 +140,7 @@ func TestReadMessageUTF8RejectsWhilePeerWaits(t *testing.T) {
 			defer raw.Close()
 			defer peer.Close()
 			peer.SetDeadline(time.Now().Add(3 * time.Second))
-			c := NewConn(raw, server, nil)
+			c := NewConn(raw, ConnConfig{Server: server})
 			done := make(chan error, 1)
 			go func() { _, _, err := c.ReadMessage(); done <- err }()
 			// ED is incomplete; A0 proves a surrogate without a final frame.

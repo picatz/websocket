@@ -118,7 +118,7 @@ func TestPingReturnsWhenConnectionCloses(t *testing.T) {
 func TestPingAfterClose(t *testing.T) {
 	a, b := net.Pipe()
 	defer b.Close()
-	closed := websocket.NewConn(a, false, nil)
+	closed := websocket.NewConn(a, websocket.ConnConfig{})
 	go io.Copy(io.Discard, b)
 	if err := closed.Close(); err != nil {
 		t.Fatal(err)
@@ -160,7 +160,7 @@ func TestPingCancelDuringStalledWriteAborts(t *testing.T) {
 
 func TestPingWithCompression(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		c, err := websocket.Upgrade(w, r, websocket.WithUpgradeExtensions(websocket.NewPerMessageDeflateExtension()))
+		c, err := (&websocket.Upgrader{Compression: &websocket.Compression{}}).Upgrade(w, r)
 		if err != nil {
 			t.Error(err)
 			return
@@ -177,8 +177,7 @@ func TestPingWithCompression(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	client, resp, err := websocket.Dial(t.Context(), "ws"+strings.TrimPrefix(server.URL, "http"),
-		websocket.WithExtensions(websocket.NewPerMessageDeflateExtension()))
+	client, resp, err := (&websocket.Dialer{Compression: &websocket.Compression{}}).Dial(t.Context(), "ws"+strings.TrimPrefix(server.URL, "http"))
 	if err != nil {
 		t.Fatal(err)
 	}

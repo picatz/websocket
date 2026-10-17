@@ -54,7 +54,7 @@ func TestWriteMessagePreservesTimeoutCause(t *testing.T) {
 			if err := raw.SetWriteDeadline(time.Now().Add(-time.Second)); err != nil {
 				t.Fatal(err)
 			}
-			err := NewConn(raw, true, nil).WriteMessage(BinaryMessage, bytes.Repeat([]byte{'x'}, size))
+			err := NewConn(raw, ConnConfig{Server: true}).WriteMessage(BinaryMessage, bytes.Repeat([]byte{'x'}, size))
 			if !errors.Is(err, ErrWriteFailed) {
 				t.Fatalf("error = %v, want ErrWriteFailed", err)
 			}
@@ -75,7 +75,7 @@ func TestWriteErrorsPreserveClosedPipeCause(t *testing.T) {
 			raw, peer := net.Pipe()
 			defer raw.Close()
 			peer.Close()
-			conn := NewConn(raw, true, nil)
+			conn := NewConn(raw, ConnConfig{Server: true})
 			var err error
 			if control {
 				err = conn.WriteControlFrame(PingMessage, []byte("ping"))

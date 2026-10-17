@@ -19,7 +19,7 @@ func TestPMDMessageRFCFragmentation(t *testing.T) {
 				wire = append(wire, failureWire(server, 0x80, payload[split:])...)
 				wire = append(wire, failureWire(server, 0x81, []byte("next"))...)
 				raw := &memoryConn{Reader: bytes.NewReader(wire)}
-				c := NewConn(raw, server, []Extension{p})
+				c := NewConn(raw, ConnConfig{Server: server, Extensions: []Extension{p}})
 				typ, got, err := c.ReadMessage()
 				if err != nil || typ != TextMessage || string(got) != "Hello" {
 					t.Fatalf("server=%v payload=%s split=%d: %v %q", server, encoded, split, err, got)
@@ -43,7 +43,7 @@ func TestPMDMessageTakeoverAndFinalStreams(t *testing.T) {
 		for _, payload := range [][]byte{first, second, finals} {
 			wire = append(wire, failureWire(server, 0xc1, payload)...)
 		}
-		c := NewConn(&memoryConn{Reader: bytes.NewReader(wire)}, server, []Extension{p})
+		c := NewConn(&memoryConn{Reader: bytes.NewReader(wire)}, ConnConfig{Server: server, Extensions: []Extension{p}})
 		for _, want := range []string{"Hello", "Hello", "HelloHello"} {
 			_, got, err := c.ReadMessage()
 			if err != nil || string(got) != want {
@@ -73,7 +73,7 @@ func FuzzPMDReadMessage(f *testing.F) {
 		if err := p.Negotiate("permessage-deflate"); err != nil {
 			t.Fatal(err)
 		}
-		c := NewConn(&memoryConn{Reader: bytes.NewReader(wire)}, server, []Extension{p}, WithMaxBytes(limit))
+		c := NewConn(&memoryConn{Reader: bytes.NewReader(wire)}, ConnConfig{Server: server, Extensions: []Extension{p}, MaxMessageSize: limit})
 		for range 4 {
 			kind, data, err := c.ReadMessage()
 			if err != nil {

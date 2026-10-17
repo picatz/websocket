@@ -22,7 +22,7 @@ func BenchmarkReadTextMessage(b *testing.B) {
 					wire := benchmarkWire(payload, false, fragments)
 					wire[0] = wire[0]&0xf0 | byte(TextMessage)
 					reader := bytes.NewReader(wire)
-					c := NewConn(&benchmarkConn{reader: reader, writer: io.Discard}, false, nil)
+					c := NewConn(&benchmarkConn{reader: reader, writer: io.Discard}, ConnConfig{})
 					b.SetBytes(int64(size))
 					b.ReportAllocs()
 					for b.Loop() {

@@ -13,8 +13,8 @@ import (
 //   - ErrInvalidMethod: 405 Method Not Allowed, with Allow: GET.
 //   - ErrUnsupportedVersion: 426 Upgrade Required, with
 //     Sec-WebSocket-Version: 13 (RFC 6455 section 4.4).
-//   - ErrNotHijacker, and invalid caller configuration such as a reserved
-//     response header (ErrInvalidHandshakeHeader): 500 Internal Server Error.
+//   - ErrNotHijacker, and an invalid Upgrader (ErrInvalidConfig, which
+//     ErrInvalidHandshakeHeader also matches): 500 Internal Server Error.
 //   - ErrHandshakeFailed: 0. The transport may already be hijacked.
 //   - Any other error, which is a malformed client handshake: 400 Bad Request.
 //
@@ -29,7 +29,7 @@ func upgradeErrorStatus(err error) int {
 		return http.StatusMethodNotAllowed
 	case errors.Is(err, ErrUnsupportedVersion):
 		return http.StatusUpgradeRequired
-	case errors.Is(err, ErrNotHijacker), errors.Is(err, ErrInvalidHandshakeHeader):
+	case errors.Is(err, ErrNotHijacker), errors.Is(err, ErrInvalidConfig):
 		return http.StatusInternalServerError
 	default:
 		return http.StatusBadRequest
@@ -38,9 +38,9 @@ func upgradeErrorStatus(err error) int {
 
 // writeUpgradeError writes the response upgradeErrorStatus selects and returns
 // err, wrapped with ErrBadHandshake when the client's request was at fault.
-// Bodies are fixed text: error details stay in the returned error for the
-// server's logs.
-func writeUpgradeError(w http.ResponseWriter, err error) error {
+// It sets the header fields the status requires, then calls write, or
+// defaultUpgradeError when write is nil.
+func writeUpgradeError(w http.ResponseWriter, r *http.Request, err error, write func(http.ResponseWriter, *http.Request, int, error)) error {
 	status := upgradeErrorStatus(err)
 	if status == 0 {
 		return err
@@ -54,6 +54,15 @@ func writeUpgradeError(w http.ResponseWriter, err error) error {
 	case http.StatusUpgradeRequired:
 		w.Header().Set("Sec-WebSocket-Version", "13")
 	}
-	http.Error(w, "WebSocket: "+http.StatusText(status), status)
+	if write == nil {
+		write = defaultUpgradeError
+	}
+	write(w, r, status, err)
 	return err
+}
+
+// defaultUpgradeError writes a fixed plain-text body. Error details stay in
+// the returned error for the server's logs.
+func defaultUpgradeError(w http.ResponseWriter, _ *http.Request, status int, _ error) {
+	http.Error(w, "WebSocket: "+http.StatusText(status), status)
 }

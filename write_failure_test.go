@@ -86,7 +86,7 @@ func TestWriteFailureWritePoisonPreventsWireReuse(t *testing.T) {
 					cause := &failedWriteError{"synthetic write error"}
 					raw := &failedWriteRecorder{reader: bytes.NewReader(failureWire(server, 0x82, []byte("inbound"))), prefix: prefix, cause: cause}
 					ext := &failedWriteExtension{}
-					c := NewConn(raw, server, []Extension{ext})
+					c := NewConn(raw, ConnConfig{Server: server, Extensions: []Extension{ext}})
 					data := []byte("outbound")
 					if stage == "header" {
 						c.rw.Writer = bufio.NewWriterSize(raw, 1)
@@ -155,7 +155,7 @@ func TestWriteFailureWritePreflightRemainsUsable(t *testing.T) {
 	for _, server := range []bool{false, true} {
 		raw := &failedWriteRecorder{reader: bytes.NewReader(nil)}
 		ext := &failedWriteExtension{}
-		c := NewConn(raw, server, []Extension{ext})
+		c := NewConn(raw, ConnConfig{Server: server, Extensions: []Extension{ext}})
 		for _, write := range []func() error{
 			func() error { return c.WriteMessage(PingMessage, nil) },
 			func() error { return c.WriteMessage(TextMessage, []byte{255}) },
@@ -227,7 +227,7 @@ func failedWritePair(t *testing.T) (*Conn, *failedWritePipe, net.Conn) {
 		t.Fatal(err)
 	}
 	raw := &failedWritePipe{Conn: a, reads: make(chan struct{}, 16)}
-	return NewConn(raw, true, nil), raw, b
+	return NewConn(raw, ConnConfig{Server: true}), raw, b
 }
 func failedWriteTimeout(t *testing.T, err error) {
 	t.Helper()
@@ -337,7 +337,7 @@ func TestWriteFailureRetrySkipsStalledExtension(t *testing.T) {
 func TestWriteFailureShortTransportWriteBecomesSticky(t *testing.T) {
 	for _, n := range []int{0, 1} {
 		raw := &failedWriteRecorder{reader: bytes.NewReader(nil), prefix: n, shortOnce: true}
-		c := NewConn(raw, true, nil)
+		c := NewConn(raw, ConnConfig{Server: true})
 		for range 3 {
 			err := c.WriteMessage(BinaryMessage, []byte("payload"))
 			if !errors.Is(err, ErrWriteFailed) || !errors.Is(err, io.ErrShortWrite) {
@@ -360,7 +360,7 @@ func TestWriteFailureFailedControlWritesKeepReadLifetime(t *testing.T) {
 		for _, opcode := range []Opcode{PingMessage, PongMessage, CloseMessage} {
 			cause := &failedWriteError{"control transport failure"}
 			raw := &failedWriteRecorder{reader: bytes.NewReader(failureWire(server, 0x82, []byte("inbound"))), prefix: 1, cause: cause}
-			c := NewConn(raw, server, nil)
+			c := NewConn(raw, ConnConfig{Server: server})
 			requireWriteCause(t, c.WriteControlFrame(opcode, nil), cause)
 			if c.closeSent || c.closed.Load() || c.writeErr == nil || raw.closes != 0 {
 				t.Fatalf("failed %v changed lifetime", opcode)
@@ -390,7 +390,7 @@ func TestWriteFailureRetrySkipsMutatingAndFailingExtension(t *testing.T) {
 		}
 		return nil
 	}
-	c := NewConn(raw, true, []Extension{ext})
+	c := NewConn(raw, ConnConfig{Server: true, Extensions: []Extension{ext}})
 	requireWriteCause(t, c.WriteMessage(BinaryMessage, []byte("first")), cause)
 	retry := []byte("retry")
 	err := c.WriteMessage(BinaryMessage, retry)
@@ -431,7 +431,7 @@ func TestWriteFailureQueuedWriteSkipsExtensions(t *testing.T) {
 	var once sync.Once
 	defer once.Do(func() { close(raw.release) })
 	ext := &failedWriteExtension{}
-	c := NewConn(raw, true, []Extension{ext})
+	c := NewConn(raw, ConnConfig{Server: true, Extensions: []Extension{ext}})
 	results := make(chan error, 2)
 	go func() { results <- c.WriteMessage(BinaryMessage, []byte("one")) }()
 	failedWriteAwait(t, raw.entered)
@@ -454,7 +454,7 @@ func TestWriteFailureValidationPrecedence(t *testing.T) {
 	cause := &failedWriteError{"transport failure"}
 	raw := &failedWriteRecorder{reader: bytes.NewReader(nil), cause: cause}
 	ext := &failedWriteExtension{}
-	c := NewConn(raw, true, []Extension{ext})
+	c := NewConn(raw, ConnConfig{Server: true, Extensions: []Extension{ext}})
 	requireWriteCause(t, c.WriteMessage(BinaryMessage, nil), cause)
 	for _, closed := range []bool{false, true} {
 		if closed {
@@ -502,7 +502,7 @@ func TestWriteFailureAfterSuccessfulClose(t *testing.T) {
 	cause := &failedWriteError{"pong transport failure"}
 	raw := &failedWriteRecorder{reader: bytes.NewReader(failureWire(true, 0x82, []byte("inbound"))), failAt: 2, cause: cause}
 	ext := &failedWriteExtension{}
-	c := NewConn(raw, true, []Extension{ext})
+	c := NewConn(raw, ConnConfig{Server: true, Extensions: []Extension{ext}})
 	if err := c.WriteControlFrame(CloseMessage, nil); err != nil {
 		t.Fatal(err)
 	}

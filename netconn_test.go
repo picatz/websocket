@@ -18,7 +18,7 @@ import (
 func pipeConns(t *testing.T) (server, client *Conn) {
 	t.Helper()
 	a, b := net.Pipe()
-	server, client = NewConn(a, true, nil), NewConn(b, false, nil)
+	server, client = NewConn(a, ConnConfig{Server: true}), NewConn(b, ConnConfig{})
 	t.Cleanup(func() { _ = server.Close(); _ = client.Close() })
 	return server, client
 }
@@ -122,7 +122,7 @@ func (l *chanListener) Addr() net.Addr { return &net.TCPAddr{} }
 
 func TestNetConnRejectsOtherMessageType(t *testing.T) {
 	raw := &memoryConn{Reader: bytes.NewReader([]byte{0x81, 1, 'x'})}
-	nc := NetConn(t.Context(), NewConn(raw, false, nil), BinaryMessage)
+	nc := NetConn(t.Context(), NewConn(raw, ConnConfig{}), BinaryMessage)
 	if _, err := nc.Read(make([]byte, 8)); !errors.Is(err, ErrUnexpectedFrame) {
 		t.Fatalf("Read = %v, want ErrUnexpectedFrame", err)
 	}

@@ -89,7 +89,7 @@ func TestUpgradePerMessageDeflateAlternatives(t *testing.T) {
 			raw := &memoryConn{Reader: bytes.NewReader(nil)}
 			w := &hijackResponse{httptest.NewRecorder(), raw, bufio.NewReadWriter(bufio.NewReader(raw), bufio.NewWriter(raw))}
 			pmd := NewPerMessageDeflateExtension()
-			conn, err := Upgrade(w, r, WithUpgradeExtensions(pmd))
+			conn, err := (&Upgrader{NewExtensions: func() []Extension { return []Extension{pmd} }}).Upgrade(w, r)
 			if err != nil {
 				t.Fatal(err)
 			}
