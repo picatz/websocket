@@ -407,6 +407,28 @@ time; use transport deadlines for untrusted peers.
 [Section 7.1.1]: https://www.rfc-editor.org/rfc/rfc7692#section-7.1.1
 [Section 7.1.2]: https://www.rfc-editor.org/rfc/rfc7692#section-7.1.2
 
+## Tunnelling stream protocols
+
+`NetConn(ctx, conn, websocket.BinaryMessage)` wraps a connection as a
+`net.Conn`, so stream protocols such as gRPC, SSH or HTTP/2 can run over a
+WebSocket. Each `Write` sends one message and `Read` returns the payloads back
+to back. A peer close reads as `io.EOF`, and use after `Close` matches
+`net.ErrClosed`. Ending `ctx` aborts the connection.
+
+```go
+transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+	conn, _, err := websocket.Dial(ctx, "wss://example.com/tunnel")
+	if err != nil {
+		return nil, err
+	}
+	return websocket.NetConn(context.Background(), conn, websocket.BinaryMessage), nil
+}}
+```
+
+Deadlines delegate to the WebSocket, so a read timeout ends the connection,
+unlike a TCP connection. Each message is buffered whole and is subject to the
+incoming size limit.
+
 ## Client proxies and custom dialers
 
 `Dial` connects directly by default. `WithProxy` takes the same function type as
