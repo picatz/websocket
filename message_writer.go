@@ -27,7 +27,7 @@ const writeFragmentSize = 64 << 10
 // https://www.rfc-editor.org/rfc/rfc7692#section-6
 type messageWriter struct {
 	c         *Conn
-	opcode    Opcode             // The next frame's opcode: the message type, then ContinuationFrame.
+	opcode    opcode             // The next frame's opcode: the message type, then opContinuation.
 	pmd       *perMessageDeflate // Compression extension, or nil.
 	compress  bool               // Compression decided and started for this message.
 	frameExts []frameExtension   // Enabled custom extensions, applied to each frame in order.
@@ -38,7 +38,7 @@ type messageWriter struct {
 
 // newMessageWriter starts a message. enabled holds the connection's enabled
 // extensions, as resolved once for this message.
-func (c *Conn) newMessageWriter(opcode Opcode, enabled []frameExtension) *messageWriter {
+func (c *Conn) newMessageWriter(opcode opcode, enabled []frameExtension) *messageWriter {
 	w := &messageWriter{c: c, opcode: opcode, buf: c.writeBuf[:0]}
 	for _, ext := range enabled {
 		if pmd, ok := ext.(*perMessageDeflate); ok {
@@ -116,7 +116,7 @@ func (w *messageWriter) frame(final bool, payload []byte) error {
 		Opcode:  w.opcode,
 		Payload: payload,
 		Masked:  !w.c.isServer,
-		Rsv1:    w.compress && w.opcode != ContinuationFrame,
+		Rsv1:    w.compress && w.opcode != opContinuation,
 	}
 	rsv1 := frame.Rsv1
 	for _, ext := range w.frameExts {
@@ -128,7 +128,7 @@ func (w *messageWriter) frame(final bool, payload []byte) error {
 	if w.pmd != nil && frame.Rsv1 != rsv1 {
 		return w.fail(fmt.Errorf("%w: an extension changed RSV1 owned by permessage-deflate", errUnsupportedExtensionComposition))
 	}
-	w.opcode = ContinuationFrame
+	w.opcode = opContinuation
 	w.sent = true
 	// Without frame extensions the payload is our own buffer; mask in place.
 	if err := w.c.writeFrameBuffer(frame, len(w.frameExts) == 0); err != nil {

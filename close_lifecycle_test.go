@@ -12,11 +12,11 @@ func TestCloseControlPreventsLaterData(t *testing.T) {
 	for _, server := range []bool{false, true} {
 		raw := &memoryConn{Reader: bytes.NewReader(nil)}
 		c := newTestConn(raw, ConnConfig{Server: server})
-		if err := c.WriteControlFrame(CloseMessage, nil); err != nil {
+		if err := c.writeControlFrame(opClose, nil); err != nil {
 			t.Fatal(err)
 		}
 		before := bytes.Clone(raw.written.Bytes())
-		for _, opcode := range []Opcode{TextMessage, BinaryMessage} {
+		for _, opcode := range []MessageType{TextMessage, BinaryMessage} {
 			if err := c.WriteMessage(opcode, []byte("late")); !errors.Is(err, net.ErrClosed) {
 				t.Errorf("server=%v opcode=%v: error %v, want closed pipe", server, opcode, err)
 			}
@@ -31,16 +31,16 @@ func TestCloseControlCompletesHandshakeOnce(t *testing.T) {
 	for _, server := range []bool{false, true} {
 		for _, peerClose := range []bool{false, true} {
 			peer := frameConn(nil, !server, 0)
-			if err := peer.WriteControlFrame(CloseMessage, []byte{3, 232}); err != nil {
+			if err := peer.writeControlFrame(opClose, []byte{3, 232}); err != nil {
 				t.Fatal(err)
 			}
 			raw := &memoryConn{Reader: bytes.NewReader(peer.conn.(*memoryConn).written.Bytes())}
 			c := newTestConn(raw, ConnConfig{Server: server})
-			if err := c.WriteControlFrame(CloseMessage, nil); err != nil {
+			if err := c.writeControlFrame(opClose, nil); err != nil {
 				t.Fatal(err)
 			}
 			before := bytes.Clone(raw.written.Bytes())
-			if err := c.WriteControlFrame(CloseMessage, nil); !errors.Is(err, net.ErrClosed) {
+			if err := c.writeControlFrame(opClose, nil); !errors.Is(err, net.ErrClosed) {
 				t.Fatalf("duplicate close: %v", err)
 			}
 			if peerClose {
@@ -69,7 +69,7 @@ func TestCloseControlCompletesHandshakeOnce(t *testing.T) {
 func TestCloseControlKeepsReadsAndPongAvailable(t *testing.T) {
 	// A split UTF-8 codepoint and ping may already be in flight when we close.
 	c := frameConn([]byte{0x01, 1, 0xc2, 0x89, 1, 'p', 0x80, 1, 0xa2, 0x88, 0}, false, 2)
-	if err := c.WriteControlFrame(CloseMessage, nil); err != nil {
+	if err := c.writeControlFrame(opClose, nil); err != nil {
 		t.Fatal(err)
 	}
 	opcode, data, err := c.ReadMessage()
@@ -81,11 +81,11 @@ func TestCloseControlKeepsReadsAndPongAvailable(t *testing.T) {
 	}
 	wire := frameConn(c.conn.(*memoryConn).written.Bytes(), true, 0)
 	closeFrame, err := wire.readFrame()
-	if err != nil || closeFrame.Opcode != CloseMessage {
+	if err != nil || closeFrame.Opcode != opClose {
 		t.Fatalf("close: %v %v", closeFrame, err)
 	}
 	pong, err := wire.readFrame()
-	if err != nil || pong.Opcode != PongMessage || string(pong.Payload) != "p" {
+	if err != nil || pong.Opcode != opPong || string(pong.Payload) != "p" {
 		t.Fatalf("pong: %v %v", pong, err)
 	}
 	if _, err := wire.readFrame(); err != io.EOF {
@@ -96,7 +96,7 @@ func TestCloseControlKeepsReadsAndPongAvailable(t *testing.T) {
 func TestRejectedCloseControlDoesNotCloseWriteSide(t *testing.T) {
 	c := frameConn(nil, true, 0)
 	for _, payload := range [][]byte{{1}, {3, 237}, append([]byte{3, 232}, bytes.Repeat([]byte{'a'}, 124)...)} {
-		if err := c.WriteControlFrame(CloseMessage, payload); err == nil {
+		if err := c.writeControlFrame(opClose, payload); err == nil {
 			t.Fatal("accepted invalid close")
 		}
 	}
@@ -124,9 +124,9 @@ func TestFailedCloseControlPreservesTransportError(t *testing.T) {
 		raw := &failingCloseConn{memoryConn: &memoryConn{Reader: bytes.NewReader(nil)}, partial: partial}
 		c := newTestConn(raw, ConnConfig{Server: true})
 		for _, write := range []func() error{
-			func() error { return c.WriteControlFrame(CloseMessage, []byte{3, 232}) },
+			func() error { return c.writeControlFrame(opClose, []byte{3, 232}) },
 			func() error { return c.WriteMessage(TextMessage, []byte("late")) },
-			func() error { return c.WriteControlFrame(CloseMessage, nil) },
+			func() error { return c.writeControlFrame(opClose, nil) },
 		} {
 			if err := write(); !errors.Is(err, ErrWriteFailed) || !errors.Is(err, io.ErrClosedPipe) {
 				t.Fatalf("partial=%v: %v", partial, err)
@@ -149,7 +149,7 @@ func TestConcurrentCloseControlOrdering(t *testing.T) {
 		results := make(chan error, 3)
 		go func() { <-start; results <- c.WriteMessage(BinaryMessage, []byte("data")) }()
 		for range 2 {
-			go func() { <-start; results <- c.WriteControlFrame(CloseMessage, nil) }()
+			go func() { <-start; results <- c.writeControlFrame(opClose, nil) }()
 		}
 		close(start)
 		for range 3 {
@@ -170,7 +170,7 @@ func TestConcurrentCloseControlOrdering(t *testing.T) {
 			if seenClose {
 				t.Fatal("frame after close")
 			}
-			seenClose = frame.Opcode == CloseMessage
+			seenClose = frame.Opcode == opClose
 		}
 		if !seenClose {
 			t.Fatal("no close frame")
@@ -183,7 +183,7 @@ func TestPeerAndLocalCloseRace(t *testing.T) {
 		c := frameConn([]byte{0x88, 0}, false, 0)
 		start := make(chan struct{})
 		done := make(chan struct{}, 3)
-		for _, fn := range []func(){func() { c.ReadMessage() }, func() { c.WriteControlFrame(CloseMessage, nil) }, func() { c.Close() }} {
+		for _, fn := range []func(){func() { c.ReadMessage() }, func() { c.writeControlFrame(opClose, nil) }, func() { c.Close() }} {
 			go func() { <-start; fn(); done <- struct{}{} }()
 		}
 		close(start)
@@ -197,7 +197,7 @@ func TestPeerAndLocalCloseRace(t *testing.T) {
 			if err == io.EOF {
 				break
 			}
-			if err != nil || frame.Opcode != CloseMessage {
+			if err != nil || frame.Opcode != opClose {
 				t.Fatalf("unexpected frame %v, %v", frame, err)
 			}
 			count++

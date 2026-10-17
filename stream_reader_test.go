@@ -37,7 +37,7 @@ func TestNextReaderStreamsFragmentsAndControls(t *testing.T) {
 	if n, err := r.Read(make([]byte, 1)); n != 0 || err != io.EOF {
 		t.Fatalf("Read after EOF = %d, %v", n, err)
 	}
-	if pong, err := frameConn(raw.written.Bytes(), true, 0).readFrame(); err != nil || pong.Opcode != PongMessage || string(pong.Payload) != "ping" {
+	if pong, err := frameConn(raw.written.Bytes(), true, 0).readFrame(); err != nil || pong.Opcode != opPong || string(pong.Payload) != "ping" {
 		t.Fatalf("automatic pong = %+v, %v", pong, err)
 	}
 	if typ, data, err := c.ReadMessage(); err != nil || typ != TextMessage || string(data) != "next" {

@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-func ownershipPayload(op Opcode, size int) []byte {
+func ownershipPayload(op MessageType, size int) []byte {
 	if op == TextMessage {
 		return bytes.Repeat([]byte{'a'}, size)
 	}
@@ -24,7 +24,7 @@ func ownershipPayload(op Opcode, size int) []byte {
 // allocation benchmarks separately establish that eligible frames avoid a copy.
 func TestReadMessageOwnershipCapacityAndLifetime(t *testing.T) {
 	for _, server := range []bool{false, true} {
-		for _, op := range []Opcode{TextMessage, BinaryMessage} {
+		for _, op := range []MessageType{TextMessage, BinaryMessage} {
 			for _, size := range []int{0, 1, 16, 511, 512, 513, 4096, 4097, 65536, 65537} {
 				t.Run(fmt.Sprintf("server=%v/type=%s/bytes=%d", server, op, size), func(t *testing.T) {
 					want := ownershipPayload(op, size)
@@ -76,7 +76,7 @@ func TestReadMessageOwnershipCapacityAndLifetime(t *testing.T) {
 
 func TestReadMessageOwnershipFragmentAndControlBoundaries(t *testing.T) {
 	for _, server := range []bool{false, true} {
-		for _, op := range []Opcode{TextMessage, BinaryMessage} {
+		for _, op := range []MessageType{TextMessage, BinaryMessage} {
 			payload := ownershipPayload(op, 512)
 			frame := func(first byte, p []byte) []byte { return limitWire(server, first, p) }
 			for _, tc := range []struct {
@@ -141,7 +141,7 @@ func (e *ownershipExtension) ProcessIncomingFrame(f *wireFrame) error {
 
 func TestReadMessageOwnershipExtensionIsolation(t *testing.T) {
 	for _, server := range []bool{false, true} {
-		for _, op := range []Opcode{TextMessage, BinaryMessage} {
+		for _, op := range []MessageType{TextMessage, BinaryMessage} {
 			for _, replace := range []bool{false, true} {
 				t.Run(fmt.Sprintf("server=%v/type=%s/shared scratch=%v", server, op, replace), func(t *testing.T) {
 					firstWant, secondWant := bytes.Repeat([]byte{'a'}, 512), bytes.Repeat([]byte{'b'}, 512)
@@ -187,7 +187,7 @@ func TestReadMessageOwnershipExtensionIsolation(t *testing.T) {
 
 func TestReadMessageOwnershipRegisteredExtensions(t *testing.T) {
 	for _, server := range []bool{false, true} {
-		for _, op := range []Opcode{TextMessage, BinaryMessage} {
+		for _, op := range []MessageType{TextMessage, BinaryMessage} {
 			for _, enabled := range []bool{false, true} {
 				t.Run(fmt.Sprintf("server=%v/type=%s/enabled=%v", server, op, enabled), func(t *testing.T) {
 					want := ownershipPayload(op, 512)
@@ -221,7 +221,7 @@ func TestReadMessageOwnershipRegisteredExtensions(t *testing.T) {
 func TestReadMessageOwnershipDecodedLimits(t *testing.T) {
 	const limit = 512
 	for _, server := range []bool{false, true} {
-		for _, op := range []Opcode{TextMessage, BinaryMessage} {
+		for _, op := range []MessageType{TextMessage, BinaryMessage} {
 			for _, size := range []int{0, limit, limit + 1} {
 				t.Run(fmt.Sprintf("server=%v/type=%s/decoded=%d", server, op, size), func(t *testing.T) {
 					shared := bytes.Repeat([]byte{'a'}, limit+1)
@@ -294,7 +294,7 @@ func ownershipRequireTerminal(t *testing.T, c *Conn, raw *memoryConn, server boo
 
 func TestReadMessageOwnershipFailures(t *testing.T) {
 	for _, server := range []bool{false, true} {
-		for _, op := range []Opcode{TextMessage, BinaryMessage} {
+		for _, op := range []MessageType{TextMessage, BinaryMessage} {
 			for _, mode := range []string{"truncated", "transport error", "wire limit", "extension error", "invalid UTF-8", "unfinished UTF-8"} {
 				if op != TextMessage && (mode == "invalid UTF-8" || mode == "unfinished UTF-8") {
 					continue
@@ -371,7 +371,7 @@ func (c *ownershipGatedConn) Read(p []byte) (int, error) {
 
 func TestReadMessageOwnershipConcurrentReaders(t *testing.T) {
 	for _, server := range []bool{false, true} {
-		for _, op := range []Opcode{TextMessage, BinaryMessage} {
+		for _, op := range []MessageType{TextMessage, BinaryMessage} {
 			t.Run(fmt.Sprintf("server=%v/type=%s", server, op), func(t *testing.T) {
 				wire := append(limitWire(server, 0x80|byte(op), bytes.Repeat([]byte{'a'}, 4096)), limitWire(server, 0x80|byte(op), bytes.Repeat([]byte{'b'}, 4096))...)
 				raw := &ownershipGatedConn{memoryConn: memoryConn{Reader: bytes.NewReader(wire)}, entered: make(chan struct{}), release: make(chan struct{})}
@@ -380,7 +380,7 @@ func TestReadMessageOwnershipConcurrentReaders(t *testing.T) {
 				unblock := func() { release.Do(func() { close(raw.release) }) }
 				defer unblock()
 				type result struct {
-					op   Opcode
+					op   MessageType
 					data []byte
 					err  error
 				}

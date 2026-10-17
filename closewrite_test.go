@@ -12,9 +12,17 @@ import (
 	"github.com/picatz/websocket"
 )
 
+// Frame opcodes the scripted peer sees (RFC 6455 Section 5.2).
+const (
+	wireText  = 0x1
+	wireClose = 0x8
+	wirePing  = 0x9
+	wirePong  = 0xa
+)
+
 // peerFrame is a frame the scripted peer received from the client.
 type peerFrame struct {
-	opcode  websocket.Opcode
+	opcode  byte // RFC 6455 Section 5.2
 	payload []byte
 }
 
@@ -75,7 +83,7 @@ func readClientFrame(r io.Reader) (peerFrame, error) {
 	for i := range payload {
 		payload[i] ^= mask[i%4]
 	}
-	return peerFrame{opcode: websocket.Opcode(h[0] & 0x0f), payload: payload}, nil
+	return peerFrame{opcode: h[0] & 0x0f, payload: payload}, nil
 }
 
 // send writes raw server frames in the background, since net.Pipe blocks
@@ -152,8 +160,8 @@ func TestCloseWriteInvalidStatusLeavesConnOpen(t *testing.T) {
 	}
 	errc := make(chan error, 1)
 	go func() { errc <- c.WriteMessage(websocket.TextMessage, []byte("still open")) }()
-	if f := p.next(t); f.opcode != websocket.TextMessage || string(f.payload) != "still open" {
-		t.Fatalf("first frame = %v %q, want the text message", f.opcode, f.payload)
+	if f := p.next(t); f.opcode != wireText || string(f.payload) != "still open" {
+		t.Fatalf("first frame = %#x %q, want the text message", f.opcode, f.payload)
 	}
 	if err := <-errc; err != nil {
 		t.Fatalf("WriteMessage: %v", err)
@@ -165,8 +173,8 @@ func TestCloseWriteDrainsPeerMessages(t *testing.T) {
 	errc := make(chan error, 1)
 	go func() { errc <- c.CloseWrite(websocket.StatusGoingAway, "done") }()
 	f := p.next(t)
-	if f.opcode != websocket.CloseMessage || binary.BigEndian.Uint16(f.payload) != uint16(websocket.StatusGoingAway) || string(f.payload[2:]) != "done" {
-		t.Fatalf("first frame = %v %q, want Close 1001 done", f.opcode, f.payload)
+	if f.opcode != wireClose || binary.BigEndian.Uint16(f.payload) != uint16(websocket.StatusGoingAway) || string(f.payload[2:]) != "done" {
+		t.Fatalf("first frame = %#x %q, want Close 1001 done", f.opcode, f.payload)
 	}
 	if err := <-errc; err != nil {
 		t.Fatalf("CloseWrite: %v", err)
@@ -202,7 +210,7 @@ func TestCloseWriteDrainsPeerMessages(t *testing.T) {
 	// The only frame after the Close is the Pong answering the peer's Ping,
 	// and the client then closes the transport.
 	rest := p.rest(t)
-	if len(rest) != 1 || rest[0].opcode != websocket.PongMessage || string(rest[0].payload) != "hi" {
+	if len(rest) != 1 || rest[0].opcode != wirePong || string(rest[0].payload) != "hi" {
 		t.Fatalf("frames after Close = %+v, want one Pong", rest)
 	}
 	if _, _, err := c.ReadMessage(); !errors.Is(err, net.ErrClosed) {
@@ -214,8 +222,8 @@ func TestShutdownAfterCloseWrite(t *testing.T) {
 	c, p := newScriptedPeer(t)
 	errc := make(chan error, 1)
 	go func() { errc <- c.CloseWrite(websocket.StatusNormalClosure, "") }()
-	if f := p.next(t); f.opcode != websocket.CloseMessage {
-		t.Fatalf("first frame = %v, want Close", f.opcode)
+	if f := p.next(t); f.opcode != wireClose {
+		t.Fatalf("first frame = %#x, want Close", f.opcode)
 	}
 	if err := <-errc; err != nil {
 		t.Fatalf("CloseWrite: %v", err)
@@ -240,8 +248,8 @@ func TestCloseAfterCloseWriteSendsOneCloseFrame(t *testing.T) {
 		c, p := newScriptedPeer(t)
 		errc := make(chan error, 1)
 		go func() { errc <- c.CloseWrite(websocket.StatusNormalClosure, "") }()
-		if f := p.next(t); f.opcode != websocket.CloseMessage {
-			t.Fatalf("first frame = %v, want Close", f.opcode)
+		if f := p.next(t); f.opcode != wireClose {
+			t.Fatalf("first frame = %#x, want Close", f.opcode)
 		}
 		if err := <-errc; err != nil {
 			t.Fatalf("CloseWrite: %v", err)
@@ -301,10 +309,10 @@ func TestCloseWriteConcurrentWrites(t *testing.T) {
 		closes := 0
 		for _, f := range p.rest(t) {
 			switch {
-			case f.opcode == websocket.CloseMessage:
+			case f.opcode == wireClose:
 				closes++
 			case closes > 0:
-				t.Fatalf("%v frame after the Close frame", f.opcode)
+				t.Fatalf("frame %#x after the Close frame", f.opcode)
 			}
 		}
 		if closes != 1 {

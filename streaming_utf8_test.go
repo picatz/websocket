@@ -168,7 +168,7 @@ func TestReadMessagePartialTextDeadlineTerminal(t *testing.T) {
 func TestReadFramePreservesRawTextContract(t *testing.T) {
 	for _, server := range []bool{false, true} {
 		f, err := frameConn(failureWire(server, 0x81, []byte{0xff}), server, 0).readFrame()
-		if err != nil || f.Opcode != TextMessage || !bytes.Equal(f.Payload, []byte{0xff}) {
+		if err != nil || f.Opcode != opText || !bytes.Equal(f.Payload, []byte{0xff}) {
 			t.Fatalf("readFrame policy changed: %v %v", f, err)
 		}
 	}
@@ -400,13 +400,13 @@ func TestReadMessageInvalidRuneBridgeWithinUnfinishedContinuation(t *testing.T) 
 			raw := &streamChoppedConn{chunks: [][]byte{first, next[:h+1]}, tailErr: streamWithheld}
 			c := newTestConn(raw, ConnConfig{Server: server})
 			pings := 0
-			c.SetPingHandler(func(p string) error {
+			c.testHookControl = func(op opcode, p []byte) bool {
 				pings++
-				if p != "\xff" {
-					t.Fatal(p)
+				if op != opPing || string(p) != "\xff" {
+					t.Fatal(op, p)
 				}
-				return nil
-			})
+				return true
+			}
 			if _, _, err := c.ReadMessage(); err != ErrInvalidFrame || raw.tailReads != 0 || pings != 1 {
 				t.Fatalf("server=%v prefix=%x err=%v tail=%d pings=%d", server, prefix, err, raw.tailReads, pings)
 			}

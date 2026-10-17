@@ -116,7 +116,7 @@ func TestReadMessageRemainingBudgetLengthBoundaries(t *testing.T) {
 
 func TestReadMessageControlsAtLimit(t *testing.T) {
 	for _, server := range []bool{false, true} {
-		for _, opcode := range []Opcode{PingMessage, PongMessage, CloseMessage} {
+		for _, opcode := range []opcode{opPing, opPong, opClose} {
 			t.Run(strconv.FormatBool(server)+"/"+opcode.String(), func(t *testing.T) {
 				// A nonzero mask exercises payload handling independently from
 				// the cumulative budget, including a valid empty final frame.
@@ -134,7 +134,7 @@ func TestReadMessageControlsAtLimit(t *testing.T) {
 					return wire
 				}
 				control := bytes.Repeat([]byte{'p'}, 125)
-				if opcode == CloseMessage {
+				if opcode == opClose {
 					control[0], control[1] = 3, 232
 				}
 				wire := frame(0x02, []byte("ab"))
@@ -142,10 +142,9 @@ func TestReadMessageControlsAtLimit(t *testing.T) {
 				wire = append(wire, frame(0x80, nil)...)
 				c := frameConn(wire, server, 2)
 				var received string
-				c.SetPingHandler(func(s string) error { received = s; return nil })
-				c.SetPongHandler(func(s string) error { received = s; return nil })
+				onControlPayload(c, func(p []byte) { received = string(p) })
 				op, data, err := c.ReadMessage()
-				if opcode == CloseMessage {
+				if opcode == opClose {
 					if ce, ok := errors.AsType[*CloseError](err); !ok || ce.Code != StatusNormalClosure || ce.Reason != string(control[2:]) {
 						t.Fatalf("close = %v", err)
 					}
@@ -157,7 +156,7 @@ func TestReadMessageControlsAtLimit(t *testing.T) {
 	}
 }
 
-// Incoming extensions are trusted transforms; even Opcode and Payload may
+// Incoming extensions are trusted transforms; even opcode and Payload may
 // change. Header-only rejection must not guess their decoded representation.
 type headerTransformExtension struct {
 	frameExtension
@@ -178,20 +177,20 @@ func TestReadMessageCustomHeaderTransforms(t *testing.T) {
 		wantErr error
 	}{
 		{"shrinking continuation", []byte{0x02, 2, 'a', 'b', 0x80, 2, 'c', 'd'}, func(f *wireFrame) error {
-			if f.Opcode == ContinuationFrame {
+			if f.Opcode == opContinuation {
 				f.Payload = nil
 			}
 			return nil
 		}, "ab", nil},
 		{"shrinking first fragment", []byte{0x02, 2, 'a', 'b', 0x80, 2, 'c', 'd'}, func(f *wireFrame) error {
-			if f.Opcode == BinaryMessage {
+			if f.Opcode == opBinary {
 				f.Payload = nil
 			}
 			return nil
 		}, "cd", nil},
 		{"normalize fragmented opcode", []byte{0x02, 0, 0x82, 1, 'x'}, func(f *wireFrame) error {
 			if f.Final {
-				f.Opcode = ContinuationFrame
+				f.Opcode = opContinuation
 			}
 			return nil
 		}, "x", nil},
@@ -201,11 +200,11 @@ func TestReadMessageCustomHeaderTransforms(t *testing.T) {
 			return nil
 		}, "x", nil},
 		{"normalize opcode", []byte{0x80, 1, 'x'}, func(f *wireFrame) error {
-			f.Opcode = BinaryMessage
+			f.Opcode = opBinary
 			return nil
 		}, "x", nil},
 		{"normalize close", []byte{0x88, 1, 'x'}, func(f *wireFrame) error {
-			f.Opcode = BinaryMessage
+			f.Opcode = opBinary
 			return nil
 		}, "x", nil},
 		{"decoded overflow", []byte{0x82, 1, 'x'}, func(f *wireFrame) error {
@@ -346,4 +345,11 @@ func TestCloseInterruptsFrameReadStages(t *testing.T) {
 			}
 		})
 	}
+}
+
+// onControlPayload observes the payload of each Ping and Pong c reads, in
+// place of answering them, for tests whose loop variable shadows the opcode
+// type.
+func onControlPayload(c *Conn, f func(payload []byte)) {
+	c.testHookControl = func(_ opcode, p []byte) bool { f(p); return true }
 }

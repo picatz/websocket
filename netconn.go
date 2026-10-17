@@ -37,7 +37,7 @@ import (
 // returned net.Error reports Timeout as the transport did. Each message is
 // subject to c's incoming size limit, and is buffered whole before Read
 // returns its first byte.
-func NetConn(ctx context.Context, c *Conn, messageType Opcode) net.Conn {
+func NetConn(ctx context.Context, c *Conn, messageType MessageType) net.Conn {
 	if messageType != BinaryMessage && messageType != TextMessage {
 		panic(fmt.Sprintf("websocket: NetConn requires BinaryMessage or TextMessage, got %v", messageType))
 	}
@@ -48,7 +48,7 @@ func NetConn(ctx context.Context, c *Conn, messageType Opcode) net.Conn {
 
 type netConn struct {
 	c           *Conn
-	messageType Opcode
+	messageType MessageType
 	stop        func() bool
 
 	readMu  sync.Mutex

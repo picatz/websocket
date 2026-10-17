@@ -10,10 +10,9 @@ import (
 // ([RFC 6455, Section 5.5.2]). It returns nil once the Pong arrives.
 //
 // Pongs are processed by ReadMessage, so a concurrent read loop must be
-// running; otherwise Ping waits until ctx ends. The matching happens before
-// any handler set with SetPongHandler runs, and that handler still sees every
-// Pong. Each call uses a distinct payload, so concurrent Pings are matched
-// independently; an unsolicited Pong carrying the same payload also counts.
+// running; otherwise Ping waits until ctx ends. Each call uses a distinct
+// payload, so concurrent Pings are matched independently; an unsolicited Pong
+// carrying the same payload also counts.
 //
 // If ctx is already done, Ping returns its cause without writing. If ctx ends
 // while the Ping frame is being written, the connection is aborted as for
@@ -46,7 +45,7 @@ func (c *Conn) Ping(ctx context.Context) error {
 	}()
 
 	stop := context.AfterFunc(ctx, c.cancelIO)
-	err := c.WriteControlFrame(PingMessage, payload[:])
+	err := c.writeControlFrame(opPing, payload[:])
 	if !stop() && err != nil {
 		return fmt.Errorf("%w: %w", context.Cause(ctx), err)
 	}

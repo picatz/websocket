@@ -131,26 +131,12 @@ func main() {
 }
 ```
 
-### Handling Ping/Pong Frames
+### Keepalives
 
-```go
-// Set a custom ping handler
-conn.SetPingHandler(func(appData string) error {
-	log.Printf("Received ping: %s", appData)
-	// Respond with a pong
-	return conn.WriteControlFrame(websocket.PongMessage, []byte(appData))
-})
-
-// Set a custom pong handler
-conn.SetPongHandler(func(appData string) error {
-	log.Printf("Received pong: %s", appData)
-	return nil
-})
-```
-
-`Ping` sends a Ping and waits for the matching Pong, for keepalives and
-liveness checks. Pongs are processed by `ReadMessage`, so keep a read loop
-running; custom pong handlers still see every Pong:
+`ReadMessage` answers every Ping with a Pong, as RFC 6455 requires, and
+ignores unsolicited Pongs. `Ping` sends a Ping and waits for the matching
+Pong, for keepalives and liveness checks. Pongs are processed by
+`ReadMessage`, so keep a read loop running:
 
 ```go
 go func() {
@@ -290,8 +276,6 @@ Reads and writes are independently serialized. `Close` can run concurrently with
 either, as can all three deadline setters. Deadlines are shared transport state;
 callers must coordinate competing updates. The library does not mutate the byte
 slice passed to `WriteMessage`.
-Ping and pong handlers run from `ReadMessage`; a handler must not call
-`ReadMessage` recursively.
 
 `Close` makes a best-effort normal close notification, limited to one second when
 no other writer is active, then closes the transport. That notification replaces

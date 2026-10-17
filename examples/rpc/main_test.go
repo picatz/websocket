@@ -21,7 +21,7 @@ func dial(t *testing.T) *websocket.Conn {
 	return conn
 }
 
-func send(t *testing.T, conn *websocket.Conn, typ websocket.Opcode, msg string) {
+func send(t *testing.T, conn *websocket.Conn, typ websocket.MessageType, msg string) {
 	t.Helper()
 	if err := conn.WriteMessage(typ, []byte(msg)); err != nil {
 		t.Fatal(err)
@@ -41,7 +41,7 @@ func TestCalls(t *testing.T) {
 	conn := dial(t)
 	for _, tc := range []struct {
 		name string
-		typ  websocket.Opcode
+		typ  websocket.MessageType
 		req  string
 		want string
 	}{

@@ -116,7 +116,7 @@ func requireLimitFailure(t *testing.T, c *Conn, raw *memoryConn) {
 
 func TestHighLevelDefaultLimit(t *testing.T) {
 	for _, server := range []bool{false, true} {
-		for _, op := range []Opcode{TextMessage, BinaryMessage} {
+		for _, op := range []MessageType{TextMessage, BinaryMessage} {
 			for _, fragmented := range []bool{false, true} {
 				for _, size := range []int{DefaultMaxMessageSize, DefaultMaxMessageSize + 1} {
 					t.Run(fmt.Sprintf("server=%v/%v/fragmented=%v/size=%d", server, op, fragmented, size), func(t *testing.T) {
@@ -182,8 +182,7 @@ func TestHighLevelDefaultBudgetSemantics(t *testing.T) {
 				wire = append(wire, limitWire(server, 0x81, payload)...)
 				c, raw := highLevelReader(t, server, wire)
 				controls := 0
-				c.SetPingHandler(func(string) error { controls++; return nil })
-				c.SetPongHandler(func(string) error { controls++; return nil })
+				c.testHookControl = func(opcode, []byte) bool { controls++; return true }
 				if overflow {
 					requireLimitFailure(t, c, raw)
 				} else {

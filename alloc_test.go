@@ -22,7 +22,7 @@ func TestReadMessageAllocations(t *testing.T) {
 		t.Skip("allocation counts are not meaningful with the race detector")
 	}
 	for _, size := range []int{0, 1, 16, 125, 126, 4096, 65536} {
-		for _, op := range []Opcode{BinaryMessage, TextMessage} {
+		for _, op := range []MessageType{BinaryMessage, TextMessage} {
 			for _, masked := range []bool{false, true} {
 				t.Run(fmt.Sprintf("bytes=%d/type=%s/masked=%t", size, op, masked), func(t *testing.T) {
 					payload := bytes.Repeat([]byte{'a'}, size)
@@ -72,7 +72,7 @@ func TestReadMessageFragmentedAllocations(t *testing.T) {
 		{8192, 8192, 4},  // More than the read buffer holds: doubling.
 		{1 << 20, 64, 9}, // As many as one 1 MiB frame.
 	} {
-		for _, op := range []Opcode{BinaryMessage, TextMessage} {
+		for _, op := range []MessageType{BinaryMessage, TextMessage} {
 			t.Run(fmt.Sprintf("bytes=%d/fragments=%d/type=%s", tc.size, tc.fragments, op), func(t *testing.T) {
 				payload := bytes.Repeat([]byte{'a'}, tc.size)
 				wire := benchmarkWire(payload, true, tc.fragments)
@@ -114,11 +114,11 @@ func TestWriteAllocations(t *testing.T) {
 					return
 				}
 				if got := testing.AllocsPerRun(100, func() {
-					if err := c.WriteControlFrame(PingMessage, payload); err != nil {
+					if err := c.writeControlFrame(opPing, payload); err != nil {
 						t.Fatal(err)
 					}
 				}); got != 0 {
-					t.Fatalf("WriteControlFrame allocations = %v, want 0", got)
+					t.Fatalf("writeControlFrame allocations = %v, want 0", got)
 				}
 			})
 		}

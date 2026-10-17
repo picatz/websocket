@@ -273,9 +273,9 @@ func TestPMDEntryManualCompositionBeforeIO(t *testing.T) {
 			return err
 		}},
 		{"write", func(c *Conn) error { return c.WriteMessage(BinaryMessage, []byte("application")) }},
-		{"ping", func(c *Conn) error { return c.WriteControlFrame(PingMessage, []byte("ping")) }},
-		{"pong", func(c *Conn) error { return c.WriteControlFrame(PongMessage, []byte("pong")) }},
-		{"close control", func(c *Conn) error { return c.WriteControlFrame(CloseMessage, nil) }},
+		{"ping", func(c *Conn) error { return c.writeControlFrame(opPing, []byte("ping")) }},
+		{"pong", func(c *Conn) error { return c.writeControlFrame(opPong, []byte("pong")) }},
+		{"close control", func(c *Conn) error { return c.writeControlFrame(opClose, nil) }},
 		{"direct Close", func(c *Conn) error { return c.Close() }},
 	}
 	for _, afterConstruction := range []bool{false, true} {
@@ -364,7 +364,7 @@ func TestPMDEntryManualPermittedCompositions(t *testing.T) {
 			if err := conn.WriteMessage(BinaryMessage, []byte("x")); err != nil {
 				t.Fatal(err)
 			}
-			if err := conn.WriteControlFrame(PingMessage, nil); err != nil {
+			if err := conn.writeControlFrame(opPing, nil); err != nil {
 				t.Fatal(err)
 			}
 			if err := conn.Close(); err != nil {
@@ -413,7 +413,7 @@ func TestPMDEntryDirectCallbacksMatrix(t *testing.T) {
 	for _, incoming := range []bool{false, true} {
 		for _, enabled := range []bool{false, true} {
 			for _, final := range []bool{false, true} {
-				for _, opcode := range []Opcode{TextMessage, BinaryMessage, ContinuationFrame, PingMessage, PongMessage, CloseMessage} {
+				for _, opcode := range []opcode{opText, opBinary, opContinuation, opPing, opPong, opClose} {
 					for _, rsv1 := range []bool{false, true} {
 						t.Run(fmt.Sprintf("incoming=%t/enabled=%t/final=%t/opcode=%s/rsv1=%t", incoming, enabled, final, opcode, rsv1), func(t *testing.T) {
 							pmd := newPerMessageDeflate()
@@ -435,8 +435,8 @@ func TestPMDEntryDirectCallbacksMatrix(t *testing.T) {
 							} else {
 								err = pmd.ProcessOutgoingFrame(&frame)
 							}
-							data := opcode == TextMessage || opcode == BinaryMessage
-							rejected := enabled && (opcode == ContinuationFrame || data && !final)
+							data := opcode == opText || opcode == opBinary
+							rejected := enabled && (opcode == opContinuation || data && !final)
 							if rejected {
 								if !errors.Is(err, errFragmentedCompression) {
 									t.Fatalf("error=%v, want ErrFragmentedCompression", err)
@@ -504,12 +504,12 @@ func TestPMDEntryDirectIncomingHistory(t *testing.T) {
 						if i == 1 && !noContext {
 							payload = entryHelloHistory
 						}
-						frame := &wireFrame{Final: true, Opcode: TextMessage, Rsv1: true, Payload: bytes.Clone(payload)}
+						frame := &wireFrame{Final: true, Opcode: opText, Rsv1: true, Payload: bytes.Clone(payload)}
 						if err := pmd.ProcessIncomingFrame(frame); err != nil || string(frame.Payload) != "Hello" || frame.Rsv1 {
 							t.Fatalf("message %d=%q, %v, RSV1=%t", i, frame.Payload, err, frame.Rsv1)
 						}
 						if interleave && i == 0 {
-							for _, op := range []Opcode{TextMessage, BinaryMessage, PingMessage, PongMessage, CloseMessage} {
+							for _, op := range []opcode{opText, opBinary, opPing, opPong, opClose} {
 								frame := &wireFrame{Final: true, Opcode: op, Payload: []byte("uncompressed interleave")}
 								if err := pmd.ProcessIncomingFrame(frame); err != nil || string(frame.Payload) != "uncompressed interleave" {
 									t.Fatalf("interleaved %s=%q, %v", op, frame.Payload, err)
@@ -518,7 +518,7 @@ func TestPMDEntryDirectIncomingHistory(t *testing.T) {
 						}
 					}
 					if noContext {
-						frame := &wireFrame{Final: true, Opcode: BinaryMessage, Rsv1: true, Payload: bytes.Clone(entryHelloHistory)}
+						frame := &wireFrame{Final: true, Opcode: opBinary, Rsv1: true, Payload: bytes.Clone(entryHelloHistory)}
 						if err := pmd.ProcessIncomingFrame(frame); err == nil {
 							t.Fatal("no-context receiver reused previous message history")
 						}
@@ -542,17 +542,17 @@ func TestPMDEntryDirectBFINALAndRejectedFragment(t *testing.T) {
 			}
 			// A rejected complete DEFLATE payload in a nonfinal callback must
 			// not be retained and concatenated into the next complete message.
-			fragment := &wireFrame{Opcode: TextMessage, Rsv1: true, Payload: bytes.Clone(entryHello)}
+			fragment := &wireFrame{Opcode: opText, Rsv1: true, Payload: bytes.Clone(entryHello)}
 			if err := pmd.ProcessIncomingFrame(fragment); !errors.Is(err, errFragmentedCompression) {
 				t.Fatalf("fragment error=%v", err)
 			}
 			// Two finalized streams. The second requires same-message history,
 			// including when cross-message context takeover is disabled.
-			frame := &wireFrame{Final: true, Opcode: TextMessage, Rsv1: true, Payload: []byte{0xf3, 0x48, 0xcd, 0xc9, 0xc9, 0x07, 0x00, 0xf3, 0x00, 0x11, 0x00, 0x00}}
+			frame := &wireFrame{Final: true, Opcode: opText, Rsv1: true, Payload: []byte{0xf3, 0x48, 0xcd, 0xc9, 0xc9, 0x07, 0x00, 0xf3, 0x00, 0x11, 0x00, 0x00}}
 			if err := pmd.ProcessIncomingFrame(frame); err != nil || string(frame.Payload) != "HelloHello" || frame.Rsv1 {
 				t.Fatalf("BFINAL pair=%q, %v, RSV1=%t", frame.Payload, err, frame.Rsv1)
 			}
-			frame = &wireFrame{Final: true, Opcode: BinaryMessage, Rsv1: true, Payload: bytes.Clone(entryHello)}
+			frame = &wireFrame{Final: true, Opcode: opBinary, Rsv1: true, Payload: bytes.Clone(entryHello)}
 			if err := pmd.ProcessIncomingFrame(frame); err != nil || string(frame.Payload) != "Hello" {
 				t.Fatalf("next message=%q, %v", frame.Payload, err)
 			}
@@ -569,7 +569,7 @@ func TestPMDEntryManualCompositionRevalidated(t *testing.T) {
 			custom := &entryExtension{name: "entry-custom"}
 			raw := newEntryConn([]byte{0x82, 1, 'x'})
 			conn := newTestConn(raw, ConnConfig{}, []frameExtension{pmd, second, custom}...)
-			if err := conn.WriteControlFrame(PongMessage, nil); err != nil {
+			if err := conn.writeControlFrame(opPong, nil); err != nil {
 				t.Fatal(err)
 			}
 			beforeWrites, beforeWire := raw.writes, bytes.Clone(raw.written.Bytes())
@@ -585,7 +585,7 @@ func TestPMDEntryManualCompositionRevalidated(t *testing.T) {
 			case "write":
 				err = conn.WriteMessage(BinaryMessage, []byte("later"))
 			case "control":
-				err = conn.WriteControlFrame(PingMessage, nil)
+				err = conn.writeControlFrame(opPing, nil)
 			case "Close":
 				err = conn.Close()
 			}
@@ -600,7 +600,7 @@ func TestPMDEntryManualCompositionRevalidated(t *testing.T) {
 }
 
 func TestPMDEntryRejectedDirectFragmentDoesNotSeedHistory(t *testing.T) {
-	for _, opcode := range []Opcode{TextMessage, BinaryMessage, ContinuationFrame} {
+	for _, opcode := range []opcode{opText, opBinary, opContinuation} {
 		t.Run(opcode.String(), func(t *testing.T) {
 			pmd := newPerMessageDeflate()
 			if err := pmd.Negotiate("permessage-deflate"); err != nil {
@@ -610,7 +610,7 @@ func TestPMDEntryRejectedDirectFragmentDoesNotSeedHistory(t *testing.T) {
 			if err := pmd.ProcessIncomingFrame(fragment); !errors.Is(err, errFragmentedCompression) {
 				t.Fatalf("fragment=%v", err)
 			}
-			dependent := &wireFrame{Final: true, Opcode: TextMessage, Rsv1: true, Payload: bytes.Clone(entryHelloHistory)}
+			dependent := &wireFrame{Final: true, Opcode: opText, Rsv1: true, Payload: bytes.Clone(entryHelloHistory)}
 			if err := pmd.ProcessIncomingFrame(dependent); err == nil {
 				t.Fatal("rejected fragment committed a dictionary")
 			}

@@ -100,8 +100,7 @@ var (
 	// ErrPayloadTooLarge reports a data frame or message larger than the
 	// connection's incoming limit, for which the peer is sent
 	// StatusMessageTooBig, or a control frame with more than 125 bytes of
-	// payload. WriteControlFrame also returns it, before any I/O, for a
-	// payload over 125 bytes.
+	// payload.
 	ErrPayloadTooLarge = errors.New("websocket: payload too large")
 	// ErrUnmaskedFrame reports an unmasked frame from a client
 	// (RFC 6455 Section 5.1).
@@ -112,11 +111,13 @@ var (
 	// ErrUnsupportedExtensions reports reserved bits that no negotiated
 	// extension defines.
 	ErrUnsupportedExtensions = errors.New("websocket: unsupported extensions (RSV bits are set)")
-	// ErrInvalidOpcode reports a reserved opcode. WriteMessage and
-	// WriteControlFrame also return it, before any I/O, for an opcode they
-	// cannot send.
+	// ErrInvalidOpcode reports a frame with a reserved opcode.
 	ErrInvalidOpcode = errors.New("websocket: invalid opcode")
 )
+
+// errInvalidMessageType is returned by WriteMessage for a MessageType other
+// than TextMessage or BinaryMessage.
+var errInvalidMessageType = errors.New("websocket: invalid message type")
 
 // Errors returned by writes and Close.
 var (

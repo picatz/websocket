@@ -69,7 +69,7 @@ func WithMaxMessageSize(maxBytes int) DialOption {
 
 // message is one received data message.
 type message struct {
-	opcode websocket.Opcode
+	opcode websocket.MessageType
 	data   []byte
 }
 
@@ -293,14 +293,14 @@ func (c *Conn) signal() {
 // Close; an error matching websocket.ErrPayloadTooLarge if a message exceeded
 // the limit; or one matching io.ErrUnexpectedEOF if the host reported a
 // failure or the connection closed without a closing handshake.
-func (c *Conn) ReadMessage() (messageType websocket.Opcode, data []byte, err error) {
+func (c *Conn) ReadMessage() (messageType websocket.MessageType, data []byte, err error) {
 	return c.ReadMessageContext(context.Background())
 }
 
 // ReadMessageContext is ReadMessage bounded by ctx. If ctx ends before a
 // message is available, the connection is closed, as with
 // websocket.Conn.ReadMessageContext, and the error wraps context.Cause(ctx).
-func (c *Conn) ReadMessageContext(ctx context.Context) (messageType websocket.Opcode, data []byte, err error) {
+func (c *Conn) ReadMessageContext(ctx context.Context) (messageType websocket.MessageType, data []byte, err error) {
 	c.readMu.Lock()
 	defer c.readMu.Unlock()
 	for {
@@ -347,7 +347,7 @@ const (
 
 // WriteMessage sends a text or binary message. Text must be valid UTF-8. It
 // is WriteMessageContext without a deadline.
-func (c *Conn) WriteMessage(messageType websocket.Opcode, data []byte) error {
+func (c *Conn) WriteMessage(messageType websocket.MessageType, data []byte) error {
 	return c.WriteMessageContext(context.Background(), messageType, data)
 }
 
@@ -364,7 +364,7 @@ func (c *Conn) WriteMessage(messageType websocket.Opcode, data []byte) error {
 //
 // It returns an error matching net.ErrClosed once the connection is closing
 // or closed, where the host would silently discard the message.
-func (c *Conn) WriteMessageContext(ctx context.Context, messageType websocket.Opcode, data []byte) error {
+func (c *Conn) WriteMessageContext(ctx context.Context, messageType websocket.MessageType, data []byte) error {
 	var payload any
 	switch messageType {
 	case websocket.TextMessage:
@@ -378,7 +378,7 @@ func (c *Conn) WriteMessageContext(ctx context.Context, messageType websocket.Op
 		js.CopyBytesToJS(array, data)
 		payload = array
 	default:
-		return websocket.ErrInvalidOpcode
+		return fmt.Errorf("browser: invalid message type %v", messageType)
 	}
 
 	c.writeMu.Lock()

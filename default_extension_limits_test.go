@@ -282,7 +282,7 @@ func TestHighLevelDefaultCustomExtensionOutput(t *testing.T) {
 				// bits and intermediate storage. Only their final message output
 				// is bounded; their own allocations remain their responsibility.
 				ext := &defaultLimitExtension{process: func(f *wireFrame) error {
-					f.Final, f.Opcode = true, BinaryMessage
+					f.Final, f.Opcode = true, opBinary
 					f.Rsv1, f.Rsv2, f.Rsv3 = false, false, false
 					f.Payload = bytes.Repeat([]byte{'x'}, DefaultMaxMessageSize+1)
 					return nil

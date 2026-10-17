@@ -13,7 +13,7 @@ var ownershipBenchmarkResult []byte
 // Eligibility depends on the actual frame buffer, not a fixed size threshold.
 func BenchmarkReadMessageOwnership(b *testing.B) {
 	for _, size := range []int{0, 1, 16, 125, 126, 480, 481, 511, 512, 513, 4096, 4097, 65535, 65536, 65537, 1 << 20} {
-		for _, op := range []Opcode{BinaryMessage, TextMessage} {
+		for _, op := range []MessageType{BinaryMessage, TextMessage} {
 			for _, masked := range []bool{false, true} {
 				b.Run(fmt.Sprintf("bytes=%d/type=%s/masked=%t", size, op, masked), func(b *testing.B) {
 					payload := benchmarkPayload(size)
@@ -50,7 +50,7 @@ func BenchmarkReadMessageOwnershipFallback(b *testing.B) {
 	}
 }
 
-func ownershipBenchmarkRead(b *testing.B, op Opcode, payload []byte, masked bool, fragments int, extensions []frameExtension) {
+func ownershipBenchmarkRead(b *testing.B, op MessageType, payload []byte, masked bool, fragments int, extensions []frameExtension) {
 	b.Helper()
 	wire := benchmarkWire(payload, masked, fragments)
 	wire[0] = wire[0]&0xf0 | byte(op)

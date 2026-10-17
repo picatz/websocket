@@ -272,7 +272,7 @@ func (r *deflateFrameReader) advance() error {
 		if err != nil {
 			return err
 		}
-		if f.Opcode >= CloseMessage {
+		if f.Opcode >= opClose {
 			if err := r.c.validateMessageHeader(&f, n, true, 0); err != nil {
 				return err
 			}
@@ -289,7 +289,7 @@ func (r *deflateFrameReader) advance() error {
 			}
 			continue
 		}
-		if f.Opcode != ContinuationFrame {
+		if f.Opcode != opContinuation {
 			return failWith(StatusProtocolError, ErrUnexpectedFrame)
 		}
 		// readFrameHeader already rejects RSV1 on continuations and bounds each
@@ -566,10 +566,10 @@ func (p *perMessageDeflate) processIncomingFrame(frame *wireFrame, limit int) er
 	if !p.enabled {
 		return nil
 	}
-	if frame.Opcode == ContinuationFrame || ((frame.Opcode == TextMessage || frame.Opcode == BinaryMessage) && !frame.Final) {
+	if frame.Opcode == opContinuation || ((frame.Opcode == opText || frame.Opcode == opBinary) && !frame.Final) {
 		return errFragmentedCompression
 	}
-	if frame.Opcode != TextMessage && frame.Opcode != BinaryMessage || !frame.Rsv1 {
+	if frame.Opcode != opText && frame.Opcode != opBinary || !frame.Rsv1 {
 		return nil
 	}
 	out, err := p.decodeMessage(&deflateMessageInput{source: bytes.NewReader(frame.Payload)}, limit, false)
@@ -581,10 +581,9 @@ func (p *perMessageDeflate) processIncomingFrame(frame *wireFrame, limit int) er
 }
 
 // handleControl is shared by the legacy frame path and PMD's logical reader.
-// Handlers run synchronously with neither the handler nor PMD lifetime lock held.
 func (c *Conn) handleControl(frame *wireFrame) (peerClosed bool, err error) {
 	switch frame.Opcode {
-	case CloseMessage:
+	case opClose:
 		if err := validateIncomingClosePayload(frame.Payload); err != nil {
 			return false, err
 		}
@@ -592,22 +591,19 @@ func (c *Conn) handleControl(frame *wireFrame) (peerClosed bool, err error) {
 		c.peerClosed.Store(true)
 		_ = c.closeWithPayload(frame.Payload)
 		return true, nil
-	case PingMessage:
-		c.handlerMu.RLock()
-		handler := c.pingHandler
-		c.handlerMu.RUnlock()
-		if handler != nil {
-			return false, handler(string(frame.Payload))
+	case opPing:
+		if c.testHookControl != nil && c.testHookControl(opPing, frame.Payload) {
+			return false, nil
 		}
-		return false, c.WriteControlFrame(PongMessage, frame.Payload)
-	case PongMessage:
+		// https://www.rfc-editor.org/rfc/rfc6455#section-5.5.2
+		return false, c.writeControlFrame(opPong, frame.Payload)
+	case opPong:
+		if c.testHookControl != nil && c.testHookControl(opPong, frame.Payload) {
+			return false, nil
+		}
+		// An unsolicited Pong is a heartbeat and needs no answer
+		// (https://www.rfc-editor.org/rfc/rfc6455#section-5.5.3).
 		c.completePing(frame.Payload)
-		c.handlerMu.RLock()
-		handler := c.pongHandler
-		c.handlerMu.RUnlock()
-		if handler != nil {
-			return false, handler(string(frame.Payload))
-		}
 		return false, nil
 	}
 	return false, failWith(StatusProtocolError, ErrInvalidOpcode)

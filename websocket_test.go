@@ -122,61 +122,6 @@ func TestWebSocketBinaryMessage(t *testing.T) {
 	}
 }
 
-func TestWebSocketPingPong(t *testing.T) {
-	// Create an HTTP test server
-	server := httptest.NewServer(http.HandlerFunc(testEchoHandler(t, nil)))
-	defer server.Close()
-
-	// Convert the server URL to a WebSocket URL
-	wsURL := "ws" + server.URL[len("http"):]
-
-	// Create a WebSocket client
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
-	defer cancel()
-
-	conn, resp, err := websocket.Dial(ctx, wsURL)
-	if err != nil {
-		t.Fatalf("Dial failed: %v", err)
-	}
-	defer conn.Close()
-	defer resp.Body.Close()
-
-	// Set up a pong handler to capture pong messages
-	pongReceived := make(chan string, 1)
-	conn.SetPongHandler(func(appData string) error {
-		pongReceived <- appData
-		return nil
-	})
-
-	// Start a goroutine to continuously read messages
-	go func() {
-		for {
-			_, _, err := conn.ReadMessage()
-			if err != nil {
-				// Connection closed or error occurred
-				return
-			}
-		}
-	}()
-
-	// Send a ping message
-	testData := "ping payload"
-	err = conn.WriteControlFrame(websocket.PingMessage, []byte(testData))
-	if err != nil {
-		t.Fatalf("WriteControlFrame failed: %v", err)
-	}
-
-	// Wait for the pong response
-	select {
-	case appData := <-pongReceived:
-		if appData != testData {
-			t.Fatalf("Expected pong data '%s', got '%s'", testData, appData)
-		}
-	case <-time.After(time.Second * 2):
-		t.Fatalf("Timed out waiting for pong")
-	}
-}
-
 func TestWebSocketClose(t *testing.T) {
 	// Create an HTTP test server
 	server := httptest.NewServer(http.HandlerFunc(testEchoHandler(t, nil)))
