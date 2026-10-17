@@ -2,6 +2,7 @@ package websocket_test
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -622,4 +623,158 @@ type zeros struct{}
 func (zeros) Read(p []byte) (int, error) {
 	clear(p)
 	return len(p), nil
+}
+
+// CloseWrite is a half-close: it tells the server that no more requests are
+// coming but keeps reading, so replies already on their way still arrive.
+// The read loop ends with the server's answering Close frame.
+func ExampleConn_CloseWrite() {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Upgrade(w, r)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		for {
+			typ, data, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			_ = conn.WriteMessage(typ, bytes.ToUpper(data))
+		}
+	}))
+	defer srv.Close()
+
+	conn, _, err := websocket.Dial(context.Background(), wsURL(srv))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer conn.Close()
+
+	for _, req := range []string{"one", "two", "three"} {
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(req)); err != nil {
+			log.Fatal(err)
+		}
+	}
+	if err := conn.CloseWrite(websocket.StatusNormalClosure, "done"); err != nil {
+		log.Fatal(err)
+	}
+
+	// Bound the drain: CloseWrite does not wait for the server.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for {
+		_, data, err := conn.ReadMessageContext(ctx)
+		if err != nil {
+			fmt.Println("closed:", websocket.CloseStatus(err))
+			break
+		}
+		fmt.Println(string(data))
+	}
+	// Output:
+	// ONE
+	// TWO
+	// THREE
+	// closed: StatusNormalClosure
+}
+
+// NewConn runs the protocol over a connection whose opening handshake the
+// caller performed some other way, such as over a custom transport or after
+// a proprietary upgrade. Here the two ends of a net.Pipe stand in for it.
+func ExampleNewConn() {
+	clientSide, serverSide := net.Pipe()
+
+	server, err := websocket.NewConn(serverSide, websocket.ConnConfig{Server: true})
+	if err != nil {
+		log.Fatal(err)
+	}
+	client, err := websocket.NewConn(clientSide, websocket.ConnConfig{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer client.Close()
+
+	go func() {
+		defer server.Close()
+		typ, data, err := server.ReadMessage()
+		if err != nil {
+			return
+		}
+		_ = server.WriteMessage(typ, append([]byte("echo: "), data...))
+	}()
+
+	if err := client.WriteMessage(websocket.TextMessage, []byte("over a pipe")); err != nil {
+		log.Fatal(err)
+	}
+	_, data, err := client.ReadMessage()
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(string(data))
+	// Output: echo: over a pipe
+}
+
+// NetConn can stand in for a TCP connection in an http.Transport, so HTTP
+// requests travel through a WebSocket tunnel. The server here answers one
+// request read straight from the tunnel.
+func ExampleNetConn_httpTransport() {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ws, err := websocket.Upgrade(w, r)
+		if err != nil {
+			return
+		}
+		conn := websocket.NetConn(context.Background(), ws, websocket.BinaryMessage)
+		defer conn.Close()
+		req, err := http.ReadRequest(bufio.NewReader(conn))
+		if err != nil {
+			return
+		}
+		body := "tunnelled " + req.URL.Path
+		resp := &http.Response{
+			StatusCode:    http.StatusOK,
+			ProtoMajor:    1,
+			ProtoMinor:    1,
+			ContentLength: int64(len(body)),
+			Body:          io.NopCloser(strings.NewReader(body)),
+			Close:         true,
+		}
+		_ = resp.Write(conn)
+	}))
+	defer srv.Close()
+
+	client := &http.Client{Transport: &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			ws, _, err := websocket.Dial(ctx, wsURL(srv))
+			if err != nil {
+				return nil, err
+			}
+			return websocket.NetConn(context.Background(), ws, websocket.BinaryMessage), nil
+		},
+	}}
+	resp, err := client.Get("http://backend.internal/status")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(resp.StatusCode, string(body))
+	// Output: 200 tunnelled /status
+}
+
+// Proxy has the signature of http.Transport.Proxy, so
+// http.ProxyFromEnvironment honors HTTP_PROXY, HTTPS_PROXY and NO_PROXY,
+// selecting for a wss URL as for https. Dial tunnels through the proxy with
+// CONNECT and runs TLS end to end inside it.
+func ExampleDialer_proxy() {
+	dialer := &websocket.Dialer{Proxy: http.ProxyFromEnvironment}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	conn, _, err := dialer.Dial(ctx, "wss://example.com/socket")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer conn.Close()
 }
