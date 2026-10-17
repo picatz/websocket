@@ -1904,13 +1904,36 @@ func WithUpgradeOriginCheck(check func(r *http.Request, origin string) bool) Upg
 // observed through r.TLS. Forwarded headers and r.URL.Scheme are not trusted.
 // Origin is not authentication: callers still own authentication, authorization,
 // and authoritative Host validation. WithUpgradeOriginCheck replaces the policy.
-// Origin rejection returns ErrOriginNotAllowed without writing an HTTP response;
-// the caller may send HTTP 403. Other pre-hijack errors also leave w untouched.
+//
+// When Upgrade fails before taking over the connection, it writes the HTTP
+// error response itself and returns the error; the handler should just return.
+// The error says which response was sent:
+//
+//   - ErrOriginNotAllowed: 403 Forbidden.
+//   - ErrBadHandshake: the client's request was at fault. A non-GET request
+//     (ErrInvalidMethod) gets 405 Method Not Allowed with Allow: GET, an
+//     unsupported version (ErrUnsupportedVersion) 426 Upgrade Required with
+//     Sec-WebSocket-Version: 13 (RFC 6455 section 4.4), and any other
+//     malformed request 400 Bad Request.
+//   - ErrNotHijacker, or invalid server options (ErrInvalidHandshakeHeader):
+//     500 Internal Server Error.
+//   - ErrHandshakeFailed: nothing, as the transport may already be hijacked.
+//
+// https://datatracker.ietf.org/doc/html/rfc6455#section-4.2.1
+//
 // It requires an HTTP/1.1 connection with hijacking support. Middleware may
 // implement http.Hijacker directly or expose the underlying http.ResponseWriter
 // through an Unwrap() http.ResponseWriter method, as used by http.ResponseController.
 // A writer's own Hijack method takes precedence over Unwrap. HTTP/2 is not supported.
 func Upgrade(w http.ResponseWriter, r *http.Request, options ...UpgradeOption) (*Conn, error) {
+	conn, err := upgrade(w, r, options)
+	if err != nil {
+		return nil, writeUpgradeError(w, err)
+	}
+	return conn, nil
+}
+
+func upgrade(w http.ResponseWriter, r *http.Request, options []UpgradeOption) (*Conn, error) {
 	opts := &upgradeOptions{maxBytes: DefaultMaxMessageSize}
 	opts.apply(options)
 
@@ -1937,7 +1960,7 @@ func Upgrade(w http.ResponseWriter, r *http.Request, options ...UpgradeOption) (
 		if !ok && errors.Is(err, http.ErrNotSupported) {
 			return nil, ErrNotHijacker
 		}
-		return nil, fmt.Errorf("%w: %v", ErrHandshakeFailed, err)
+		return nil, fmt.Errorf("%w: %w", ErrHandshakeFailed, err)
 	}
 	if err := writeUpgradeResponse(bufrw.Writer, acceptKey, responseHeader); err != nil {
 		conn.Close()
@@ -2083,10 +2106,10 @@ func writeUpgradeResponse(w *bufio.Writer, acceptKey string, responseHeader http
 	// A bufio.Writer keeps its first error, so checking the last write
 	// covers them all.
 	if _, err := w.WriteString("\r\n"); err != nil {
-		return fmt.Errorf("%w: failed to write handshake response: %v", ErrHandshakeFailed, err)
+		return fmt.Errorf("%w: failed to write handshake response: %w", ErrHandshakeFailed, err)
 	}
 	if err := w.Flush(); err != nil {
-		return fmt.Errorf("%w: failed to flush handshake response: %v", ErrHandshakeFailed, err)
+		return fmt.Errorf("%w: failed to flush handshake response: %w", ErrHandshakeFailed, err)
 	}
 	return nil
 }

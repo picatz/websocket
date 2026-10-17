@@ -41,7 +41,7 @@ func (k keepalive) handler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		conn, err := websocket.Upgrade(w, r)
 		if err != nil {
-			upgradeError(w, err)
+			// Upgrade has already written the HTTP error response.
 			return
 		}
 		defer conn.Close()
@@ -85,19 +85,6 @@ func (k keepalive) handler() http.HandlerFunc {
 				return
 			}
 		}
-	}
-}
-
-func upgradeError(w http.ResponseWriter, err error) {
-	switch {
-	case errors.Is(err, websocket.ErrOriginNotAllowed):
-		http.Error(w, "WebSocket origin not allowed", http.StatusForbidden)
-	case errors.Is(err, websocket.ErrUnsupportedVersion):
-		w.Header().Set("Sec-WebSocket-Version", "13")
-		http.Error(w, "Unsupported WebSocket version", http.StatusUpgradeRequired)
-	case !errors.Is(err, websocket.ErrHandshakeFailed):
-		// A failed hijack or 101 write may already own the transport.
-		http.Error(w, "Invalid WebSocket handshake", http.StatusBadRequest)
 	}
 }
 

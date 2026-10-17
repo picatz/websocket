@@ -26,8 +26,7 @@ func Example() {
 	echo := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := websocket.Upgrade(w, r)
 		if err != nil {
-			http.Error(w, "websocket upgrade failed", http.StatusBadRequest)
-			return
+			return // Upgrade has already written the HTTP error response.
 		}
 		defer conn.Close()
 		for {

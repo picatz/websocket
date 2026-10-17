@@ -45,7 +45,7 @@ func TestUpgradeRequiresSingleVersion(t *testing.T) {
 				if w.calls != 1 || !errors.Is(err, ErrHandshakeFailed) {
 					t.Fatalf("valid version: error = %v, hijacks = %d", err, w.calls)
 				}
-			} else if !errors.Is(err, ErrUnsupportedVersion) || w.calls != 0 || w.Body.Len() != 0 {
+			} else if !errors.Is(err, ErrUnsupportedVersion) || w.calls != 0 || w.Code != http.StatusUpgradeRequired || w.Header().Get("Sec-WebSocket-Version") != "13" {
 				t.Fatalf("invalid version: error = %v, hijacks = %d, body = %q", err, w.calls, w.Body.String())
 			}
 		})

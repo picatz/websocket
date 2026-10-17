@@ -13,19 +13,8 @@ func echoHandler(w http.ResponseWriter, r *http.Request) {
 	// Upgrade the HTTP connection to a WebSocket connection
 	conn, err := websocket.Upgrade(w, r)
 	if err != nil {
+		// Upgrade has already written the HTTP error response.
 		log.Printf("Upgrade failed: %v", err)
-		switch {
-		case errors.Is(err, websocket.ErrOriginNotAllowed):
-			http.Error(w, "WebSocket origin not allowed", http.StatusForbidden)
-		case errors.Is(err, websocket.ErrUnsupportedVersion):
-			w.Header().Set("Sec-WebSocket-Version", "13")
-			http.Error(w, "Unsupported WebSocket version", http.StatusUpgradeRequired)
-		case errors.Is(err, websocket.ErrNotHijacker):
-			http.Error(w, "WebSocket upgrade unavailable", http.StatusInternalServerError)
-		case !errors.Is(err, websocket.ErrHandshakeFailed):
-			// A failed hijack/101 write may already own the transport.
-			http.Error(w, "Invalid WebSocket handshake", http.StatusBadRequest)
-		}
 		return
 	}
 	defer conn.Close()

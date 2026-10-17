@@ -110,7 +110,7 @@ func TestPMDEntryUpgradeComposition(t *testing.T) {
 						if conn != nil || !errors.Is(err, ErrUnsupportedExtensionComposition) {
 							t.Fatalf("Upgrade = %v, %v; want composition rejection", conn, err)
 						}
-						if w.calls != 0 || w.Body.Len() != 0 || raw.reads != 0 || raw.writes != 0 || raw.written.Len() != 0 {
+						if w.calls != 0 || w.Code != http.StatusBadRequest || raw.reads != 0 || raw.writes != 0 || raw.written.Len() != 0 {
 							t.Fatalf("rejected handshake committed I/O: hijacks=%d response=%q reads=%d writes=%d wire=%q", w.calls, w.Body.String(), raw.reads, raw.writes, raw.written.String())
 						}
 					} else {

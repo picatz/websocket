@@ -76,6 +76,10 @@
 // Origin checks protect browsers from cross-site use; they are not
 // authentication.
 //
+// When Upgrade rejects a request it writes the HTTP error itself, so the
+// handler should just return: 403 for ErrOriginNotAllowed, and 400, 405 or 426
+// for a request matching ErrBadHandshake.
+//
 // # Proxies and custom transports
 //
 // Dial connects directly unless WithProxy selects an HTTP or HTTPS proxy, for
