@@ -558,7 +558,7 @@ func TestEndToEndKeepalive(t *testing.T) {
 func TestEndToEndMessageTooLarge(t *testing.T) {
 	const limit = 32 << 10
 	serverErr := make(chan error, 1)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		u := websocket.Upgrader{MaxMessageSize: limit, Compression: &websocket.Compression{}}
 		c, err := u.Upgrade(w, r)
 		if err != nil {
@@ -567,6 +567,12 @@ func TestEndToEndMessageTooLarge(t *testing.T) {
 		defer c.Close()
 		serverErr <- echoLoop(c)
 	}))
+	// The server fails the message before reading all of it, so its
+	// transport closes with the rest of the client's bytes unread. Without a
+	// lingering close the OS answers them with a reset, and Windows then
+	// drops the server's Close frame from the client's receive buffer.
+	srv.Listener = lingeringListener{srv.Listener}
+	srv.Start()
 	t.Cleanup(srv.Close)
 
 	send := map[string]func(*websocket.Conn) error{
@@ -615,6 +621,30 @@ func TestEndToEndMessageTooLarge(t *testing.T) {
 			}
 		})
 	}
+}
+
+// lingeringListener accepts connections that close the way servers with a
+// lingering close do (nginx's lingering_close): Close sends a FIN, then
+// reads and discards what the peer still sends until it closes too, so
+// unread data never turns the close into a TCP reset that destroys data
+// the peer has received but not yet read.
+type lingeringListener struct{ net.Listener }
+
+func (l lingeringListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	return &lingeringConn{TCPConn: c.(*net.TCPConn)}, nil
+}
+
+type lingeringConn struct{ *net.TCPConn }
+
+func (c *lingeringConn) Close() error {
+	c.CloseWrite()
+	c.SetReadDeadline(time.Now().Add(10 * time.Second))
+	io.Copy(io.Discard, c.TCPConn)
+	return c.TCPConn.Close()
 }
 
 // When the peer's process dies without a closing handshake, the read loop
