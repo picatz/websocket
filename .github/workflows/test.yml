@@ -51,3 +51,5 @@ jobs:
         run: go test . -run '^$' -fuzz '^FuzzCanonicalOrigin$' -fuzztime=15s -parallel=2
       - if: runner.os == 'Linux'
         run: go test . -run '^$' -fuzz '^FuzzResponseHeadBound$' -fuzztime=15s -parallel=2
+      - if: runner.os == 'Linux'
+        run: go test . -run '^$' -fuzz '^FuzzUpgrade$' -fuzztime=15s -parallel=2
