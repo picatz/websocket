@@ -2,10 +2,12 @@ package websocket
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"io"
 	"net"
+	"net/http"
 	"strconv"
 	"testing"
 	"time"
@@ -31,7 +33,7 @@ func frameConn(wire []byte, server bool, limit int) *Conn {
 	if limit == 0 {
 		limit = -1
 	}
-	return NewConn(&memoryConn{Reader: bytes.NewReader(wire)}, ConnConfig{Server: server, MaxMessageSize: limit})
+	return newTestConn(&memoryConn{Reader: bytes.NewReader(wire)}, ConnConfig{Server: server, MaxMessageSize: limit})
 }
 
 func TestReadFrameRejectsMalformedHeaders(t *testing.T) {
@@ -102,7 +104,7 @@ func TestReadFrameLengthBoundaries(t *testing.T) {
 		t.Run(strconv.Itoa(n), func(t *testing.T) {
 			raw := &memoryConn{Reader: bytes.NewReader(nil)}
 			wire := &raw.written
-			writer := NewConn(raw, ConnConfig{Server: true})
+			writer := newTestConn(raw, ConnConfig{Server: true})
 			data := bytes.Repeat([]byte{'x'}, n)
 			if err := writer.WriteMessage(BinaryMessage, data); err != nil {
 				t.Fatal(err)
@@ -203,12 +205,12 @@ func TestWriteRejectsInvalidOpcodesAndPayload(t *testing.T) {
 
 func TestPerMessageDeflateRFCVector(t *testing.T) {
 	// Independently specified bytes from RFC 7692 section 7.2.3.1.
-	pmd := NewPerMessageDeflateExtension()
+	pmd := newPerMessageDeflate()
 	if err := pmd.Negotiate("permessage-deflate; client_no_context_takeover; server_no_context_takeover"); err != nil {
 		t.Fatal(err)
 	}
 	c := frameConn([]byte{0xc1, 7, 0xf2, 0x48, 0xcd, 0xc9, 0xc9, 0x07, 0x00}, false, 16)
-	c.extensions = []Extension{pmd}
+	c.extensions = []frameExtension{pmd}
 	_, data, err := c.ReadMessage()
 	if err != nil || string(data) != "Hello" {
 		t.Fatalf("message = %q, %v", data, err)
@@ -218,11 +220,11 @@ func TestPerMessageDeflateRFCVector(t *testing.T) {
 func TestPerMessageDeflateBoundsDecodedSize(t *testing.T) {
 	for _, limit := range []int{128, 129, 130} {
 		t.Run(strconv.Itoa(limit), func(t *testing.T) {
-			pmd := NewPerMessageDeflateExtension().(*perMessageDeflate)
+			pmd := newPerMessageDeflate().(*perMessageDeflate)
 			if err := pmd.Negotiate("permessage-deflate; client_no_context_takeover; server_no_context_takeover"); err != nil {
 				t.Fatal(err)
 			}
-			frame := &Frame{Final: true, Opcode: BinaryMessage, Payload: bytes.Repeat([]byte{'a'}, 129)}
+			frame := &wireFrame{Final: true, Opcode: BinaryMessage, Payload: bytes.Repeat([]byte{'a'}, 129)}
 			if err := pmd.ProcessOutgoingFrame(frame); err != nil {
 				t.Fatal(err)
 			}
@@ -230,7 +232,7 @@ func TestPerMessageDeflateBoundsDecodedSize(t *testing.T) {
 				t.Fatal("fixture failed to compress")
 			}
 			c := frameConn(append([]byte{0xc2, byte(len(frame.Payload))}, frame.Payload...), false, limit)
-			c.extensions = []Extension{pmd}
+			c.extensions = []frameExtension{pmd}
 			_, data, err := c.ReadMessage()
 			if limit < 129 {
 				if !errors.Is(err, ErrPayloadTooLarge) {
@@ -252,4 +254,25 @@ func TestReadFrameHugeDeclarationDoesNotAllocate(t *testing.T) {
 	if !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Fatalf("error = %v, want unexpected EOF", err)
 	}
+}
+
+// newTestConn is NewConn for configurations that cannot fail, with
+// extensions negotiated after cfg.Extensions'.
+func newTestConn(conn net.Conn, cfg ConnConfig, extensions ...frameExtension) *Conn {
+	c, err := newConfiguredConn(conn, cfg, extensions)
+	if err != nil {
+		panic(err)
+	}
+	return c
+}
+
+// dialExtensions is d.Dial with extensions offered after Compression's.
+func dialExtensions(ctx context.Context, d *Dialer, urlStr string, extensions []frameExtension) (*Conn, *http.Response, error) {
+	return d.dial(ctx, urlStr, extensions)
+}
+
+// upgradeExtensions is u.Upgrade with extensions negotiated after
+// Compression's.
+func upgradeExtensions(w http.ResponseWriter, r *http.Request, u *Upgrader, extensions []frameExtension) (*Conn, error) {
+	return u.upgrade(w, r, extensions)
 }

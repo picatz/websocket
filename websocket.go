@@ -72,11 +72,10 @@ func (o Opcode) String() string {
 	}
 }
 
-// Frame is one WebSocket frame as seen by an Extension. Applications that
-// send and receive messages through Conn never need it.
+// wireFrame is one WebSocket frame as seen by a frameExtension.
 //
 // https://www.rfc-editor.org/rfc/rfc6455#section-5.2
-type Frame struct {
+type wireFrame struct {
 	Final   bool    // FIN: this is the last frame of a message
 	Opcode  Opcode  // frame type; ContinuationFrame for later fragments
 	Payload []byte  // application data, unmasked
@@ -87,13 +86,13 @@ type Frame struct {
 	Rsv3    bool    // RSV3, available to other extensions
 }
 
-// Extension is a WebSocket extension negotiated during the opening handshake
-// and applied to each frame. NewPerMessageDeflateExtension returns the
-// built-in compression extension. Each connection needs its own instance: a
-// Dialer's or Upgrader's NewExtensions must return new ones on every call.
+// frameExtension is a WebSocket extension negotiated during the opening
+// handshake and applied to each frame. newPerMessageDeflate returns the
+// built-in compression extension; the others exist only in tests. Each
+// connection needs its own instance.
 //
 // https://www.rfc-editor.org/rfc/rfc6455#section-9
-type Extension interface {
+type frameExtension interface {
 	// Name returns the extension name.
 	Name() string
 	// Offer returns the extension offer string for Dial, or the selected
@@ -106,10 +105,10 @@ type Extension interface {
 	// parameters and repetition semantics, and disable itself if not negotiated.
 	Negotiate(response string) error
 	// ProcessOutgoingFrame allows the extension to modify outgoing frames.
-	ProcessOutgoingFrame(frame *Frame) error
+	ProcessOutgoingFrame(frame *wireFrame) error
 	// ProcessIncomingFrame allows the extension to modify incoming frames.
 	// It must clear the reserved bits whose semantics it has consumed.
-	ProcessIncomingFrame(frame *Frame) error
+	ProcessIncomingFrame(frame *wireFrame) error
 	// IsEnabled indicates whether the extension is enabled.
 	IsEnabled() bool
 }
@@ -145,12 +144,12 @@ func (pmd *perMessageDeflate) IsEnabled() bool {
 // ProcessOutgoingFrame compresses one complete Text or Binary message. Conn
 // does not call it: it streams messages through the same compressor, across
 // as many frames as needed.
-func (pmd *perMessageDeflate) ProcessOutgoingFrame(frame *Frame) error {
+func (pmd *perMessageDeflate) ProcessOutgoingFrame(frame *wireFrame) error {
 	if !pmd.enabled {
 		return nil
 	}
 	if frame.Opcode == ContinuationFrame || ((frame.Opcode == TextMessage || frame.Opcode == BinaryMessage) && !frame.Final) {
-		return ErrFragmentedCompression
+		return errFragmentedCompression
 	}
 	if frame.Opcode != TextMessage && frame.Opcode != BinaryMessage {
 		return nil
@@ -162,7 +161,7 @@ func (pmd *perMessageDeflate) ProcessOutgoingFrame(frame *Frame) error {
 	return nil
 }
 
-func (pmd *perMessageDeflate) ProcessIncomingFrame(frame *Frame) error {
+func (pmd *perMessageDeflate) ProcessIncomingFrame(frame *wireFrame) error {
 	return pmd.processIncomingFrame(frame, 0)
 }
 
@@ -189,24 +188,24 @@ func (pmd *perMessageDeflate) sender() *deflateSender {
 	return &pmd.send
 }
 
-// PerMessageDeflateOption represents an option for permessage-deflate extension.
-type PerMessageDeflateOption func(*perMessageDeflate)
+// pmdOption configures newPerMessageDeflate. Compression is the public form.
+type pmdOption func(*perMessageDeflate)
 
-// WithClientNoContextTakeover sets the client_no_context_takeover option.
-func WithClientNoContextTakeover() PerMessageDeflateOption {
+// withClientNoContextTakeover sets the client_no_context_takeover option.
+func withClientNoContextTakeover() pmdOption {
 	return func(pmd *perMessageDeflate) {
 		pmd.configured.clientNoContextTakeover = true
 	}
 }
 
-// WithServerNoContextTakeover sets the server_no_context_takeover option.
-func WithServerNoContextTakeover() PerMessageDeflateOption {
+// withServerNoContextTakeover sets the server_no_context_takeover option.
+func withServerNoContextTakeover() pmdOption {
 	return func(pmd *perMessageDeflate) {
 		pmd.configured.serverNoContextTakeover = true
 	}
 }
 
-// WithClientMaxWindowBits sets the client_max_window_bits option: the base-2
+// withClientMaxWindowBits sets the client_max_window_bits option: the base-2
 // logarithm of the LZ77 window a client compresses with, from 8 to 15.
 //
 // For Dial it is offered as the largest window the client will use; a server
@@ -215,7 +214,7 @@ func WithServerNoContextTakeover() PerMessageDeflateOption {
 // outside 8-15 are ignored.
 //
 // https://www.rfc-editor.org/rfc/rfc7692#section-7.1.2.2
-func WithClientMaxWindowBits(bits int) PerMessageDeflateOption {
+func withClientMaxWindowBits(bits int) pmdOption {
 	return func(pmd *perMessageDeflate) {
 		if bits >= 8 && bits <= 15 {
 			pmd.configured.clientMaxWindowBits = bits
@@ -223,7 +222,7 @@ func WithClientMaxWindowBits(bits int) PerMessageDeflateOption {
 	}
 }
 
-// WithServerMaxWindowBits sets the server_max_window_bits option: the base-2
+// withServerMaxWindowBits sets the server_max_window_bits option: the base-2
 // logarithm of the LZ77 window a server compresses with, from 8 to 15.
 //
 // For Dial it is a constraint the server must accept. For Upgrade the server
@@ -232,7 +231,7 @@ func WithClientMaxWindowBits(bits int) PerMessageDeflateOption {
 // ignored.
 //
 // https://www.rfc-editor.org/rfc/rfc7692#section-7.1.2.1
-func WithServerMaxWindowBits(bits int) PerMessageDeflateOption {
+func withServerMaxWindowBits(bits int) pmdOption {
 	return func(pmd *perMessageDeflate) {
 		if bits >= 8 && bits <= 15 {
 			pmd.configured.serverMaxWindowBits = bits
@@ -240,11 +239,11 @@ func WithServerMaxWindowBits(bits int) PerMessageDeflateOption {
 	}
 }
 
-// WithCompressionLevel sets the DEFLATE level used to compress outgoing
+// withCompressionLevel sets the DEFLATE level used to compress outgoing
 // messages, from compress/flate.HuffmanOnly (-2) to compress/flate.BestCompression
 // (9). compress/flate.DefaultCompression (-1) is the default. Other values
 // are ignored. The level is independent of the window size.
-func WithCompressionLevel(level int) PerMessageDeflateOption {
+func withCompressionLevel(level int) pmdOption {
 	return func(pmd *perMessageDeflate) {
 		if level >= flate.HuffmanOnly && level <= flate.BestCompression {
 			pmd.level = level
@@ -252,14 +251,14 @@ func WithCompressionLevel(level int) PerMessageDeflateOption {
 	}
 }
 
-// WithCompressionThreshold sends messages shorter than n bytes uncompressed.
+// withCompressionThreshold sends messages shorter than n bytes uncompressed.
 // Compressing a tiny message costs CPU and can make it larger; RFC 7692
 // section 6 lets a sender choose per message. Uncompressed messages do not
 // enter the compression context. The default, 0, compresses every message.
 // Negative values are ignored.
 //
 // https://www.rfc-editor.org/rfc/rfc7692#section-6
-func WithCompressionThreshold(n int) PerMessageDeflateOption {
+func withCompressionThreshold(n int) pmdOption {
 	return func(pmd *perMessageDeflate) {
 		if n >= 0 {
 			pmd.threshold = n
@@ -267,7 +266,7 @@ func WithCompressionThreshold(n int) PerMessageDeflateOption {
 	}
 }
 
-// WithCompressionMemoryLimit bounds the compression state one connection keeps
+// withCompressionMemoryLimit bounds the compression state one connection keeps
 // between messages to n bytes: half for the history it receives with, half for
 // the history it sends with. Buffers used while a message is being encoded or
 // decoded come from pools shared by all connections and are not counted.
@@ -285,7 +284,7 @@ func WithCompressionThreshold(n int) PerMessageDeflateOption {
 // The default, [DefaultCompressionMemoryLimit], keeps full 2^15-byte windows,
 // so it changes no negotiated parameter, only what the sender retains. Pass 0
 // to remove the limit. Negative values are ignored.
-func WithCompressionMemoryLimit(n int) PerMessageDeflateOption {
+func withCompressionMemoryLimit(n int) pmdOption {
 	return func(pmd *perMessageDeflate) {
 		if n >= 0 {
 			pmd.memoryLimit = n
@@ -293,12 +292,12 @@ func WithCompressionMemoryLimit(n int) PerMessageDeflateOption {
 	}
 }
 
-// DefaultCompressionMemoryLimit is the default [WithCompressionMemoryLimit]:
+// DefaultCompressionMemoryLimit is the default [Compression.MemoryLimit]:
 // about 64 KiB of state per idle connection, the two 32 KiB histories that
 // context takeover with the largest window needs (RFC 7692 section 7.1.1).
 const DefaultCompressionMemoryLimit = 64 << 10
 
-// NewPerMessageDeflateExtension creates an opt-in permessage-deflate (RFC 7692)
+// newPerMessageDeflate creates an opt-in permessage-deflate (RFC 7692)
 // compression extension. Conn compresses and decompresses whole messages,
 // fragmented or not, with context takeover unless a no_context_takeover
 // parameter is negotiated, and with any negotiated window from 8 to 15 bits.
@@ -306,17 +305,16 @@ const DefaultCompressionMemoryLimit = 64 << 10
 // Conn applies other enabled extensions to each frame after compression on
 // send and before decompression on receive. They may use RSV2 and RSV3, but
 // RSV1 belongs to permessage-deflate (RFC 7692 section 5); a frame whose RSV1
-// another extension changed fails with [ErrUnsupportedExtensionComposition],
+// another extension changed fails with errUnsupportedExtensionComposition,
 // as does enabling more than one permessage-deflate instance.
 //
-// Each connection needs its own instance; most programs set Compression on a
-// Dialer or Upgrader instead, which creates one per connection. Direct
-// callbacks require complete messages; do not mix them concurrently with Conn
-// I/O. Configuration and negotiation must finish before I/O; concurrent
-// reconfiguration is not supported.
+// Each connection needs its own instance; Compression creates one per
+// connection. Direct callbacks require complete messages; do not mix them
+// concurrently with Conn I/O. Configuration and negotiation must finish before
+// I/O; concurrent reconfiguration is not supported.
 //
 // https://www.rfc-editor.org/rfc/rfc7692
-func NewPerMessageDeflateExtension(options ...PerMessageDeflateOption) Extension {
+func newPerMessageDeflate(options ...pmdOption) frameExtension {
 	pmd := &perMessageDeflate{level: flate.DefaultCompression, memoryLimit: DefaultCompressionMemoryLimit}
 	for _, option := range options {
 		option(pmd)
@@ -358,6 +356,10 @@ type Conn struct {
 	// shuttingDown makes ReadMessage discard data messages once Shutdown
 	// has started.
 	shuttingDown atomic.Bool
+	// localClosed records that Close or CloseWithStatus was called, so a
+	// read it interrupts reports net.ErrClosed even when the peer's reply
+	// to the Close frame arrives first.
+	localClosed atomic.Bool
 
 	// Optional handlers for control frames
 	handlerMu   sync.RWMutex
@@ -365,7 +367,7 @@ type Conn struct {
 	pongHandler func(data string) error // Handler for Pong frames
 
 	// Extensions
-	extensions []Extension
+	extensions []frameExtension
 
 	// Reusable buffers for compressed messages. Protected by writeMu.
 	writeBuf, writeScratch []byte
@@ -382,7 +384,7 @@ type Conn struct {
 
 // newConn creates a Conn whose read buffer br may already hold bytes read past
 // the handshake. br must read from conn. maxBytes 0 means no limit.
-func newConn(conn net.Conn, br *bufio.Reader, isServer bool, extensions []Extension, maxBytes int) *Conn {
+func newConn(conn net.Conn, br *bufio.Reader, isServer bool, extensions []frameExtension, maxBytes int) *Conn {
 	wsConn := &Conn{
 		conn:       conn,
 		br:         br,
@@ -476,7 +478,7 @@ func (c *Conn) closeWithPayload(payload []byte) error {
 		if !c.closeSent && c.writeErr == nil {
 			// Query extensions only when this call will write. A reentrant Close
 			// from an extension callback, or one after a write failure, does not.
-			var buf [4]Extension
+			var buf [4]frameExtension
 			enabled, err := enabledExtensions(c.extensions, buf[:0])
 			if err != nil {
 				// An unsupported composition must not emit a Close frame that
@@ -490,7 +492,7 @@ func (c *Conn) closeWithPayload(payload []byte) error {
 			}
 			c.closeSent = true
 			if err := c.conn.SetWriteDeadline(time.Now().Add(time.Second)); err == nil {
-				_ = c.writeFrameExtensions(&Frame{Final: true, Opcode: CloseMessage, Payload: payload, Masked: !c.isServer}, enabled)
+				_ = c.writeFrameExtensions(&wireFrame{Final: true, Opcode: CloseMessage, Payload: payload, Masked: !c.isServer}, enabled)
 			}
 		}
 		c.releaseSendCompression()
@@ -555,7 +557,7 @@ func (c *Conn) failRead(err error) error {
 	})
 	var payload [2]byte
 	binary.BigEndian.PutUint16(payload[:], uint16(code))
-	_ = c.writeFrameRaw(&Frame{Final: true, Opcode: CloseMessage, Payload: payload[:], Masked: !c.isServer})
+	_ = c.writeFrameRaw(&wireFrame{Final: true, Opcode: CloseMessage, Payload: payload[:], Masked: !c.isServer})
 	c.releaseSendCompression()
 	c.abort()
 	if !timer.Stop() {
@@ -626,10 +628,16 @@ func (c *Conn) SetPongHandler(handler func(appData string) error) {
 // caller deadlines. Custom extensions may require dropping without notification.
 // Arbitrary callbacks and custom transport Close implementations can still block.
 // Once Shutdown has started, ReadMessage discards data messages and returns
-// only the peer's *CloseError or an error.
+// only the peer's *CloseError or an error. A read interrupted by Close or
+// CloseWithStatus returns an error matching net.ErrClosed, even if the peer's
+// answer to the Close frame arrived first.
 func (c *Conn) ReadMessage() (messageType Opcode, data []byte, err error) {
 	for {
 		messageType, data, err = c.readMessage()
+		if _, ok := err.(*CloseError); ok && c.localClosed.Load() {
+			// The peer answered our Close frame before the transport closed.
+			return 0, nil, errClosed
+		}
 		if err != nil || !c.shuttingDown.Load() {
 			return messageType, data, err
 		}
@@ -664,7 +672,7 @@ func (c *Conn) readMessage() (messageType Opcode, data []byte, err error) {
 	var message []byte
 	var validated int // Complete UTF-8 bytes; at most three bytes remain pending.
 	var messageTypeSet bool
-	var frame Frame
+	var frame wireFrame
 	for {
 		payloadLen, err := c.readFrameHeader(&frame)
 		if err == nil {
@@ -785,7 +793,7 @@ func (c *Conn) readMessage() (messageType Opcode, data []byte, err error) {
 // frame header has been read. It reports whether a peer Close interrupted it.
 // It is separate from ReadMessage so that the state the decoder shares stays
 // off ReadMessage's frame for uncompressed messages.
-func (c *Conn) readCompressedMessage(pmd *perMessageDeflate, frame *Frame, payloadLen uint64) (data []byte, peerClosed bool, err error) {
+func (c *Conn) readCompressedMessage(pmd *perMessageDeflate, frame *wireFrame, payloadLen uint64) (data []byte, peerClosed bool, err error) {
 	source := &deflateFrameReader{c: c, peerClosed: &peerClosed, first: true}
 	for _, ext := range c.extensions {
 		if _, builtin := ext.(*perMessageDeflate); !builtin && ext.IsEnabled() {
@@ -847,7 +855,7 @@ func (c *Conn) WriteMessage(messageType Opcode, data []byte) error {
 	if c.writeErr != nil {
 		return fmt.Errorf("%w: failed to write frame header: %w", ErrWriteFailed, c.writeErr)
 	}
-	var buf [4]Extension
+	var buf [4]frameExtension
 	enabled, err := enabledExtensions(c.extensions, buf[:0])
 	if err != nil {
 		return c.failRead(err)
@@ -861,7 +869,7 @@ func (c *Conn) WriteMessage(messageType Opcode, data []byte) error {
 			return w.Close()
 		}
 	}
-	frame := &Frame{
+	frame := &wireFrame{
 		Final:   true,
 		Opcode:  messageType,
 		Payload: data,
@@ -904,7 +912,7 @@ func (c *Conn) WriteControlFrame(opcode Opcode, data []byte) error {
 		return errClosed
 	}
 
-	frame := &Frame{
+	frame := &wireFrame{
 		Final:   true,
 		Opcode:  opcode,
 		Payload: data,
@@ -922,7 +930,7 @@ func (c *Conn) WriteControlFrame(opcode Opcode, data []byte) error {
 // readFrameHeader reads a frame header into frame, which it resets, and
 // validates lengths and frame structure before any body is read. It returns
 // the declared payload length. The masking key, if any, is read with the body.
-func (c *Conn) readFrameHeader(frame *Frame) (uint64, error) {
+func (c *Conn) readFrameHeader(frame *wireFrame) (uint64, error) {
 	// Read the first two bytes of the frame header, which
 	// contains the FIN, RSV1, RSV2, RSV3, opcode, and mask bit.
 	var header [2]byte
@@ -936,7 +944,7 @@ func (c *Conn) readFrameHeader(frame *Frame) (uint64, error) {
 	b0 := header[0]
 	b1 := header[1]
 
-	*frame = Frame{
+	*frame = wireFrame{
 		Final:  (b0 & 0x80) != 0,
 		Opcode: Opcode(b0 & 0x0F),
 		Masked: (b1 & 0x80) != 0,
@@ -1024,7 +1032,7 @@ func (c *Conn) readFrameHeader(frame *Frame) (uint64, error) {
 // its wire header determines the message state and decoded size. Custom
 // extensions may transform both, so their results are still checked by
 // ReadMessage after processing.
-func (c *Conn) validateMessageHeader(frame *Frame, payloadLen uint64, started bool, messageBytes int) error {
+func (c *Conn) validateMessageHeader(frame *wireFrame, payloadLen uint64, started bool, messageBytes int) error {
 	for _, ext := range c.extensions {
 		if _, builtin := ext.(*perMessageDeflate); !builtin && ext.IsEnabled() {
 			return nil
@@ -1055,8 +1063,8 @@ func (c *Conn) validateMessageHeader(frame *Frame, payloadLen uint64, started bo
 }
 
 // readFrame reads a single frame without reassembled-message state.
-func (c *Conn) readFrame() (*Frame, error) {
-	frame := new(Frame)
+func (c *Conn) readFrame() (*wireFrame, error) {
+	frame := new(wireFrame)
 	payloadLen, err := c.readFrameHeader(frame)
 	if err != nil {
 		return nil, err
@@ -1067,7 +1075,7 @@ func (c *Conn) readFrame() (*Frame, error) {
 	return frame, nil
 }
 
-func (c *Conn) readFramePayload(frame *Frame, payloadLen uint64) error {
+func (c *Conn) readFramePayload(frame *wireFrame, payloadLen uint64) error {
 	_, _, err := c.readFramePayloadText(frame, payloadLen, false, nil, nil)
 	return err
 }
@@ -1077,7 +1085,7 @@ func (c *Conn) readFramePayload(frame *Frame, payloadLen uint64) error {
 // previous frame; the returned count carries them across empty continuations.
 // The payload is appended to dst, which may be nil; buf is the result and
 // frame.Payload its new part.
-func (c *Conn) readFramePayloadText(frame *Frame, payloadLen uint64, checkText bool, tail, dst []byte) (buf []byte, pending int, err error) {
+func (c *Conn) readFramePayloadText(frame *wireFrame, payloadLen uint64, checkText bool, tail, dst []byte) (buf []byte, pending int, err error) {
 	if buf, pending, err = c.readFrameBodyText(frame, payloadLen, checkText, tail, dst); err != nil {
 		return nil, 0, err
 	}
@@ -1085,12 +1093,12 @@ func (c *Conn) readFramePayloadText(frame *Frame, payloadLen uint64, checkText b
 }
 
 // readFrameBody reads and unmasks a frame payload without calling extensions.
-func (c *Conn) readFrameBody(frame *Frame, payloadLen uint64) error {
+func (c *Conn) readFrameBody(frame *wireFrame, payloadLen uint64) error {
 	_, _, err := c.readFrameBodyText(frame, payloadLen, false, nil, nil)
 	return err
 }
 
-func (c *Conn) readFrameBodyText(frame *Frame, payloadLen uint64, checkText bool, tail, dst []byte) (buf []byte, pending int, err error) {
+func (c *Conn) readFrameBodyText(frame *wireFrame, payloadLen uint64, checkText bool, tail, dst []byte) (buf []byte, pending int, err error) {
 	if checkText {
 		pending = len(tail)
 	}
@@ -1185,7 +1193,7 @@ func invalidOpcode(op Opcode) error {
 
 // processIncomingFrame passes a complete frame through the enabled extensions
 // in registration order, then rejects any reserved bit none of them consumed.
-func (c *Conn) processIncomingFrame(frame *Frame) error {
+func (c *Conn) processIncomingFrame(frame *wireFrame) error {
 	for _, ext := range c.extensions {
 		if ext.IsEnabled() {
 			var err error
@@ -1214,7 +1222,7 @@ func (c *Conn) processIncomingFrame(frame *Frame) error {
 
 // processIncomingFrame calls a custom extension with a heap copy of frame,
 // so that frames the connection reads can stay on its stack.
-func processIncomingFrame(ext Extension, frame *Frame) error {
+func processIncomingFrame(ext frameExtension, frame *wireFrame) error {
 	f := *frame
 	err := ext.ProcessIncomingFrame(&f)
 	*frame = f
@@ -1348,14 +1356,14 @@ func validateIncomingClosePayload(payload []byte) error {
 }
 
 // writeFrame writes a WebSocket frame to the connection. writeMu must be held.
-func (c *Conn) writeFrame(frame *Frame) error {
+func (c *Conn) writeFrame(frame *wireFrame) error {
 	if c.writeErr != nil {
 		return fmt.Errorf("%w: failed to write frame header: %w", ErrWriteFailed, c.writeErr)
 	}
 	// Ask each extension once whether it is enabled. An unsupported composition
 	// is terminal and performs no I/O; a write after a transport failure returns
 	// above without calling extensions at all.
-	var buf [4]Extension
+	var buf [4]frameExtension
 	enabled, err := enabledExtensions(c.extensions, buf[:0])
 	if err != nil {
 		return c.failRead(err)
@@ -1365,7 +1373,7 @@ func (c *Conn) writeFrame(frame *Frame) error {
 
 // writeFrameExtensions passes frame through the already-resolved enabled
 // extensions, then writes it. writeMu must be held.
-func (c *Conn) writeFrameExtensions(frame *Frame, enabled []Extension) error {
+func (c *Conn) writeFrameExtensions(frame *wireFrame, enabled []frameExtension) error {
 	if len(enabled) == 0 {
 		return c.writeFrameRaw(frame)
 	}
@@ -1382,13 +1390,13 @@ func (c *Conn) writeFrameExtensions(frame *Frame, enabled []Extension) error {
 
 // writeFrameRaw encodes a frame without calling extensions. writeMu must be
 // held; any transport failure poisons the stream for later close notification.
-func (c *Conn) writeFrameRaw(frame *Frame) error {
+func (c *Conn) writeFrameRaw(frame *wireFrame) error {
 	return c.writeFrameBuffer(frame, false)
 }
 
 // writeFrameBuffer is writeFrameRaw for a payload the connection owns, which
 // may then be masked in place instead of copied.
-func (c *Conn) writeFrameBuffer(frame *Frame, owned bool) error {
+func (c *Conn) writeFrameBuffer(frame *wireFrame, owned bool) error {
 	// Every frame is flushed, so no frame leaves bytes behind and the write
 	// buffer is borrowed from a pool for one frame instead of being held by
 	// every idle connection.
@@ -1400,7 +1408,7 @@ func (c *Conn) writeFrameBuffer(frame *Frame, owned bool) error {
 }
 
 // writeFrameTo encodes frame into w, an empty write buffer, and flushes it.
-func (c *Conn) writeFrameTo(w *bufio.Writer, frame *Frame, owned bool) error {
+func (c *Conn) writeFrameTo(w *bufio.Writer, frame *wireFrame, owned bool) error {
 	b0 := byte(frame.Opcode)
 	if frame.Final {
 		b0 |= 0x80
@@ -1516,7 +1524,7 @@ func writeMasked(w *bufio.Writer, key [4]byte, p []byte) error {
 // dialOptions is a Dialer resolved for one Dial: defaults applied, the
 // subprotocol list detached and extensions created for this connection.
 type dialOptions struct {
-	extensions             []Extension
+	extensions             []frameExtension
 	header                 http.Header
 	tlsConfig              *tls.Config
 	maxBytes               int
@@ -1730,7 +1738,7 @@ func dial(ctx context.Context, urlStr string, opts *dialOptions) (ws *Conn, resp
 
 // upgradeOptions is an Upgrader resolved for one Upgrade.
 type upgradeOptions struct {
-	extensions     []Extension
+	extensions     []frameExtension
 	responseHeader http.Header
 	maxBytes       int
 	originCheck    func(*http.Request, string) bool
@@ -1851,7 +1859,7 @@ func negotiateUpgradeExtensions(r *http.Request, opts *upgradeOptions, subprotoc
 		return nil, err
 	}
 	extHeader := strings.Join(extValues, ", ")
-	var acceptedExtensions []Extension
+	var acceptedExtensions []frameExtension
 	for _, ext := range opts.extensions {
 		if ext == nil {
 			return nil, fmt.Errorf("%w: nil extension", ErrInvalidExtension)

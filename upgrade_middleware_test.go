@@ -106,7 +106,7 @@ func TestUpgradeMiddlewareLoopback(t *testing.T) {
 	if resp.Header.Get("Sec-WebSocket-Accept") != computeAcceptKey("dGhlIHNhbXBsZSBub25jZQ==") {
 		t.Fatal("invalid handshake accept")
 	}
-	client := NewConn(peer, ConnConfig{})
+	client := newTestConn(peer, ConnConfig{})
 	client.br = reader
 	if opcode, data, err := client.ReadMessage(); err != nil || opcode != TextMessage || string(data) != "first" {
 		t.Fatalf("echo = %d, %q, %v", opcode, data, err)

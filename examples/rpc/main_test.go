@@ -1,88 +1,98 @@
 package main
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
-	"time"
 
 	"github.com/picatz/websocket"
 )
 
-func Test_rpcHandler(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(rpcHandler))
-	defer srv.Close()
-
-	// Convert the server URL to a WebSocket URL
-	wsURL := "ws" + srv.URL[len("http"):]
-
-	// Create a WebSocket client
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
-	defer cancel()
-
-	conn, resp, err := websocket.Dial(ctx, wsURL)
+func dial(t *testing.T) *websocket.Conn {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(handle))
+	t.Cleanup(srv.Close)
+	conn, _, err := websocket.Dial(t.Context(), "ws"+strings.TrimPrefix(srv.URL, "http"))
 	if err != nil {
-		t.Fatalf("Dial failed: %v", err)
+		t.Fatal(err)
 	}
-	defer conn.Close()
-	defer resp.Body.Close()
+	t.Cleanup(func() { conn.Close() })
+	return conn
+}
 
-	err = conn.WriteMessage(websocket.BinaryMessage, []byte(`{"method":"sum","params":{"a":"1","b":"2"}}`))
-	if err != nil {
-		t.Fatalf("WriteMessage failed: %v", err)
-	}
-
-	// Read the echoed message
-	messageType, messageData, err := conn.ReadMessage()
-	if err != nil {
-		t.Fatalf("ReadMessage failed: %v", err)
-	}
-
-	if messageType != websocket.BinaryMessage {
-		t.Fatalf("Expected message type %d, got %d", websocket.BinaryMessage, messageType)
-	}
-
-	if string(messageData) != `{"result":3}` {
-		t.Fatalf("Expected message data %s, got %s", `{"result":3}`, string(messageData))
+func send(t *testing.T, conn *websocket.Conn, typ websocket.Opcode, msg string) {
+	t.Helper()
+	if err := conn.WriteMessage(typ, []byte(msg)); err != nil {
+		t.Fatal(err)
 	}
 }
 
-func TestHandshakeHTTPResponses(t *testing.T) {
+func receive(t *testing.T, conn *websocket.Conn) string {
+	t.Helper()
+	_, data, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
+func TestCalls(t *testing.T) {
+	conn := dial(t)
 	for _, tc := range []struct {
-		name, origin string
-		valid        bool
-		status       int
+		name string
+		typ  websocket.Opcode
+		req  string
+		want string
 	}{
-		{"cross origin", "https://other.test", true, http.StatusForbidden},
-		{"opaque origin", "null", true, http.StatusForbidden},
-		{"malformed origin", "http://example.test/", true, http.StatusForbidden},
-		{"bad handshake", "", false, http.StatusBadRequest},
-		{"unsupported version", "", true, http.StatusUpgradeRequired},
-		{"no hijacker", "", true, http.StatusInternalServerError},
+		{"sum", websocket.TextMessage,
+			`{"jsonrpc":"2.0","id":1,"method":"sum","params":[1,2,3.5]}`,
+			`{"jsonrpc":"2.0","id":1,"result":6.5}`},
+		{"zero result", websocket.TextMessage,
+			`{"jsonrpc":"2.0","id":"a","method":"sum","params":[]}`,
+			`{"jsonrpc":"2.0","id":"a","result":0}`},
+		{"invalid params", websocket.TextMessage,
+			`{"jsonrpc":"2.0","id":2,"method":"sum","params":{"a":1}}`,
+			`{"jsonrpc":"2.0","id":2,"error":{"code":-32602,"message":"params must be an array of numbers"}}`},
+		{"unknown method", websocket.TextMessage,
+			`{"jsonrpc":"2.0","id":3,"method":"nope"}`,
+			`{"jsonrpc":"2.0","id":3,"error":{"code":-32601,"message":"method not found: nope"}}`},
+		{"parse error", websocket.TextMessage,
+			`{"jsonrpc":`,
+			`{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"invalid JSON"}}`},
+		{"batch", websocket.TextMessage,
+			`[{"jsonrpc":"2.0","id":4,"method":"sum","params":[1]}]`,
+			`{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"not a request object"}}`},
+		{"wrong version", websocket.TextMessage,
+			`{"jsonrpc":"1.0","id":5,"method":"sum","params":[1]}`,
+			`{"jsonrpc":"2.0","id":5,"error":{"code":-32600,"message":"want \"jsonrpc\":\"2.0\" and a method"}}`},
+		{"binary", websocket.BinaryMessage,
+			`{"jsonrpc":"2.0","id":6,"method":"sum","params":[1]}`,
+			`{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"requests must be text messages"}}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			r := httptest.NewRequest(http.MethodGet, "http://example.test/ws", nil)
-			if tc.valid {
-				r.Header.Set("Upgrade", "websocket")
-				r.Header.Set("Connection", "Upgrade")
-				r.Header.Set("Sec-WebSocket-Version", "13")
-				r.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
-			}
-			if tc.name == "unsupported version" {
-				r.Header.Set("Sec-WebSocket-Version", "12")
-			}
-			if tc.origin != "" {
-				r.Header.Set("Origin", tc.origin)
-			}
-			w := httptest.NewRecorder()
-			rpcHandler(w, r)
-			if tc.status == http.StatusUpgradeRequired && w.Header().Get("Sec-WebSocket-Version") != "13" {
-				t.Fatal("missing supported version")
-			}
-			if w.Code != tc.status {
-				t.Fatalf("status %d, want %d", w.Code, tc.status)
+			send(t, conn, tc.typ, tc.req)
+			if got := receive(t, conn); got != tc.want {
+				t.Fatalf("response:\n got %s\nwant %s", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestConcurrentCalls checks that a slow call does not hold up a fast one
+// and that a notification gets no response.
+func TestConcurrentCalls(t *testing.T) {
+	conn := dial(t)
+	send(t, conn, websocket.TextMessage, `{"jsonrpc":"2.0","id":"slow","method":"sleep","params":[200]}`)
+	send(t, conn, websocket.TextMessage, `{"jsonrpc":"2.0","method":"sum","params":[1]}`)
+	send(t, conn, websocket.TextMessage, `{"jsonrpc":"2.0","id":"fast","method":"sum","params":[1]}`)
+
+	for _, want := range []string{
+		`{"jsonrpc":"2.0","id":"fast","result":1}`,
+		`{"jsonrpc":"2.0","id":"slow","result":200}`,
+	} {
+		if got := receive(t, conn); got != want {
+			t.Fatalf("response:\n got %s\nwant %s", got, want)
+		}
 	}
 }

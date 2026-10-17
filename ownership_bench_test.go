@@ -32,16 +32,16 @@ func BenchmarkReadMessageOwnershipFallback(b *testing.B) {
 		for _, mode := range []string{"fragmented", "disabled", "enabled", "disabled-pmd", "enabled-pmd-uncompressed"} {
 			b.Run(fmt.Sprintf("bytes=%d/mode=%s", size, mode), func(b *testing.B) {
 				fragments := 1
-				var extensions []Extension
+				var extensions []frameExtension
 				switch mode {
 				case "fragmented":
 					fragments = 4
 				case "disabled-pmd", "enabled-pmd-uncompressed":
-					extensions = []Extension{&perMessageDeflate{enabled: mode == "enabled-pmd-uncompressed"}}
+					extensions = []frameExtension{&perMessageDeflate{enabled: mode == "enabled-pmd-uncompressed"}}
 				default:
-					extensions = []Extension{&headerTransformExtension{
+					extensions = []frameExtension{&headerTransformExtension{
 						enabled: mode == "enabled",
-						process: func(*Frame) error { return nil },
+						process: func(*wireFrame) error { return nil },
 					}}
 				}
 				ownershipBenchmarkRead(b, BinaryMessage, benchmarkPayload(size), true, fragments, extensions)
@@ -50,12 +50,12 @@ func BenchmarkReadMessageOwnershipFallback(b *testing.B) {
 	}
 }
 
-func ownershipBenchmarkRead(b *testing.B, op Opcode, payload []byte, masked bool, fragments int, extensions []Extension) {
+func ownershipBenchmarkRead(b *testing.B, op Opcode, payload []byte, masked bool, fragments int, extensions []frameExtension) {
 	b.Helper()
 	wire := benchmarkWire(payload, masked, fragments)
 	wire[0] = wire[0]&0xf0 | byte(op)
 	r := bytes.NewReader(wire)
-	c := NewConn(&benchmarkConn{reader: r, writer: io.Discard}, ConnConfig{Server: masked, Extensions: extensions})
+	c := newTestConn(&benchmarkConn{reader: r, writer: io.Discard}, ConnConfig{Server: masked}, extensions...)
 	kind, got, err := c.ReadMessage()
 	if err != nil || kind != op || !bytes.Equal(got, payload) {
 		b.Fatal(kind, len(got), err)

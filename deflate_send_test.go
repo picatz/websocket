@@ -14,13 +14,13 @@ import (
 )
 
 // pmdLink negotiates params for a client sender and a server receiver.
-func pmdLink(t *testing.T, params string, options ...PerMessageDeflateOption) (send, recv *perMessageDeflate) {
+func pmdLink(t *testing.T, params string, options ...pmdOption) (send, recv *perMessageDeflate) {
 	t.Helper()
-	send = NewPerMessageDeflateExtension(options...).(*perMessageDeflate)
+	send = newPerMessageDeflate(options...).(*perMessageDeflate)
 	if err := send.Negotiate(params); err != nil || !send.IsEnabled() {
 		t.Fatalf("client Negotiate(%q) = %v", params, err)
 	}
-	recv = NewPerMessageDeflateExtension().(*perMessageDeflate)
+	recv = newPerMessageDeflate().(*perMessageDeflate)
 	recv.server = true
 	extensions, _ := parseExtensions([]string{params})
 	recv.negotiated, recv.enabled = mustParsePMD(t, extensions[0].params), true
@@ -40,7 +40,7 @@ func mustParsePMD(t *testing.T, params []extensionParameter) pmdParameters {
 func sendWire(t *testing.T, pmd *perMessageDeflate, messages ...[]byte) []byte {
 	t.Helper()
 	raw := &memoryConn{Reader: bytes.NewReader(nil)}
-	c := NewConn(raw, ConnConfig{Extensions: []Extension{pmd}})
+	c := newTestConn(raw, ConnConfig{}, []frameExtension{pmd}...)
 	for _, m := range messages {
 		if err := c.WriteMessage(BinaryMessage, m); err != nil {
 			t.Fatal(err)
@@ -50,13 +50,13 @@ func sendWire(t *testing.T, pmd *perMessageDeflate, messages ...[]byte) []byte {
 }
 
 // wireFrames parses raw frames without extensions, unmasking client frames.
-func wireFrames(t *testing.T, wire []byte) []*Frame {
+func wireFrames(t *testing.T, wire []byte) []*wireFrame {
 	t.Helper()
 	c := frameConn(wire, true, 0)
-	c.extensions = []Extension{&negotiationExtension{name: "inspect", enabled: true}}
-	var frames []*Frame
+	c.extensions = []frameExtension{&negotiationExtension{name: "inspect", enabled: true}}
+	var frames []*wireFrame
 	for {
-		f := new(Frame)
+		f := new(wireFrame)
 		n, err := c.readFrameHeader(f)
 		if err == io.EOF {
 			return frames
@@ -81,7 +81,7 @@ func wireFrames(t *testing.T, wire []byte) []*Frame {
 // readAll decodes every message on wire with a server Conn using pmd.
 func readAll(t *testing.T, pmd *perMessageDeflate, wire []byte) [][]byte {
 	t.Helper()
-	c := NewConn(&memoryConn{Reader: bytes.NewReader(wire)}, ConnConfig{Server: true, Extensions: []Extension{pmd}})
+	c := newTestConn(&memoryConn{Reader: bytes.NewReader(wire)}, ConnConfig{Server: true}, []frameExtension{pmd}...)
 	var out [][]byte
 	for {
 		_, data, err := c.ReadMessage()
@@ -137,15 +137,15 @@ func TestPMDContextTakeoverSend(t *testing.T) {
 	}
 	for _, tc := range []struct {
 		params   string
-		options  []PerMessageDeflateOption
+		options  []pmdOption
 		takeover bool
 	}{
 		{"permessage-deflate", nil, true},
 		{"permessage-deflate; client_max_window_bits=13", nil, true},
 		{"permessage-deflate; client_no_context_takeover", nil, false},
 		{"permessage-deflate; client_max_window_bits=13; client_no_context_takeover", nil, false},
-		{"permessage-deflate", []PerMessageDeflateOption{WithCompressionLevel(1)}, true},
-		{"permessage-deflate", []PerMessageDeflateOption{WithCompressionLevel(9)}, true},
+		{"permessage-deflate", []pmdOption{withCompressionLevel(1)}, true},
+		{"permessage-deflate", []pmdOption{withCompressionLevel(9)}, true},
 	} {
 		t.Run(tc.params, func(t *testing.T) {
 			send, recv := pmdLink(t, tc.params, tc.options...)
@@ -184,7 +184,7 @@ func TestPMDEmptyCompressedMessage(t *testing.T) {
 // TestPMDCompressionThreshold sends short messages uncompressed and keeps
 // them out of the compression context (RFC 7692 section 6).
 func TestPMDCompressionThreshold(t *testing.T) {
-	send, recv := pmdLink(t, "permessage-deflate", WithCompressionThreshold(64))
+	send, recv := pmdLink(t, "permessage-deflate", withCompressionThreshold(64))
 	short := []byte("short")
 	long := bytes.Repeat([]byte("long enough to compress "), 10)
 	wire := sendWire(t, send, short, long, short, long)
@@ -205,10 +205,10 @@ func TestPMDCompressionThreshold(t *testing.T) {
 
 // TestPMDSendRetentionAndPooling checks which state survives a message.
 func TestPMDSendRetentionAndPooling(t *testing.T) {
-	unlimited := WithCompressionMemoryLimit(0)
+	unlimited := withCompressionMemoryLimit(0)
 	for _, tc := range []struct {
 		params    string
-		limit     PerMessageDeflateOption
+		limit     pmdOption
 		retention sendRetention
 	}{
 		{"permessage-deflate", nil, retainHistory},
@@ -219,7 +219,7 @@ func TestPMDSendRetentionAndPooling(t *testing.T) {
 		{"permessage-deflate; client_no_context_takeover", unlimited, retainNothing},
 		{"permessage-deflate; client_max_window_bits=10; client_no_context_takeover", nil, retainNothing},
 	} {
-		var options []PerMessageDeflateOption
+		var options []pmdOption
 		if tc.limit != nil {
 			options = append(options, tc.limit)
 		}
@@ -245,7 +245,7 @@ func TestPMDSendWindowsAndLevels(t *testing.T) {
 	for bits := 8; bits <= 15; bits++ {
 		for _, level := range []int{-2, 0, 1, 5, 6, 9} {
 			t.Run(fmt.Sprintf("w%d/l%d", bits, level), func(t *testing.T) {
-				send, recv := pmdLink(t, fmt.Sprintf("permessage-deflate; client_max_window_bits=%d", bits), WithCompressionLevel(level))
+				send, recv := pmdLink(t, fmt.Sprintf("permessage-deflate; client_max_window_bits=%d", bits), withCompressionLevel(level))
 				wire := sendWire(t, send, msg, msg[:1000], msg)
 				got := readAll(t, recv, wire)
 				if len(got) != 3 || !bytes.Equal(got[0], msg) || !bytes.Equal(got[1], msg[:1000]) || !bytes.Equal(got[2], msg) {
@@ -257,7 +257,7 @@ func TestPMDSendWindowsAndLevels(t *testing.T) {
 }
 
 func TestPMDInvalidOptionValuesIgnored(t *testing.T) {
-	p := NewPerMessageDeflateExtension(WithCompressionLevel(10), WithCompressionLevel(-3), WithCompressionThreshold(-1)).(*perMessageDeflate)
+	p := newPerMessageDeflate(withCompressionLevel(10), withCompressionLevel(-3), withCompressionThreshold(-1)).(*perMessageDeflate)
 	if p.level != -1 || p.threshold != 0 {
 		t.Fatalf("level %d threshold %d", p.level, p.threshold)
 	}
@@ -269,7 +269,7 @@ func TestPMDSendAllocations(t *testing.T) {
 	}
 	send, _ := pmdLink(t, "permessage-deflate")
 	raw := &memoryConn{Reader: bytes.NewReader(nil)}
-	c := NewConn(raw, ConnConfig{Extensions: []Extension{send}})
+	c := newTestConn(raw, ConnConfig{}, []frameExtension{send}...)
 	msg := bytes.Repeat([]byte("steady state message "), 100)
 	c.WriteMessage(BinaryMessage, msg)
 	allocs := testing.AllocsPerRun(100, func() {
@@ -320,7 +320,7 @@ func TestPMDMemoryLimitNegotiation(t *testing.T) {
 		{"too small for any window", 300, "permessage-deflate; client_no_context_takeover; server_no_context_takeover; client_max_window_bits"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			p := NewPerMessageDeflateExtension(WithCompressionMemoryLimit(tc.limit))
+			p := newPerMessageDeflate(withCompressionMemoryLimit(tc.limit))
 			if got := p.Offer(); got != tc.offer {
 				t.Fatalf("offer = %q, want %q", got, tc.offer)
 			}
@@ -337,7 +337,7 @@ func TestPMDMemoryLimitNegotiation(t *testing.T) {
 		{"large limit changes nothing", "permessage-deflate", "permessage-deflate", 1 << 20},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			checkPMDUpgrade(t, tc.offer, tc.want, WithCompressionMemoryLimit(tc.limit))
+			checkPMDUpgrade(t, tc.offer, tc.want, withCompressionMemoryLimit(tc.limit))
 		})
 	}
 }
@@ -352,12 +352,12 @@ func TestPMDMemoryLimitRetention(t *testing.T) {
 	}
 	for _, limit := range []int{100, 1000, 4 << 10, 64 << 10} {
 		t.Run(fmt.Sprint(limit), func(t *testing.T) {
-			server := NewPerMessageDeflateExtension(WithCompressionMemoryLimit(limit)).(*perMessageDeflate)
-			client := NewPerMessageDeflateExtension(WithCompressionMemoryLimit(limit)).(*perMessageDeflate)
+			server := newPerMessageDeflate(withCompressionMemoryLimit(limit)).(*perMessageDeflate)
+			client := newPerMessageDeflate(withCompressionMemoryLimit(limit)).(*perMessageDeflate)
 			done := make(chan struct{})
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				defer close(done)
-				c, err := (&Upgrader{NewExtensions: func() []Extension { return []Extension{server} }, MaxMessageSize: -1}).Upgrade(w, r)
+				c, err := upgradeExtensions(w, r, &Upgrader{MaxMessageSize: -1}, []frameExtension{server})
 				if err != nil {
 					t.Error(err)
 					return
@@ -375,7 +375,7 @@ func TestPMDMemoryLimitRetention(t *testing.T) {
 				}
 			}))
 			defer srv.Close()
-			c, _, err := (&Dialer{NewExtensions: func() []Extension { return []Extension{client} }, MaxMessageSize: -1}).Dial(t.Context(), "ws"+srv.URL[4:])
+			c, _, err := dialExtensions(t.Context(), &Dialer{MaxMessageSize: -1}, "ws"+srv.URL[4:], []frameExtension{client})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -422,7 +422,7 @@ func (e *xorExtension) Negotiate(header string) error {
 	e.enabled = strings.Contains(header, "x-xor")
 	return nil
 }
-func (e *xorExtension) ProcessOutgoingFrame(f *Frame) error {
+func (e *xorExtension) ProcessOutgoingFrame(f *wireFrame) error {
 	if f.Opcode >= CloseMessage {
 		return nil
 	}
@@ -437,7 +437,7 @@ func (e *xorExtension) ProcessOutgoingFrame(f *Frame) error {
 	f.Payload, f.Rsv2 = p, true
 	return nil
 }
-func (e *xorExtension) ProcessIncomingFrame(f *Frame) error {
+func (e *xorExtension) ProcessIncomingFrame(f *wireFrame) error {
 	if f.Opcode >= CloseMessage {
 		return nil
 	}
@@ -465,7 +465,7 @@ func TestPMDComposesWithFrameExtensions(t *testing.T) {
 	text := bytes.Repeat([]byte("composed "), 1000)
 	serverXor := &xorExtension{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		c, err := (&Upgrader{NewExtensions: func() []Extension { return []Extension{NewPerMessageDeflateExtension(), serverXor} }, MaxMessageSize: -1}).Upgrade(w, r)
+		c, err := upgradeExtensions(w, r, &Upgrader{MaxMessageSize: -1}, []frameExtension{newPerMessageDeflate(), serverXor})
 		if err != nil {
 			t.Error(err)
 			return
@@ -484,7 +484,7 @@ func TestPMDComposesWithFrameExtensions(t *testing.T) {
 	}))
 	defer srv.Close()
 	clientXor := &xorExtension{}
-	c, resp, err := (&Dialer{NewExtensions: func() []Extension { return []Extension{NewPerMessageDeflateExtension(), clientXor} }, MaxMessageSize: -1}).Dial(t.Context(), "ws"+srv.URL[4:])
+	c, resp, err := dialExtensions(t.Context(), &Dialer{MaxMessageSize: -1}, "ws"+srv.URL[4:], []frameExtension{newPerMessageDeflate(), clientXor})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -506,15 +506,15 @@ func TestPMDComposesWithFrameExtensions(t *testing.T) {
 }
 
 func TestPMDCompositionRejectsRSV1Changes(t *testing.T) {
-	pmd := NewPerMessageDeflateExtension()
+	pmd := newPerMessageDeflate()
 	if err := pmd.Negotiate("permessage-deflate"); err != nil {
 		t.Fatal(err)
 	}
 	custom := &xorExtension{enabled: true, tamperRSV1: true}
 	raw := &memoryConn{Reader: bytes.NewReader(nil)}
-	c := NewConn(raw, ConnConfig{Extensions: []Extension{pmd, custom}})
+	c := newTestConn(raw, ConnConfig{}, []frameExtension{pmd, custom}...)
 	err := c.WriteMessage(BinaryMessage, []byte("hello"))
-	if !errors.Is(err, ErrUnsupportedExtensionComposition) || raw.written.Len() != 0 {
+	if !errors.Is(err, errUnsupportedExtensionComposition) || raw.written.Len() != 0 {
 		t.Fatalf("RSV1 change = %v, wire %x", err, raw.written.Bytes())
 	}
 	// Compression consumed input into the takeover context: writes stay poisoned.
@@ -525,9 +525,9 @@ func TestPMDCompositionRejectsRSV1Changes(t *testing.T) {
 
 func TestPMDCloseReleasesSendCompressor(t *testing.T) {
 	for _, limit := range []int{0, DefaultCompressionMemoryLimit} {
-		send, _ := pmdLink(t, "permessage-deflate", WithCompressionMemoryLimit(limit))
+		send, _ := pmdLink(t, "permessage-deflate", withCompressionMemoryLimit(limit))
 		raw := &memoryConn{Reader: bytes.NewReader(nil)}
-		c := NewConn(raw, ConnConfig{Extensions: []Extension{send}})
+		c := newTestConn(raw, ConnConfig{}, []frameExtension{send}...)
 		if err := c.WriteMessage(BinaryMessage, []byte("hello hello")); err != nil {
 			t.Fatal(err)
 		}

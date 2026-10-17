@@ -45,7 +45,7 @@ func TestPerMessageDeflateExactSelection(t *testing.T) {
 		{"permessage-deflate;", false, true},
 	} {
 		t.Run(tc.header, func(t *testing.T) {
-			pmd := NewPerMessageDeflateExtension().(*perMessageDeflate)
+			pmd := newPerMessageDeflate().(*perMessageDeflate)
 			err := pmd.Negotiate(tc.header)
 			if (err != nil) != tc.invalid || pmd.enabled != tc.enabled || err != nil && !errors.Is(err, ErrInvalidExtension) {
 				t.Fatalf("Negotiate(%q) = %v, enabled = %v", tc.header, err, pmd.enabled)
@@ -88,8 +88,8 @@ func TestUpgradePerMessageDeflateAlternatives(t *testing.T) {
 			r.Header["Sec-WebSocket-Extensions"] = tc.offers
 			raw := &memoryConn{Reader: bytes.NewReader(nil)}
 			w := &hijackResponse{httptest.NewRecorder(), raw, bufio.NewReadWriter(bufio.NewReader(raw), bufio.NewWriter(raw))}
-			pmd := NewPerMessageDeflateExtension()
-			conn, err := (&Upgrader{NewExtensions: func() []Extension { return []Extension{pmd} }}).Upgrade(w, r)
+			pmd := newPerMessageDeflate()
+			conn, err := upgradeExtensions(w, r, &Upgrader{}, []frameExtension{pmd})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -159,7 +159,7 @@ func FuzzExtensionNegotiation(f *testing.F) {
 		if err != nil || !reflect.DeepEqual(got, parsed) {
 			t.Fatalf("round trip = %#v, %v; want %#v", got, err, parsed)
 		}
-		pmd := NewPerMessageDeflateExtension()
+		pmd := newPerMessageDeflate()
 		if err := pmd.Negotiate(strings.Join(normalized, ", ")); err != nil && pmd.IsEnabled() {
 			t.Fatal("failed negotiation enabled compression")
 		}

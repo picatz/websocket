@@ -13,8 +13,8 @@ import (
 func contextPipe(t *testing.T) (client, server *websocket.Conn) {
 	t.Helper()
 	a, b := net.Pipe()
-	client = websocket.NewConn(a, websocket.ConnConfig{})
-	server = websocket.NewConn(b, websocket.ConnConfig{Server: true})
+	client = mustNewConn(a, websocket.ConnConfig{})
+	server = mustNewConn(b, websocket.ConnConfig{Server: true})
 	// Close the raw pipes first: on a synchronous pipe, two Close calls would
 	// otherwise each wait out the one-second close-notification bound.
 	t.Cleanup(func() {
@@ -180,4 +180,13 @@ func TestWriteMessageContextCancelWhileWaitingForWriter(t *testing.T) {
 	if err := contextAwait(t, first); err == nil {
 		t.Fatal("stalled writer succeeded after abort")
 	}
+}
+
+// mustNewConn is websocket.NewConn for configurations that cannot fail.
+func mustNewConn(conn net.Conn, cfg websocket.ConnConfig) *websocket.Conn {
+	c, err := websocket.NewConn(conn, cfg)
+	if err != nil {
+		panic(err)
+	}
+	return c
 }
