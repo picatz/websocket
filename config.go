@@ -99,6 +99,8 @@ type Dialer struct {
 // matching ErrBadHandshake together with the server's response. Its Body
 // holds up to the first 4 KiB of the response body, read before the
 // connection is closed, so an explanation such as a 401's can still be read.
+// A failure to read randomness for the Sec-WebSocket-Key matches neither
+// ErrBadHandshake nor ErrInvalidConfig.
 func (d *Dialer) Dial(ctx context.Context, urlStr string) (*Conn, *http.Response, error) {
 	return d.dial(ctx, urlStr, nil)
 }

@@ -440,10 +440,9 @@ func newConn(conn net.Conn, br *bufio.Reader, isServer bool, extensions []frameE
 // Close. Callers must coordinate updates to the shared deadline state.
 //
 // Deadlines bound transport I/O, not an entire method call: already buffered
-// data may still be consumed, and callbacks, extension work and lock waits are
-// not preempted. ReadMessage may
-// write automatic Pong responses, so bounding both directions may be necessary.
-// A read timeout is terminal. Close after a write timeout; a partially written
+// data may still be consumed, and compression work and lock waits are not
+// preempted. ReadMessage may write automatic Pong responses, so bounding both
+// directions may be necessary. A read timeout is terminal. Close after a write timeout; a partially written
 // frame cannot be retried safely. Normal Close may replace the write deadline
 // with its own one-second deadline; failure cleanup preserves caller deadlines.
 func (c *Conn) SetDeadline(t time.Time) error {
@@ -611,17 +610,15 @@ func (c *Conn) failureCloseSafe() bool {
 // carrying the peer's status code and reason; it also matches io.EOF.
 // A header that already proves a protocol or size violation is rejected without
 // waiting for its payload, even when that payload is absent or truncated.
-// Without registered extensions, invalid text is rejected as its payload arrives.
-// With custom extensions, text is checked after each decoded fragment. Built-in
-// PMD validates decoded chunks, but Go's inflater may buffer up to 32 KiB before
+// Invalid text is rejected as its payload arrives. A compressed message is
+// validated as it is decoded, but Go's inflater may buffer up to 32 KiB before
 // exposing output, so invalid text or a small decoded overflow can remain hidden
 // while waiting for compressed input. An incomplete rune may span reads, frames,
 // controls, and DEFLATE streams. Size limits do not bound CPU time.
 // Any error makes the connection terminal: later reads and writes fail. Known
 // protocol and size violations send an appropriate best-effort Close when safe,
 // then abort the transport. Notification uses at most one second without changing
-// caller deadlines. Custom extensions may require dropping without notification.
-// Arbitrary callbacks and custom transport Close implementations can still block.
+// caller deadlines. A custom transport's Close implementation can still block.
 // Once Shutdown has started, ReadMessage discards data messages and returns
 // only the peer's *CloseError or an error. A read interrupted by Close or
 // CloseWithStatus returns an error matching net.ErrClosed, even if the peer's
@@ -831,12 +828,12 @@ func validUTF8Prefix(p []byte) (int, bool) {
 }
 
 // WriteMessage writes a WebSocket message. Transport errors wrap the
-// underlying error for errors.Is and errors.As. Close the connection
-// after a transport error; the transport is not closed automatically, and clearing
-// a write deadline cannot make a partially written message safe to retry. Later
-// writes fail with the original cause without calling outgoing extensions again,
-// unless argument validation or a closed connection takes precedence. Argument
-// validation and extension rejection before transport I/O do not poison writes.
+// underlying error for errors.Is and errors.As. Close the connection after a
+// transport error; the transport is not closed automatically, and clearing a
+// write deadline cannot make a partially written message safe to retry. Later
+// writes fail with the original cause, unless argument validation or a closed
+// connection takes precedence. Argument validation before transport I/O does
+// not poison writes.
 func (c *Conn) WriteMessage(messageType MessageType, data []byte) error {
 	if messageType != TextMessage && messageType != BinaryMessage {
 		return errInvalidMessageType
@@ -885,18 +882,17 @@ func (c *Conn) WriteMessage(messageType MessageType, data []byte) error {
 
 // writeControlFrame writes a control frame to the connection for Ping,
 // CloseWrite, Shutdown and the automatic Pong reply. A successful Close frame
-// starts the closing handshake: subsequent data,
-// Ping and Close frames return an error matching net.ErrClosed, while reads
-// and Pongs remain available until the peer closes or Close is called. Call
-// Close to release the transport if the peer does not respond; this method
-// does not impose a handshake timeout.
+// starts the closing handshake: subsequent data, Ping and Close frames return
+// an error matching net.ErrClosed, while reads and Pongs remain available until
+// the peer closes or Close is called. Call Close to release the transport if
+// the peer does not respond; this method does not impose a handshake timeout.
 //
-// Transport errors wrap the underlying error for errors.Is and errors.As. Close after a transport error; the transport is not
-// closed automatically, and clearing a write deadline cannot make the frame
-// stream reusable. Later writes fail with the original cause without calling
-// outgoing extensions again, unless argument validation or the closing state
-// takes precedence. Argument validation and extension rejection before transport
-// I/O do not poison writes.
+// Transport errors wrap the underlying error for errors.Is and errors.As.
+// Close after a transport error; the transport is not closed automatically,
+// and clearing a write deadline cannot make the frame stream reusable. Later
+// writes fail with the original cause, unless argument validation or the
+// closing state takes precedence. Argument validation before transport I/O
+// does not poison writes.
 func (c *Conn) writeControlFrame(opcode opcode, data []byte) error {
 	if opcode != opClose && opcode != opPing && opcode != opPong {
 		return errInvalidOpcode
