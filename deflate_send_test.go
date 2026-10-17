@@ -56,7 +56,8 @@ func wireFrames(t *testing.T, wire []byte) []*Frame {
 	c.extensions = []Extension{&negotiationExtension{name: "inspect", enabled: true}}
 	var frames []*Frame
 	for {
-		f, n, err := c.readFrameHeader()
+		f := new(Frame)
+		n, err := c.readFrameHeader(f)
 		if err == io.EOF {
 			return frames
 		}
