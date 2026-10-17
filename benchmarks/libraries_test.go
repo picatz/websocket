@@ -33,9 +33,13 @@ type library struct {
 	echo http.HandlerFunc
 	// dial opens a client connection to a ws:// URL.
 	dial func(ctx context.Context, url string) (client, error)
+	// accept upgrades a request and returns the server side of the
+	// connection, for workloads where the server sends first.
+	accept func(w http.ResponseWriter, r *http.Request) (client, error)
 }
 
-// client is the client side of one connection.
+// client is one side of a connection: the client side, or the server side
+// when it comes from accept.
 type client interface {
 	write(p []byte) error
 	read() ([]byte, error)
@@ -68,6 +72,13 @@ var libraries = []library{
 			}
 			return picatzClient{conn}, nil
 		},
+		accept: func(w http.ResponseWriter, r *http.Request) (client, error) {
+			conn, err := picatz.Upgrade(w, r)
+			if err != nil {
+				return nil, err
+			}
+			return picatzClient{conn}, nil
+		},
 	},
 	{
 		name: "coder",
@@ -91,6 +102,14 @@ var libraries = []library{
 		},
 		dial: func(ctx context.Context, url string) (client, error) {
 			conn, _, err := coder.Dial(ctx, url, &coder.DialOptions{CompressionMode: coder.CompressionDisabled})
+			if err != nil {
+				return nil, err
+			}
+			conn.SetReadLimit(readLimit)
+			return coderClient{conn}, nil
+		},
+		accept: func(w http.ResponseWriter, r *http.Request) (client, error) {
+			conn, err := coder.Accept(w, r, &coder.AcceptOptions{CompressionMode: coder.CompressionDisabled})
 			if err != nil {
 				return nil, err
 			}
@@ -126,6 +145,15 @@ var libraries = []library{
 			conn.SetReadLimit(readLimit)
 			return gorillaClient{conn}, nil
 		},
+		accept: func(w http.ResponseWriter, r *http.Request) (client, error) {
+			upgrader := gorilla.Upgrader{}
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				return nil, err
+			}
+			conn.SetReadLimit(readLimit)
+			return gorillaClient{conn}, nil
+		},
 	},
 	{
 		name: "gobwas",
@@ -150,7 +178,7 @@ var libraries = []library{
 			if err != nil {
 				return nil, err
 			}
-			c := gobwasClient{conn: conn, r: conn}
+			c := gobwasClient{conn: conn, r: conn, state: ws.StateClientSide}
 			if br != nil {
 				// The handshake read ahead; drain those bytes first.
 				c.r = struct {
@@ -159,6 +187,13 @@ var libraries = []library{
 				}{br, conn}
 			}
 			return &c, nil
+		},
+		accept: func(w http.ResponseWriter, r *http.Request) (client, error) {
+			conn, _, _, err := ws.UpgradeHTTP(r, w)
+			if err != nil {
+				return nil, err
+			}
+			return &gobwasClient{conn: conn, r: conn, state: ws.StateServerSide}, nil
 		},
 	},
 }
@@ -199,16 +234,19 @@ func (c gorillaClient) read() ([]byte, error) {
 type gobwasClient struct {
 	conn net.Conn
 	// r reads from conn, after any bytes buffered during the handshake.
-	r io.ReadWriter
+	r     io.ReadWriter
+	state ws.State
 }
 
-func (c *gobwasClient) write(p []byte) error { return wsutil.WriteClientBinary(c.conn, p) }
+func (c *gobwasClient) write(p []byte) error {
+	return wsutil.WriteMessage(c.conn, c.state, ws.OpBinary, p)
+}
 func (c *gobwasClient) close() error {
-	_ = wsutil.WriteClientMessage(c.conn, ws.OpClose, ws.NewCloseFrameBody(ws.StatusNormalClosure, ""))
+	_ = wsutil.WriteMessage(c.conn, c.state, ws.OpClose, ws.NewCloseFrameBody(ws.StatusNormalClosure, ""))
 	return c.conn.Close()
 }
 func (c *gobwasClient) read() ([]byte, error) {
-	p, _, err := gobwasRead(c.r, ws.StateClientSide)
+	p, _, err := gobwasRead(c.r, c.state)
 	return p, err
 }
 

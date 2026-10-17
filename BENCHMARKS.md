@@ -197,7 +197,7 @@ with [benchstat]:
 cd benchmarks
 go test ./...
 for i in $(seq 10); do
-  go test -run '^$' -bench 'Echo|Handshake' -benchmem -count=1
+  go test -run '^$' -bench 'Echo|Handshake|Broadcast' -benchmem -count=1
   go test -run '^$' -bench 'IdleConn' -benchtime=1x -count=1
 done | tee new.txt
 benchstat -col /lib new.txt
@@ -207,11 +207,21 @@ benchstat -col /lib new.txt
   loopback TCP connection. Both endpoints use the library under test, so the
   time and allocations cover both sides. Each op is one round trip, and MB/s
   counts the payload once per round trip, although it crosses the
-  connection twice.
+  connection twice. `p50-ns` and `p99-ns` are the median and 99th percentile
+  of individual round trips (the last 65,536 of them), which ns/op, a mean,
+  hides. `gc-cpu-ns/op` is the CPU time the runtime attributes to the garbage
+  collector per round trip, without idle-time marking: what the bytes
+  allocated cost in this process. The runtime updates it when a collection
+  ends, so a row that allocates too little to trigger one reports 0.
 - `EchoParallel`: the same with 1 KiB messages and one connection per parallel
   worker (GOMAXPROCS of them) against one server. Its time per op is wall
   time divided by all workers' round trips, so it measures throughput, not
   the latency of one round trip.
+- `Broadcast`: a server sends one 1 KiB message to each of 100 connections
+  in turn, as a chat or pub/sub hub does, and every client reads it. One op
+  is one message delivered to all 100 clients, so time and allocations cover
+  the server's 100 writes and the clients' 100 reads, and MB/s counts bytes
+  delivered.
 - `Handshake`: TCP connect, the HTTP upgrade on both sides, and the client's
   close. The client sends a Close frame and closes the TCP connection without
   waiting for the reply. coder/websocket cannot do that: it either waits for
