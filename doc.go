@@ -140,9 +140,9 @@
 //
 // # Proxies and custom transports
 //
-// Dial connects directly unless Dialer.Proxy selects an HTTP or HTTPS proxy, for
-// example http.ProxyFromEnvironment. It then tunnels with CONNECT and runs the
-// handshake, and TLS for wss, end to end inside the tunnel. Redirects are
+// Dial connects directly unless Dialer.Proxy selects an HTTP or HTTPS proxy,
+// for example http.ProxyFromEnvironment. It then tunnels with CONNECT and runs
+// the handshake, and TLS for wss, end to end inside the tunnel. Redirects are
 // never followed. Dialer.NetDialContext replaces the TCP dialer, for SOCKS,
 // Unix sockets or tests. NewConn runs the protocol over any net.Conn whose
 // handshake the caller has already performed, configured by a ConnConfig.

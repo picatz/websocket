@@ -56,7 +56,7 @@ func TestCloseSendsNormalClosure(t *testing.T) {
 // Invalid statuses are caller errors: nothing is written and the connection
 // stays usable.
 //
-// https://datatracker.ietf.org/doc/html/rfc6455#section-7.4.2
+// https://www.rfc-editor.org/rfc/rfc6455#section-7.4.2
 func TestCloseWithStatusRejectsInvalid(t *testing.T) {
 	tests := []struct {
 		code   StatusCode

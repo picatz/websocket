@@ -11,12 +11,12 @@ import (
 var (
 	// ErrBadHandshake reports an opening handshake that failed because of the
 	// other side or the network. From Dial, the server could not be reached,
-	// the request could not be sent, the server answered with something
-	// other than a valid 101 response, or Dial's context ended first, in
-	// which case the error also matches the context's cause. Dial returns
-	// the server's response alongside it when one was read. From Upgrade, the client's request was
-	// malformed and Upgrade has already replied with a 4xx status, or the
-	// connection failed after Upgrade took it over.
+	// the request could not be sent, the server answered with something other
+	// than a valid 101 response, or Dial's context ended first, in which case
+	// the error also matches the context's cause. Dial returns the server's
+	// response alongside it when one was read. From Upgrade, the client's
+	// request was malformed and Upgrade has already replied with a 4xx status,
+	// or the connection failed after Upgrade took it over.
 	ErrBadHandshake = errors.New("websocket: bad handshake")
 	// ErrOriginNotAllowed reports a request whose Origin the Upgrade origin
 	// policy rejected. Upgrade has already replied 403 Forbidden.

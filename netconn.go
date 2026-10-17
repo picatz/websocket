@@ -72,7 +72,7 @@ func (nc *netConn) Read(p []byte) (int, error) {
 			nc.readErr = netConnError(err)
 			return 0, nc.readErr
 		case typ != nc.messageType:
-			// https://datatracker.ietf.org/doc/html/rfc6455#section-7.4.1
+			// https://www.rfc-editor.org/rfc/rfc6455#section-7.4.1
 			nc.readErr = fmt.Errorf("%w: NetConn got %v, want %v", errUnexpectedFrame, typ, nc.messageType)
 			_ = nc.c.CloseWithStatus(StatusUnsupportedData, "")
 			return 0, nc.readErr

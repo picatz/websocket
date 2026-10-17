@@ -297,7 +297,8 @@ func (r *deflateFrameReader) advance() error {
 			return failWith(StatusProtocolError, errUnexpectedFrame)
 		}
 		// readFrameHeader already rejects RSV1 on continuations and bounds each
-		// encoded frame. Its length must not spend the remaining decoded budget.
+		// encoded frame. Its length must not spend the remaining decoded
+		// budget.
 		if err := r.start(&f, n); err != nil {
 			return err
 		}
@@ -495,8 +496,8 @@ func (p *perMessageDeflate) decodeMessage(input *deflateMessageInput, limit int,
 			nmax = remaining + 1
 		}
 		n, readErr := f.inflater.Read(f.buffer[:nmax])
-		// A source Close can flush invalid/oversized buffered output. Closure wins
-		// before even validating or appending that stale output.
+		// A source Close can flush invalid/oversized buffered output. Closure
+		// wins before even validating or appending that stale output.
 		if input.closedByPeer() {
 			return nil, errDeflatePeerClose
 		}
@@ -537,8 +538,9 @@ func (p *perMessageDeflate) decodeMessage(input *deflateMessageInput, limit int,
 			continue
 		}
 		if readErr != io.EOF {
-			// Preserve source framing, control, and transport causes exactly; only
-			// errors originating in the inflater acquire the payload classification.
+			// Preserve source framing, control, and transport causes exactly;
+			// only errors originating in the inflater acquire the payload
+			// classification.
 			if input.sourceErr != nil && input.sourceErr != io.EOF {
 				return nil, input.sourceErr
 			}

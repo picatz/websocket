@@ -209,7 +209,7 @@ func (r *messageReader) stop(err error) error {
 	case err != io.EOF:
 		return r.fail(err)
 	case r.text && r.utf8.pending != 0:
-		// https://datatracker.ietf.org/doc/html/rfc6455#section-8.1
+		// https://www.rfc-editor.org/rfc/rfc6455#section-8.1
 		return r.fail(failWith(StatusInvalidFramePayloadData, errInvalidFrame))
 	}
 	return r.end(io.EOF)

@@ -5,12 +5,12 @@ import (
 	"fmt"
 )
 
-// Compression configures permessage-deflate (RFC 7692) for a Dialer or
-// Upgrader. Its zero value negotiates context takeover with full 2^15-byte
+// Compression configures permessage-deflate (RFC 7692) for a Dialer, Upgrader
+// or ConnConfig. Its zero value negotiates context takeover with full 2^15-byte
 // windows, compresses every message at flate.DefaultCompression, and bounds
-// retained state to DefaultCompressionMemoryLimit per connection. A
-// Compression holds settings only, so one value may configure every
-// connection; Dial and Upgrade create each connection's compressor state.
+// retained state to DefaultCompressionMemoryLimit per connection. A Compression
+// holds settings only, so one value may configure every connection; Dial and
+// Upgrade create each connection's compressor state.
 //
 // https://www.rfc-editor.org/rfc/rfc7692
 type Compression struct {
@@ -24,7 +24,8 @@ type Compression struct {
 	// Threshold sends messages shorter than this many bytes uncompressed.
 	// Compressing a tiny message costs CPU and can make it larger; RFC 7692
 	// section 6 lets a sender choose per message. Uncompressed messages do
-	// not enter the compression context. Zero compresses every message.
+	// not enter the compression context. Zero compresses every message; a
+	// negative value is invalid.
 	Threshold int
 
 	// MemoryLimit bounds the compression state one connection keeps between

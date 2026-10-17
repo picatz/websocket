@@ -13,7 +13,7 @@ import (
 
 // StatusCode is a WebSocket close status code.
 //
-// https://datatracker.ietf.org/doc/html/rfc6455#section-7.4
+// https://www.rfc-editor.org/rfc/rfc6455#section-7.4
 type StatusCode int
 
 // Close status codes from RFC 6455 and the IANA WebSocket Close Code Number
@@ -21,7 +21,7 @@ type StatusCode int
 // StatusTLSHandshake are local-only indicators and must not appear on the wire;
 // CloseWithStatus rejects them.
 //
-// https://datatracker.ietf.org/doc/html/rfc6455#section-7.4.1
+// https://www.rfc-editor.org/rfc/rfc6455#section-7.4.1
 // https://www.iana.org/assignments/websocket/websocket.xhtml#close-code-number
 const (
 	StatusNormalClosure           StatusCode = 1000
@@ -41,7 +41,8 @@ const (
 	StatusTLSHandshake            StatusCode = 1015
 )
 
-// String returns the RFC 6455 name of a registered code, or its number.
+// String returns the name of the constant for a registered code, such as
+// "StatusNormalClosure", or "StatusCode(n)" for any other.
 func (s StatusCode) String() string {
 	switch s {
 	case StatusNormalClosure:
@@ -82,11 +83,12 @@ func (s StatusCode) String() string {
 // maxCloseReason is the largest reason that fits in a control frame after the
 // two-byte status code.
 //
-// https://datatracker.ietf.org/doc/html/rfc6455#section-5.5
+// https://www.rfc-editor.org/rfc/rfc6455#section-5.5
 const maxCloseReason = 125 - 2
 
-// ErrInvalidCloseStatus reports a status code or reason that CloseWithStatus
-// cannot send.
+// ErrInvalidCloseStatus reports a status code or reason that CloseWithStatus,
+// CloseWrite or Shutdown cannot send. Sendable codes are 1000 to 1003, 1007 to
+// 1014 and 3000 to 4999; the reason must be valid UTF-8 of at most 123 bytes.
 var ErrInvalidCloseStatus = errors.New("websocket: invalid close status")
 
 // CloseError is the peer's close frame, returned by ReadMessage,
@@ -97,7 +99,7 @@ var ErrInvalidCloseStatus = errors.New("websocket: invalid close status")
 // matches io.EOF with errors.Is, so a read loop can treat it as the end of the
 // stream; any other status does not. CloseStatus reads the code of either.
 //
-// https://datatracker.ietf.org/doc/html/rfc6455#section-7.1.5
+// https://www.rfc-editor.org/rfc/rfc6455#section-7.1.5
 type CloseError struct {
 	Code   StatusCode
 	Reason string
@@ -152,7 +154,7 @@ func newCloseError(payload []byte) *CloseError {
 // local-only indicators and are rejected, like other reserved or unassigned
 // codes; the reason must be valid UTF-8 of at most 123 bytes.
 //
-// https://datatracker.ietf.org/doc/html/rfc6455#section-7.4.2
+// https://www.rfc-editor.org/rfc/rfc6455#section-7.4.2
 func closePayload(code StatusCode, reason string) ([]byte, error) {
 	if code < 1000 || code > 4999 {
 		return nil, fmt.Errorf("%w: code %d out of range", ErrInvalidCloseStatus, int(code))
@@ -177,7 +179,7 @@ func closePayload(code StatusCode, reason string) ([]byte, error) {
 // exactly like Close, including the one-second best-effort notification and the
 // net.ErrClosed match on repeated calls.
 //
-// https://datatracker.ietf.org/doc/html/rfc6455#section-7.1.2
+// https://www.rfc-editor.org/rfc/rfc6455#section-7.1.2
 func (c *Conn) CloseWithStatus(code StatusCode, reason string) error {
 	payload, err := closePayload(code, reason)
 	if err != nil {
@@ -204,7 +206,7 @@ func (c *Conn) CloseWithStatus(code StatusCode, reason string) error {
 // or the connection is closed, CloseWrite returns an error matching
 // net.ErrClosed.
 //
-// https://datatracker.ietf.org/doc/html/rfc6455#section-7.1.2
+// https://www.rfc-editor.org/rfc/rfc6455#section-7.1.2
 func (c *Conn) CloseWrite(code StatusCode, reason string) error {
 	payload, err := closePayload(code, reason)
 	if err != nil {

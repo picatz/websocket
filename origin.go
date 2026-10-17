@@ -8,7 +8,8 @@ import (
 )
 
 // upgradeOriginAllowed validates syntax before handing policy to the caller.
-// Iterate the map because Header.Get alone misses noncanonical or repeated keys.
+// Iterate the map because Header.Get alone misses noncanonical or repeated
+// keys.
 func upgradeOriginAllowed(r *http.Request, check func(*http.Request, string) bool) bool {
 	origin, present := "", false
 	for name, values := range r.Header {
@@ -45,8 +46,9 @@ func upgradeOriginAllowed(r *http.Request, check func(*http.Request, string) boo
 // canonicalOrigin accepts one serialized tuple, not a URL with optional path,
 // userinfo, query, or fragment. The deliberately conservative host grammar is
 // ASCII RFC 3986 reg-name characters except percent escapes and commas, or a
-// bracketed IPv6 address. Commas conflict with our single-origin policy. It neither
-// resolves names nor applies IDNA, DNS suffix, or IPv4 alias normalization.
+// bracketed IPv6 address. Commas conflict with our single-origin policy. It
+// neither resolves names nor applies IDNA, DNS suffix, or IPv4 alias
+// normalization.
 func canonicalOrigin(value string) (string, bool) {
 	if value == "null" {
 		return value, true

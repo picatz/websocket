@@ -1,0 +1,223 @@
+// github.com/picatz/websocket, GOOS=linux
+package websocket
+
+const DefaultCompressionMemoryLimit = 64 << 10
+
+const DefaultMaxMessageSize = 1 << 20
+
+const DefaultMaxResponseHeaderBytes = 1 << 20
+
+var (
+	ErrBadHandshake = errors.New("websocket: bad handshake")
+
+	ErrOriginNotAllowed = errors.New("websocket: origin not allowed")
+
+	ErrUnsupportedVersion = errors.New("websocket: unsupported WebSocket version")
+
+	ErrInvalidConfig = errors.New("websocket: invalid configuration")
+
+	ErrNotHijacker = fmt.Errorf("%w: response does not implement http.Hijacker (HTTP/2 or a wrapped ResponseWriter)", ErrInvalidConfig)
+)
+
+var (
+	ErrProtocol = errors.New("websocket: protocol error")
+
+	ErrMessageTooLarge error = &protocolError{"websocket: message too large"}
+)
+
+var ErrInvalidCloseStatus = errors.New("websocket: invalid close status")
+
+func NetConn(ctx context.Context, c *Conn, messageType MessageType) net.Conn
+
+type CloseError struct {
+	Code   StatusCode
+	Reason string
+}
+
+func (e *CloseError) Error() string
+
+func (e *CloseError) Is(target error) bool
+
+type Compression struct {
+	Level int
+
+	Threshold int
+
+	MemoryLimit int
+
+	ClientNoContextTakeover bool
+	ServerNoContextTakeover bool
+
+	ClientMaxWindowBits int
+	ServerMaxWindowBits int
+}
+
+type Conn struct {
+	// contains filtered or unexported fields
+}
+
+func Dial(ctx context.Context, urlStr string) (*Conn, *http.Response, error)
+
+func NewConn(conn net.Conn, cfg ConnConfig) (*Conn, error)
+
+func Upgrade(w http.ResponseWriter, r *http.Request) (*Conn, error)
+
+func (c *Conn) Close() error
+
+func (c *Conn) CloseWithStatus(code StatusCode, reason string) error
+
+func (c *Conn) CloseWrite(code StatusCode, reason string) error
+
+func (c *Conn) ConnectionState() (tls.ConnectionState, bool)
+
+func (c *Conn) LocalAddr() net.Addr
+
+func (c *Conn) NextReader() (messageType MessageType, r io.Reader, err error)
+
+func (c *Conn) NextWriter(messageType MessageType) (io.WriteCloser, error)
+
+func (c *Conn) Ping(ctx context.Context) error
+
+func (c *Conn) ReadMessage() (messageType MessageType, data []byte, err error)
+
+func (c *Conn) ReadMessageContext(ctx context.Context) (messageType MessageType, data []byte, err error)
+
+func (c *Conn) RemoteAddr() net.Addr
+
+func (c *Conn) SetDeadline(t time.Time) error
+
+func (c *Conn) SetReadDeadline(t time.Time) error
+
+func (c *Conn) SetWriteDeadline(t time.Time) error
+
+func (c *Conn) Shutdown(ctx context.Context, code StatusCode, reason string) error
+
+func (c *Conn) Subprotocol() string
+
+func (c *Conn) WriteMessage(messageType MessageType, data []byte) error
+
+func (c *Conn) WriteMessageContext(ctx context.Context, messageType MessageType, data []byte) error
+
+type ConnConfig struct {
+	Server bool
+
+	Subprotocol string
+
+	Extensions string
+
+	Compression *Compression
+
+	MaxMessageSize int
+}
+
+type Dialer struct {
+	NetDialContext func(ctx context.Context, network, addr string) (net.Conn, error)
+
+	Proxy func(*http.Request) (*url.URL, error)
+
+	TLSClientConfig *tls.Config
+
+	Header http.Header
+
+	Subprotocols []string
+
+	Compression *Compression
+
+	MaxMessageSize int
+
+	MaxResponseHeaderBytes int64
+}
+
+func (d *Dialer) Dial(ctx context.Context, urlStr string) (*Conn, *http.Response, error)
+
+type MessageType int
+
+const (
+	TextMessage   MessageType = 1
+	BinaryMessage MessageType = 2
+)
+
+func (t MessageType) String() string
+
+type StatusCode int
+
+const (
+	StatusNormalClosure           StatusCode = 1000
+	StatusGoingAway               StatusCode = 1001
+	StatusProtocolError           StatusCode = 1002
+	StatusUnsupportedData         StatusCode = 1003
+	StatusNoStatusReceived        StatusCode = 1005
+	StatusAbnormalClosure         StatusCode = 1006
+	StatusInvalidFramePayloadData StatusCode = 1007
+	StatusPolicyViolation         StatusCode = 1008
+	StatusMessageTooBig           StatusCode = 1009
+	StatusMandatoryExtension      StatusCode = 1010
+	StatusInternalServerError     StatusCode = 1011
+	StatusServiceRestart          StatusCode = 1012
+	StatusTryAgainLater           StatusCode = 1013
+	StatusBadGateway              StatusCode = 1014
+	StatusTLSHandshake            StatusCode = 1015
+)
+
+func CloseStatus(err error) StatusCode
+
+func (s StatusCode) String() string
+
+type Upgrader struct {
+	CheckOrigin func(r *http.Request, origin string) bool
+
+	Subprotocols []string
+
+	Header http.Header
+
+	Compression *Compression
+
+	MaxMessageSize int
+
+	Error func(w http.ResponseWriter, r *http.Request, status int, err error)
+}
+
+func (u *Upgrader) Upgrade(w http.ResponseWriter, r *http.Request) (*Conn, error)
+
+// github.com/picatz/websocket/wsjson, GOOS=linux
+package wsjson
+
+var ErrNotText = errors.New("wsjson: message is not text")
+
+func Read(ctx context.Context, c *websocket.Conn, v any) error
+
+func Write(ctx context.Context, c *websocket.Conn, v any) error
+
+// github.com/picatz/websocket/browser, GOOS=js
+package browser
+
+var ErrDialFailed = errors.New("browser: websocket dial failed")
+
+type Conn struct {
+	// contains filtered or unexported fields
+}
+
+func Dial(ctx context.Context, urlStr string) (*Conn, error)
+
+func (c *Conn) Close() error
+
+func (c *Conn) CloseWithStatus(code websocket.StatusCode, reason string) error
+
+func (c *Conn) ReadMessage() (messageType websocket.MessageType, data []byte, err error)
+
+func (c *Conn) ReadMessageContext(ctx context.Context) (messageType websocket.MessageType, data []byte, err error)
+
+func (c *Conn) Subprotocol() string
+
+func (c *Conn) WriteMessage(messageType websocket.MessageType, data []byte) error
+
+func (c *Conn) WriteMessageContext(ctx context.Context, messageType websocket.MessageType, data []byte) error
+
+type Dialer struct {
+	Subprotocols []string
+
+	MaxMessageSize int
+}
+
+func (d *Dialer) Dial(ctx context.Context, urlStr string) (*Conn, error)
+

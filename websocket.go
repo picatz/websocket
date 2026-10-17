@@ -44,7 +44,7 @@ type MessageType int
 
 const (
 	TextMessage   MessageType = 1 // UTF-8 text (RFC 6455 Section 5.6)
-	BinaryMessage MessageType = 2 // arbitrary bytes
+	BinaryMessage MessageType = 2 // arbitrary bytes (RFC 6455 Section 5.6)
 )
 
 // String returns "TextMessage" or "BinaryMessage", or "MessageType(n)" for
@@ -120,10 +120,11 @@ type frameExtension interface {
 	// response after successful negotiation in Upgrade. Offers may contain
 	// comma-separated alternatives. Both paths validate the returned syntax.
 	Offer() string
-	// Negotiate receives the peer's complete, comma-joined extension header,
-	// or an empty string if it is absent. Dial and Upgrade validate its syntax
-	// and reject unoffered selections. The extension must validate its own
-	// parameters and repetition semantics, and disable itself if not negotiated.
+	// Negotiate receives the peer's complete, comma-joined extension header, or
+	// an empty string if it is absent. Dial and Upgrade validate its syntax and
+	// reject unoffered selections. The extension must validate its own
+	// parameters and repetition semantics, and disable itself if not
+	// negotiated.
 	Negotiate(response string) error
 	// ProcessOutgoingFrame allows the extension to modify outgoing frames.
 	ProcessOutgoingFrame(frame *wireFrame) error
@@ -261,9 +262,10 @@ func withServerMaxWindowBits(bits int) pmdOption {
 }
 
 // withCompressionLevel sets the DEFLATE level used to compress outgoing
-// messages, from compress/flate.HuffmanOnly (-2) to compress/flate.BestCompression
-// (9). compress/flate.DefaultCompression (-1) is the default. Other values
-// are ignored. The level is independent of the window size.
+// messages, from compress/flate.HuffmanOnly (-2) to
+// compress/flate.BestCompression (9). compress/flate.DefaultCompression (-1) is
+// the default. Other values are ignored. The level is independent of the window
+// size.
 func withCompressionLevel(level int) pmdOption {
 	return func(pmd *perMessageDeflate) {
 		if level >= flate.HuffmanOnly && level <= flate.BestCompression {
@@ -298,9 +300,10 @@ func withCompressionThreshold(n int) pmdOption {
 // responds with server_max_window_bits and, when the client offered it,
 // client_max_window_bits. Where a window cannot fit, or the peer's window
 // cannot be bounded, the corresponding no_context_takeover parameter is used
-// instead. A sender with a limit keeps only its window of history and re-indexes
-// it for each message, trading CPU for memory; without a limit it keeps a
-// whole compressor, which is faster but uses 0.5 to 1 MiB per connection.
+// instead. A sender with a limit keeps only its window of history and
+// re-indexes it for each message, trading CPU for memory; without a limit it
+// keeps a whole compressor, which is faster but uses 0.5 to 1 MiB per
+// connection.
 //
 // The default, [DefaultCompressionMemoryLimit], keeps full 2^15-byte windows,
 // so it changes no negotiated parameter, only what the sender retains. Pass 0
@@ -349,8 +352,8 @@ func newPerMessageDeflate(options ...pmdOption) frameExtension {
 // interleave messages unpredictably, so use a single read loop. Any number of
 // goroutines may write: each WriteMessage sends its whole message before the
 // next starts. Close, CloseWithStatus, CloseWrite, Shutdown, Ping and the
-// deadline setters may be called concurrently with reads and writes. Deadlines are shared transport
-// state, so goroutines that set them must coordinate.
+// deadline setters may be called concurrently with reads and writes. Deadlines
+// are shared transport state, so goroutines that set them must coordinate.
 type Conn struct {
 	conn     net.Conn      // Underlying network connection
 	br       *bufio.Reader // Buffered reader; writes borrow a pooled buffer per frame (see writeFrameBuffer)
@@ -434,17 +437,19 @@ func newConn(conn net.Conn, br *bufio.Reader, isServer bool, extensions []frameE
 	return wsConn
 }
 
-// SetDeadline sets the underlying transport's read and write deadlines, including
-// currently blocked I/O. A zero value clears both deadlines. It returns the
-// transport's error unchanged and may run concurrently with reads, writes and
-// Close. Callers must coordinate updates to the shared deadline state.
+// SetDeadline sets the underlying transport's read and write deadlines,
+// including currently blocked I/O. A zero value clears both deadlines. It
+// returns the transport's error unchanged and may run concurrently with reads,
+// writes and Close. Callers must coordinate updates to the shared deadline
+// state.
 //
 // Deadlines bound transport I/O, not an entire method call: already buffered
 // data may still be consumed, and compression work and lock waits are not
 // preempted. ReadMessage may write automatic Pong responses, so bounding both
-// directions may be necessary. A read timeout is terminal. Close after a write timeout; a partially written
-// frame cannot be retried safely. Normal Close may replace the write deadline
-// with its own one-second deadline; failure cleanup preserves caller deadlines.
+// directions may be necessary. A read timeout is terminal. Close after a write
+// timeout; a partially written frame cannot be retried safely. Normal Close may
+// replace the write deadline with its own one-second deadline; failure cleanup
+// preserves caller deadlines.
 func (c *Conn) SetDeadline(t time.Time) error {
 	return c.conn.SetDeadline(t)
 }
@@ -469,13 +474,12 @@ func (c *Conn) SetWriteDeadline(t time.Time) error {
 	return c.conn.SetWriteDeadline(t)
 }
 
-// Close closes the transport, making a best-effort StatusNormalClosure notification
-// with a one-second write deadline when no other writer is active, replacing
-// any write deadline set by the caller. It does not wait for the peer's closing
-// handshake. Reads, writes and Pings after Close, including calls it
-// interrupts, return errors matching net.ErrClosed; repeated calls to Close
-// return one too. Custom transport Close
-// implementations can still block.
+// Close closes the transport, making a best-effort StatusNormalClosure
+// notification with a one-second write deadline when no other writer is active,
+// replacing any write deadline set by the caller. It does not wait for the
+// peer's closing handshake. Reads, writes and Pings after Close, including
+// calls it interrupts, return errors matching net.ErrClosed; repeated calls to
+// Close return one too. Custom transport Close implementations can still block.
 //
 // Use CloseWithStatus to send another status code or a reason, and Shutdown
 // to wait for the peer's reply before closing the transport.
@@ -502,8 +506,9 @@ func (c *Conn) closeWithPayload(payload []byte) error {
 	// before writing, and never reuse a stream after a partial write.
 	if c.writeMu.TryLock() {
 		if !c.closeSent && c.writeErr == nil {
-			// Query extensions only when this call will write. A reentrant Close
-			// from an extension callback, or one after a write failure, does not.
+			// Query extensions only when this call will write. A reentrant
+			// Close from an extension callback, or one after a write failure,
+			// does not.
 			var buf [4]frameExtension
 			enabled, err := enabledExtensions(c.extensions, buf[:0])
 			if err != nil {
@@ -531,8 +536,9 @@ func (c *Conn) closeWithPayload(payload []byte) error {
 }
 
 // readFailure attaches status only at library-owned validation sites. Removing
-// it at the public boundary preserves existing sentinel equality and diagnostics.
-// Arbitrary callback errors must never acquire status through errors.Is alone.
+// it at the public boundary preserves existing sentinel equality and
+// diagnostics. Arbitrary callback errors must never acquire status through
+// errors.Is alone.
 type readFailure struct {
 	cause error
 	code  StatusCode
@@ -548,8 +554,9 @@ func (c *Conn) abort() {
 	c.abortOnce.Do(func() { _ = c.abortConn.Close() })
 }
 
-// failRead publishes terminal state before attempting notification. The original
-// error always wins over cleanup errors, including timeout and partial writes.
+// failRead publishes terminal state before attempting notification. The
+// original error always wins over cleanup errors, including timeout and partial
+// writes.
 func (c *Conn) failRead(err error) error {
 	var code StatusCode
 	if failure, ok := err.(*readFailure); ok {
@@ -606,24 +613,23 @@ func (c *Conn) failureCloseSafe() bool {
 
 // ReadMessage reads the next complete WebSocket message. EOF before a message
 // begins is reported as io.EOF; a truncated frame or fragmented message returns
-// an error matching io.ErrUnexpectedEOF. A peer close frame returns a *CloseError
-// carrying the peer's status code and reason, which matches io.EOF only for a
-// normal close.
-// A header that already proves a protocol or size violation is rejected without
-// waiting for its payload, even when that payload is absent or truncated.
-// Invalid text is rejected as its payload arrives. A compressed message is
-// validated as it is decoded, but Go's inflater may buffer up to 32 KiB before
-// exposing output, so invalid text or a small decoded overflow can remain hidden
-// while waiting for compressed input. An incomplete rune may span reads, frames,
-// controls, and DEFLATE streams. Size limits do not bound CPU time.
-// Any error makes the connection terminal: later reads and writes fail. Known
-// protocol and size violations send an appropriate best-effort Close when safe,
-// then abort the transport. Notification uses at most one second without changing
-// caller deadlines. A custom transport's Close implementation can still block.
-// Once Shutdown has started, ReadMessage discards data messages and returns
-// only the peer's *CloseError or an error. A read interrupted by Close or
-// CloseWithStatus returns an error matching net.ErrClosed, even if the peer's
-// answer to the Close frame arrived first.
+// an error matching io.ErrUnexpectedEOF. A peer close frame returns a
+// *CloseError carrying the peer's status code and reason, which matches io.EOF
+// only for a normal close. A header that already proves a protocol or size
+// violation is rejected without waiting for its payload, even when that payload
+// is absent or truncated. Invalid text is rejected as its payload arrives. A
+// compressed message is validated as it is decoded, but Go's inflater may
+// buffer up to 32 KiB before exposing output, so invalid text or a small
+// decoded overflow can remain hidden while waiting for compressed input. An
+// incomplete rune may span reads, frames, controls, and DEFLATE streams. Size
+// limits do not bound CPU time. Any error makes the connection terminal: later
+// reads and writes fail. Known protocol and size violations send an appropriate
+// best-effort Close when safe, then abort the transport. Notification uses at
+// most one second without changing caller deadlines. A custom transport's Close
+// implementation can still block. Once Shutdown has started, ReadMessage
+// discards data messages and returns only the peer's *CloseError or an error. A
+// read interrupted by Close or CloseWithStatus returns an error matching
+// net.ErrClosed, even if the peer's answer to the Close frame arrived first.
 func (c *Conn) ReadMessage() (messageType MessageType, data []byte, err error) {
 	for {
 		op, data, err := c.readMessage()
@@ -806,9 +812,9 @@ func (c *Conn) readCompressedMessage(pmd *perMessageDeflate, frame *wireFrame, p
 	return data, peerClosed, err
 }
 
-// validUTF8Prefix validates p, allowing only a potentially valid incomplete rune
-// at its end. It returns the number of complete bytes. ReadMessage keeps those
-// trailing bytes in its existing message buffer. Each complete prefix is
+// validUTF8Prefix validates p, allowing only a potentially valid incomplete
+// rune at its end. It returns the number of complete bytes. ReadMessage keeps
+// those trailing bytes in its existing message buffer. Each complete prefix is
 // validated once, with at most three pending bytes reconsidered per fragment
 // and no additional copying.
 func validUTF8Prefix(p []byte) (int, bool) {
@@ -1366,8 +1372,8 @@ func (c *Conn) writeFrame(frame *wireFrame) error {
 		return fmt.Errorf("%w: failed to write frame header: %w", errWriteFailed, c.writeErr)
 	}
 	// Ask each extension once whether it is enabled. An unsupported composition
-	// is terminal and performs no I/O; a write after a transport failure returns
-	// above without calling extensions at all.
+	// is terminal and performs no I/O; a write after a transport failure
+	// returns above without calling extensions at all.
 	var buf [4]frameExtension
 	enabled, err := enabledExtensions(c.extensions, buf[:0])
 	if err != nil {
@@ -1645,7 +1651,8 @@ func dial(ctx context.Context, urlStr string, opts *dialOptions) (ws *Conn, resp
 	reqBuilder.WriteString("Sec-WebSocket-Key: " + key + "\r\n")
 	reqBuilder.WriteString("Sec-WebSocket-Version: 13\r\n")
 
-	// Offers were validated before connecting, including extension-produced values.
+	// Offers were validated before connecting, including extension-produced
+	// values.
 	if extOffer != "" {
 		reqBuilder.WriteString("Sec-WebSocket-Extensions: " + extOffer + "\r\n")
 	}
@@ -1926,8 +1933,8 @@ func writeUpgradeResponse(w *bufio.Writer, acceptKey string, responseHeader http
 
 // validateHandshakeHeaders checks caller fields before acquiring a transport.
 // Field names use the HTTP token alphabet; values follow net/http's allowance
-// for HTAB, visible ASCII, and obs-text, excluding every other control byte.
-// Do not include field values in errors: they may contain credentials or cookies.
+// for HTAB, visible ASCII, and obs-text, excluding every other control byte. Do
+// not include field values in errors: they may contain credentials or cookies.
 func validateHandshakeHeaders(header http.Header, response bool) error {
 	for name, values := range header {
 		if !isHTTPToken(name) {
@@ -2039,7 +2046,8 @@ func computeAcceptKey(challengeKey string) string {
 	return base64.StdEncoding.EncodeToString(h.Sum(nil))
 }
 
-// generateKey generates a random base64-encoded string for the Sec-WebSocket-Key header.
+// generateKey generates a random base64-encoded string for the
+// Sec-WebSocket-Key header.
 func generateKey() string {
 	var key [16]byte
 	rand.Read(key[:]) // never fails; see crypto/rand.Read
@@ -2064,7 +2072,7 @@ func headerContains(h http.Header, name string, value string) bool {
 // updating the payload in place to avoid additional
 // allocations.
 //
-// https://tools.ietf.org/html/rfc6455#section-5.3
+// https://www.rfc-editor.org/rfc/rfc6455#section-5.3
 func xor(key []byte, data []byte) {
 	// A whole number of four-byte key cycles preserves the mask phase, so the
 	// key repeats across a word. Using encoding/binary keeps the word
