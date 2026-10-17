@@ -1,0 +1,56 @@
+name: Fuzz
+
+# Long fuzz runs over every target. The per-push smoke run in test.yml gives
+# each of a few targets 15 seconds; this gives every target several minutes.
+on:
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+    inputs:
+      fuzztime:
+        description: Time per target (go test -fuzztime)
+        default: 10m
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - FuzzReadMessage
+          - FuzzPMDReadMessage
+          - FuzzExtensionNegotiation
+          - FuzzSubprotocolNegotiation
+          - FuzzUTF8Fragments
+          - FuzzUTF8NetworkChunks
+          - FuzzCanonicalOrigin
+          - FuzzResponseHeadBound
+          - FuzzMask
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.2'
+          cache: false
+      - name: Fuzz
+        env:
+          TARGET: ${{ matrix.target }}
+          FUZZTIME: ${{ inputs.fuzztime || '10m' }}
+        run: go test . -run '^$' -fuzz "^${TARGET}\$" -fuzztime="$FUZZTIME"
+      # A failing input is written under testdata/fuzz; keep it so the crash
+      # can be reproduced locally with go test -run.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: failure()
+        with:
+          name: fuzz-${{ matrix.target }}-${{ github.sha }}
+          path: testdata/fuzz
+          if-no-files-found: ignore
+          retention-days: 30
