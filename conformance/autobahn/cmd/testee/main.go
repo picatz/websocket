@@ -130,14 +130,14 @@ func echo(conn *websocket.Conn, timeout time.Duration) {
 	})
 	defer timer.Stop()
 	for {
-		kind, data, err := conn.ReadMessage()
+		kind, data, err := conn.ReadMessage(context.Background())
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
 				log.Printf("read: %v", err)
 			}
 			return
 		}
-		if err := conn.WriteMessage(kind, data); err != nil {
+		if err := conn.WriteMessage(context.Background(), kind, data); err != nil {
 			log.Printf("write: %v", err)
 			return
 		}
@@ -157,7 +157,7 @@ func command(address, path, agent string, caseNumber int) ([]byte, error) {
 	defer conn.Close()
 	timer := time.AfterFunc(30*time.Second, func() { _ = conn.Close() })
 	defer timer.Stop()
-	_, payload, err := conn.ReadMessage()
+	_, payload, err := conn.ReadMessage(context.Background())
 	if path == "/updateReports" && errors.Is(err, io.EOF) {
 		return nil, nil // Autobahn closes after synchronously writing reports.
 	}

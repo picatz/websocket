@@ -51,7 +51,7 @@ func TestRoundTrip(t *testing.T) {
 
 func TestReadRejectsBinary(t *testing.T) {
 	server, client := pipe(t)
-	go func() { _ = client.WriteMessage(websocket.BinaryMessage, []byte(`{}`)) }()
+	go func() { _ = client.WriteMessage(context.Background(), websocket.BinaryMessage, []byte(`{}`)) }()
 	var v map[string]any
 	if err := wsjson.Read(t.Context(), server, &v); !errors.Is(err, wsjson.ErrNotText) {
 		t.Fatalf("Read = %v, want ErrNotText", err)
@@ -60,7 +60,7 @@ func TestReadRejectsBinary(t *testing.T) {
 
 func TestReadDecodeError(t *testing.T) {
 	server, client := pipe(t)
-	go func() { _ = client.WriteMessage(websocket.TextMessage, []byte(`{"n":"x"}`)) }()
+	go func() { _ = client.WriteMessage(context.Background(), websocket.TextMessage, []byte(`{"n":"x"}`)) }()
 	var v event
 	err := wsjson.Read(t.Context(), server, &v)
 	if _, ok := errors.AsType[*json.UnmarshalTypeError](err); !ok {

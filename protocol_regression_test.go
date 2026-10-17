@@ -88,7 +88,7 @@ func TestReadMessageFragmentation(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			opcode, payload, err := frameConn(tt.wire, false, tt.limit).ReadMessage()
+			opcode, payload, err := frameConn(tt.wire, false, tt.limit).ReadMessage(context.Background())
 			if !errors.Is(err, tt.wantErr) {
 				t.Fatalf("error = %v, want %v", err, tt.wantErr)
 			}
@@ -106,7 +106,7 @@ func TestReadFrameLengthBoundaries(t *testing.T) {
 			wire := &raw.written
 			writer := newTestConn(raw, ConnConfig{Server: true})
 			data := bytes.Repeat([]byte{'x'}, n)
-			if err := writer.WriteMessage(BinaryMessage, data); err != nil {
+			if err := writer.WriteMessage(context.Background(), BinaryMessage, data); err != nil {
 				t.Fatal(err)
 			}
 			got, err := frameConn(wire.Bytes(), false, n+1).readFrame()
@@ -144,7 +144,7 @@ func FuzzReadMessage(f *testing.F) {
 	f.Add(append(atLimit, 0x8a, 0, 0x80, 1), false)
 	f.Fuzz(func(t *testing.T, wire []byte, server bool) {
 		c := frameConn(wire, server, 1024)
-		_, data, err := c.ReadMessage()
+		_, data, err := c.ReadMessage(context.Background())
 		if err == nil && len(data) > 1024 {
 			t.Fatalf("limit bypass: %d", len(data))
 		}
@@ -166,7 +166,7 @@ func TestClosePayloadValidation(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			c := frameConn(append([]byte{0x88, byte(len(tt.payload))}, tt.payload...), false, 0)
-			_, _, err := c.ReadMessage()
+			_, _, err := c.ReadMessage(context.Background())
 			if tt.valid {
 				if CloseStatus(err) == -1 {
 					t.Fatalf("error = %v, want a *CloseError", err)
@@ -186,7 +186,7 @@ func TestClosePayloadValidation(t *testing.T) {
 func TestWriteRejectsInvalidOpcodesAndPayload(t *testing.T) {
 	c := frameConn(nil, true, 0)
 	for _, typ := range []MessageType{0, 3, 8, 9, 10, 16} {
-		if !errors.Is(c.WriteMessage(typ, nil), errInvalidMessageType) {
+		if !errors.Is(c.WriteMessage(context.Background(), typ, nil), errInvalidMessageType) {
 			t.Fatalf("WriteMessage accepted %v", typ)
 		}
 	}
@@ -195,7 +195,7 @@ func TestWriteRejectsInvalidOpcodesAndPayload(t *testing.T) {
 			t.Fatalf("writeControlFrame accepted %v", opcode)
 		}
 	}
-	if !errors.Is(c.WriteMessage(TextMessage, []byte{0xff}), errInvalidUTF8) {
+	if !errors.Is(c.WriteMessage(context.Background(), TextMessage, []byte{0xff}), errInvalidUTF8) {
 		t.Fatal("accepted invalid UTF-8")
 	}
 	if !errors.Is(c.writeControlFrame(opPing, make([]byte, 126)), errInvalidFrame) {
@@ -211,7 +211,7 @@ func TestPerMessageDeflateRFCVector(t *testing.T) {
 	}
 	c := frameConn([]byte{0xc1, 7, 0xf2, 0x48, 0xcd, 0xc9, 0xc9, 0x07, 0x00}, false, 16)
 	c.extensions = []frameExtension{pmd}
-	_, data, err := c.ReadMessage()
+	_, data, err := c.ReadMessage(context.Background())
 	if err != nil || string(data) != "Hello" {
 		t.Fatalf("message = %q, %v", data, err)
 	}
@@ -233,7 +233,7 @@ func TestPerMessageDeflateBoundsDecodedSize(t *testing.T) {
 			}
 			c := frameConn(append([]byte{0xc2, byte(len(frame.Payload))}, frame.Payload...), false, limit)
 			c.extensions = []frameExtension{pmd}
-			_, data, err := c.ReadMessage()
+			_, data, err := c.ReadMessage(context.Background())
 			if limit < 129 {
 				if !errors.Is(err, ErrMessageTooLarge) {
 					t.Fatalf("error = %v, want ErrMessageTooLarge", err)

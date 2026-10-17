@@ -160,7 +160,7 @@ func TestCloseWriteInvalidStatusLeavesConnOpen(t *testing.T) {
 		}
 	}
 	errc := make(chan error, 1)
-	go func() { errc <- c.WriteMessage(websocket.TextMessage, []byte("still open")) }()
+	go func() { errc <- c.WriteMessage(context.Background(), websocket.TextMessage, []byte("still open")) }()
 	if f := p.next(t); f.opcode != wireText || string(f.payload) != "still open" {
 		t.Fatalf("first frame = %#x %q, want the text message", f.opcode, f.payload)
 	}
@@ -184,10 +184,10 @@ func TestCloseWriteDrainsPeerMessages(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 	for name, err := range map[string]error{
-		"WriteMessage":        c.WriteMessage(websocket.TextMessage, []byte("x")),
-		"WriteMessageContext": c.WriteMessageContext(ctx, websocket.BinaryMessage, []byte("x")),
-		"Ping":                c.Ping(ctx),
-		"second CloseWrite":   c.CloseWrite(websocket.StatusNormalClosure, ""),
+		"WriteMessage":          c.WriteMessage(context.Background(), websocket.TextMessage, []byte("x")),
+		"WriteMessage with ctx": c.WriteMessage(ctx, websocket.BinaryMessage, []byte("x")),
+		"Ping":                  c.Ping(ctx),
+		"second CloseWrite":     c.CloseWrite(websocket.StatusNormalClosure, ""),
 	} {
 		if !errors.Is(err, net.ErrClosed) {
 			t.Errorf("%s after CloseWrite: err = %v, want a match for net.ErrClosed", name, err)
@@ -196,12 +196,12 @@ func TestCloseWriteDrainsPeerMessages(t *testing.T) {
 
 	sent := p.send(textFrame("one"), pingFrame, textFrame("two"), normalCloseFrame)
 	for _, want := range []string{"one", "two"} {
-		typ, data, err := c.ReadMessage()
+		typ, data, err := c.ReadMessage(context.Background())
 		if err != nil || typ != websocket.TextMessage || string(data) != want {
 			t.Fatalf("ReadMessage = %v %q %v, want %q", typ, data, err, want)
 		}
 	}
-	_, _, err := c.ReadMessage()
+	_, _, err := c.ReadMessage(context.Background())
 	if websocket.CloseStatus(err) != websocket.StatusNormalClosure {
 		t.Fatalf("ReadMessage after the drain: err = %v, want the peer's CloseError", err)
 	}
@@ -214,7 +214,7 @@ func TestCloseWriteDrainsPeerMessages(t *testing.T) {
 	if len(rest) != 1 || rest[0].opcode != wirePong || string(rest[0].payload) != "hi" {
 		t.Fatalf("frames after Close = %+v, want one Pong", rest)
 	}
-	if _, _, err := c.ReadMessage(); !errors.Is(err, net.ErrClosed) {
+	if _, _, err := c.ReadMessage(context.Background()); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("ReadMessage after the peer's Close: err = %v, want net.ErrClosed", err)
 	}
 }
@@ -275,8 +275,8 @@ func TestCloseWriteDrainBoundedByContext(t *testing.T) {
 		}
 		ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 		defer cancel()
-		if _, _, err := c.ReadMessageContext(ctx); !errors.Is(err, context.DeadlineExceeded) {
-			t.Fatalf("ReadMessageContext on a silent peer: err = %v, want DeadlineExceeded", err)
+		if _, _, err := c.ReadMessage(ctx); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("ReadMessage on a silent peer: err = %v, want DeadlineExceeded", err)
 		}
 		// The connection is aborted, so the peer sees its side of the pipe end.
 		if rest := p.rest(t); len(rest) != 0 {
@@ -295,7 +295,7 @@ func TestCloseWriteConcurrentWrites(t *testing.T) {
 			go func() {
 				defer func() { writers <- struct{}{} }()
 				for range 20 { // stays within the peer's frame buffer
-					if err := c.WriteMessage(websocket.BinaryMessage, []byte("data")); err != nil {
+					if err := c.WriteMessage(context.Background(), websocket.BinaryMessage, []byte("data")); err != nil {
 						return
 					}
 				}

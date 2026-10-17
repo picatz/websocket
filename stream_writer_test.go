@@ -37,7 +37,7 @@ func TestNextWriterFragmentsLargeMessages(t *testing.T) {
 	for _, server := range []bool{false, true} {
 		raw := &memoryConn{Reader: bytes.NewReader(nil)}
 		c := newTestConn(raw, ConnConfig{Server: server})
-		w, err := c.NextWriter(BinaryMessage)
+		w, err := c.NextWriter(context.Background(), BinaryMessage)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -73,7 +73,7 @@ func TestNextWriterFragmentsLargeMessages(t *testing.T) {
 func TestNextWriterEmptyMessage(t *testing.T) {
 	raw := &memoryConn{Reader: bytes.NewReader(nil)}
 	c := newTestConn(raw, ConnConfig{Server: true})
-	w, err := c.NextWriter(TextMessage)
+	w, err := c.NextWriter(context.Background(), TextMessage)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestNextWriterValidatesTextAcrossWrites(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			raw := &memoryConn{Reader: bytes.NewReader(nil)}
 			c := newTestConn(raw, ConnConfig{Server: true})
-			w, err := c.NextWriter(TextMessage)
+			w, err := c.NextWriter(context.Background(), TextMessage)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -125,7 +125,7 @@ func TestNextWriterValidatesTextAcrossWrites(t *testing.T) {
 				if raw.written.Len() != 0 {
 					t.Fatalf("sent %x for an invalid message", raw.written.Bytes())
 				}
-				if err := c.WriteMessage(TextMessage, []byte("next")); err != nil {
+				if err := c.WriteMessage(context.Background(), TextMessage, []byte("next")); err != nil {
 					t.Fatalf("WriteMessage after rejected text: %v", err)
 				}
 			}
@@ -135,7 +135,7 @@ func TestNextWriterValidatesTextAcrossWrites(t *testing.T) {
 
 func TestNextWriterUseAfterClose(t *testing.T) {
 	c := newTestConn(&memoryConn{Reader: bytes.NewReader(nil)}, ConnConfig{Server: true})
-	w, err := c.NextWriter(BinaryMessage)
+	w, err := c.NextWriter(context.Background(), BinaryMessage)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +148,7 @@ func TestNextWriterUseAfterClose(t *testing.T) {
 	if err := w.Close(); !errors.Is(err, errWriterClosed) {
 		t.Fatalf("second Close = %v", err)
 	}
-	if _, err := c.NextWriter(MessageType(opPing)); !errors.Is(err, errInvalidMessageType) {
+	if _, err := c.NextWriter(context.Background(), MessageType(opPing)); !errors.Is(err, errInvalidMessageType) {
 		t.Fatalf("NextWriter(Ping) = %v", err)
 	}
 }
@@ -157,7 +157,7 @@ func TestNextWriterUseAfterClose(t *testing.T) {
 func TestNextWriterSerializesDataAndInterleavesControl(t *testing.T) {
 	raw := &memoryConn{Reader: bytes.NewReader(nil)}
 	c := newTestConn(raw, ConnConfig{Server: true})
-	w, err := c.NextWriter(BinaryMessage)
+	w, err := c.NextWriter(context.Background(), BinaryMessage)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +166,7 @@ func TestNextWriterSerializesDataAndInterleavesControl(t *testing.T) {
 	}
 
 	queued := make(chan error, 1)
-	go func() { queued <- c.WriteMessage(TextMessage, []byte("second")) }()
+	go func() { queued <- c.WriteMessage(context.Background(), TextMessage, []byte("second")) }()
 	select {
 	case err := <-queued:
 		t.Fatalf("WriteMessage did not wait for the open writer: %v", err)
@@ -196,12 +196,12 @@ func TestNextWriterSerializesDataAndInterleavesControl(t *testing.T) {
 func TestNextWriterAbandonedDoesNotBlockAfterClose(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		c := newTestConn(&memoryConn{Reader: bytes.NewReader(nil)}, ConnConfig{Server: true})
-		w, err := c.NextWriter(BinaryMessage)
+		w, err := c.NextWriter(context.Background(), BinaryMessage)
 		if err != nil {
 			t.Fatal(err)
 		}
 		queued := make(chan error, 1)
-		go func() { queued <- c.WriteMessage(BinaryMessage, []byte("x")) }()
+		go func() { queued <- c.WriteMessage(context.Background(), BinaryMessage, []byte("x")) }()
 		synctest.Wait() // the write waits for the abandoned writer
 		_ = c.Close()
 		select {
@@ -222,7 +222,7 @@ func TestNextWriterAbandonedDoesNotBlockAfterClose(t *testing.T) {
 func TestNextWriterStopsAfterCloseFrame(t *testing.T) {
 	raw := &memoryConn{Reader: bytes.NewReader(nil)}
 	c := newTestConn(raw, ConnConfig{Server: true})
-	w, _ := c.NextWriter(BinaryMessage)
+	w, _ := c.NextWriter(context.Background(), BinaryMessage)
 	if _, err := w.Write(bytes.Repeat([]byte{'a'}, writeFragmentSize+1)); err != nil {
 		t.Fatal(err)
 	}
@@ -250,7 +250,7 @@ func TestNextWriterCompressedRoundTrip(t *testing.T) {
 		}
 		defer conn.Close()
 		for range 2 {
-			_, data, err := conn.ReadMessage()
+			_, data, err := conn.ReadMessage(context.Background())
 			if err != nil {
 				t.Error(err)
 				return
@@ -268,7 +268,7 @@ func TestNextWriterCompressedRoundTrip(t *testing.T) {
 	}
 	defer conn.Close()
 	for range 2 {
-		w, err := conn.NextWriter(TextMessage)
+		w, err := conn.NextWriter(context.Background(), TextMessage)
 		if err != nil {
 			t.Fatal(err)
 		}

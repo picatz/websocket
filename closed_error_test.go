@@ -25,7 +25,7 @@ func TestClosedErrorsMatchNetErrClosed(t *testing.T) {
 			return
 		}
 		defer c.Close()
-		_, _, _ = c.ReadMessage()
+		_, _, _ = c.ReadMessage(context.Background())
 	}))
 	defer srv.Close()
 
@@ -35,7 +35,7 @@ func TestClosedErrorsMatchNetErrClosed(t *testing.T) {
 	}
 	blocked := make(chan error, 1)
 	go func() {
-		_, _, err := c.ReadMessage()
+		_, _, err := c.ReadMessage(context.Background())
 		blocked <- err
 	}()
 	time.Sleep(20 * time.Millisecond) // let the read block in the transport
@@ -45,12 +45,12 @@ func TestClosedErrorsMatchNetErrClosed(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
-	readErr := func() error { _, _, err := c.ReadMessage(); return err }
+	readErr := func() error { _, _, err := c.ReadMessage(context.Background()); return err }
 	for name, err := range map[string]error{
 		"interrupted read":  <-blocked,
 		"read":              readErr(),
-		"write":             c.WriteMessage(websocket.TextMessage, []byte("x")),
-		"write with ctx":    c.WriteMessageContext(ctx, websocket.TextMessage, []byte("x")),
+		"write":             c.WriteMessage(context.Background(), websocket.TextMessage, []byte("x")),
+		"write with ctx":    c.WriteMessage(ctx, websocket.TextMessage, []byte("x")),
 		"ping":              c.Ping(ctx),
 		"second Close":      c.Close(),
 		"CloseWithStatus":   c.CloseWithStatus(websocket.StatusGoingAway, ""),
@@ -83,13 +83,13 @@ func TestPeerCloseThenClosedError(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c.Close()
-	if _, _, err := c.ReadMessage(); websocket.CloseStatus(err) != websocket.StatusGoingAway {
+	if _, _, err := c.ReadMessage(context.Background()); websocket.CloseStatus(err) != websocket.StatusGoingAway {
 		t.Fatalf("first read: err = %v, want StatusGoingAway", err)
 	}
-	if _, _, err := c.ReadMessage(); !errors.Is(err, net.ErrClosed) {
+	if _, _, err := c.ReadMessage(context.Background()); !errors.Is(err, net.ErrClosed) {
 		t.Errorf("read after peer close: err = %v, want net.ErrClosed", err)
 	}
-	if err := c.WriteMessage(websocket.TextMessage, []byte("late")); !errors.Is(err, net.ErrClosed) {
+	if err := c.WriteMessage(context.Background(), websocket.TextMessage, []byte("late")); !errors.Is(err, net.ErrClosed) {
 		t.Errorf("write after peer close: err = %v, want net.ErrClosed", err)
 	}
 }
@@ -118,7 +118,7 @@ func TestInterruptedReadAfterPeerReply(t *testing.T) {
 
 		blocked := make(chan error, 1)
 		go func() {
-			_, _, err := c.ReadMessage()
+			_, _, err := c.ReadMessage(context.Background())
 			blocked <- err
 		}()
 

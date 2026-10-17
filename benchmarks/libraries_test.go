@@ -55,12 +55,13 @@ var libraries = []library{
 				return
 			}
 			defer conn.Close()
+			ctx := context.Background()
 			for {
-				op, p, err := conn.ReadMessage()
+				op, p, err := conn.ReadMessage(ctx)
 				if err != nil {
 					return
 				}
-				if err := conn.WriteMessage(op, p); err != nil {
+				if err := conn.WriteMessage(ctx, op, p); err != nil {
 					return
 				}
 			}
@@ -200,10 +201,12 @@ var libraries = []library{
 
 type picatzClient struct{ c *picatz.Conn }
 
-func (c picatzClient) write(p []byte) error { return c.c.WriteMessage(picatz.BinaryMessage, p) }
-func (c picatzClient) close() error         { return c.c.Close() }
+func (c picatzClient) write(p []byte) error {
+	return c.c.WriteMessage(context.Background(), picatz.BinaryMessage, p)
+}
+func (c picatzClient) close() error { return c.c.Close() }
 func (c picatzClient) read() ([]byte, error) {
-	_, p, err := c.c.ReadMessage()
+	_, p, err := c.c.ReadMessage(context.Background())
 	return p, err
 }
 

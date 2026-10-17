@@ -3,6 +3,7 @@
 package browser_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -71,11 +72,11 @@ func testServer() http.Handler {
 		}
 		defer conn.Close()
 		for {
-			messageType, data, err := conn.ReadMessage()
+			messageType, data, err := conn.ReadMessage(context.Background())
 			if err != nil {
 				return
 			}
-			if err := conn.WriteMessage(messageType, data); err != nil {
+			if err := conn.WriteMessage(context.Background(), messageType, data); err != nil {
 				return
 			}
 		}
@@ -88,8 +89,8 @@ func testServer() http.Handler {
 			return
 		}
 		defer conn.Close()
-		_ = conn.WriteMessage(websocket.TextMessage, []byte("chat"))
-		_, _, _ = conn.ReadMessage()
+		_ = conn.WriteMessage(context.Background(), websocket.TextMessage, []byte("chat"))
+		_, _, _ = conn.ReadMessage(context.Background())
 	})
 
 	// /goodbye sends two messages and closes with StatusGoingAway.
@@ -98,11 +99,11 @@ func testServer() http.Handler {
 		if err != nil {
 			return
 		}
-		_ = conn.WriteMessage(websocket.TextMessage, []byte("one"))
-		_ = conn.WriteMessage(websocket.BinaryMessage, []byte("two"))
+		_ = conn.WriteMessage(context.Background(), websocket.TextMessage, []byte("one"))
+		_ = conn.WriteMessage(context.Background(), websocket.BinaryMessage, []byte("two"))
 		_ = conn.CloseWithStatus(websocket.StatusGoingAway, "bye")
 		// Wait for the client's reply so the close is clean.
-		_, _, _ = conn.ReadMessage()
+		_, _, _ = conn.ReadMessage(context.Background())
 	})
 
 	// /closestatus records the client's close code and reason, which
@@ -115,7 +116,7 @@ func testServer() http.Handler {
 		}
 		defer conn.Close()
 		for {
-			_, _, err := conn.ReadMessage()
+			_, _, err := conn.ReadMessage(context.Background())
 			if ce, ok := errors.AsType[*websocket.CloseError](err); ok {
 				lastClose <- fmt.Sprintf("%d %s", int(ce.Code), ce.Reason)
 			}
@@ -132,11 +133,11 @@ func testServer() http.Handler {
 		defer conn.Close()
 		select {
 		case got := <-lastClose:
-			_ = conn.WriteMessage(websocket.TextMessage, []byte(got))
+			_ = conn.WriteMessage(context.Background(), websocket.TextMessage, []byte(got))
 		case <-time.After(5 * time.Second):
-			_ = conn.WriteMessage(websocket.TextMessage, []byte("no close received"))
+			_ = conn.WriteMessage(context.Background(), websocket.TextMessage, []byte("no close received"))
 		}
-		_, _, _ = conn.ReadMessage()
+		_, _, _ = conn.ReadMessage(context.Background())
 	})
 
 	// /stall upgrades and never reads, until the client goes away.
@@ -165,7 +166,7 @@ func testServer() http.Handler {
 		}
 		defer conn.Close()
 		for {
-			if _, _, err := conn.ReadMessage(); err != nil {
+			if _, _, err := conn.ReadMessage(context.Background()); err != nil {
 				return
 			}
 		}

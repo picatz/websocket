@@ -170,7 +170,7 @@ func TestNetConnContextAbortsBlockedRead(t *testing.T) {
 
 func TestNetConnCloseMatchesNetErrClosed(t *testing.T) {
 	server, client := pipeConns(t)
-	go func() { _, _, _ = server.ReadMessage() }() // Accept the close frame.
+	go func() { _, _, _ = server.ReadMessage(context.Background()) }() // Accept the close frame.
 	nc := NetConn(t.Context(), client, BinaryMessage)
 	_ = nc.Close()
 	if _, err := nc.Read(make([]byte, 1)); !errors.Is(err, net.ErrClosed) {
@@ -227,7 +227,7 @@ func TestNetConnPeerCloseEndsIOCopy(t *testing.T) {
 	server, client := pipeConns(t)
 	sn := NetConn(t.Context(), server, BinaryMessage)
 	go func() {
-		_ = client.WriteMessage(BinaryMessage, []byte("payload"))
+		_ = client.WriteMessage(context.Background(), BinaryMessage, []byte("payload"))
 		_ = client.CloseWithStatus(StatusGoingAway, "done")
 	}()
 	var got bytes.Buffer
@@ -241,7 +241,7 @@ func TestNetConnAbnormalCloseFailsIOCopy(t *testing.T) {
 	server, client := pipeConns(t)
 	sn := NetConn(t.Context(), server, BinaryMessage)
 	go func() {
-		_ = client.WriteMessage(BinaryMessage, []byte("partial"))
+		_ = client.WriteMessage(context.Background(), BinaryMessage, []byte("partial"))
 		_ = client.CloseWithStatus(StatusInternalServerError, "crashed")
 	}()
 	var got bytes.Buffer

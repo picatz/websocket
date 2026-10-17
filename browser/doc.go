@@ -12,10 +12,10 @@
 //		return err
 //	}
 //	defer conn.Close()
-//	if err := conn.WriteMessage(websocket.TextMessage, []byte("hello")); err != nil {
+//	if err := conn.WriteMessage(ctx, websocket.TextMessage, []byte("hello")); err != nil {
 //		return err
 //	}
-//	messageType, data, err := conn.ReadMessage()
+//	messageType, data, err := conn.ReadMessage(ctx)
 //
 // The host performs the opening handshake, framing, masking, Ping/Pong and
 // the closing handshake, and negotiates any extensions itself, including

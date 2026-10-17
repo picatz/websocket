@@ -54,11 +54,11 @@ http.HandleFunc("/echo", func(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 	for {
-		typ, data, err := conn.ReadMessage()
+		typ, data, err := conn.ReadMessage(r.Context())
 		if err != nil {
 			return // The peer closed, or the connection failed.
 		}
-		if err := conn.WriteMessage(typ, data); err != nil {
+		if err := conn.WriteMessage(r.Context(), typ, data); err != nil {
 			return
 		}
 	}
@@ -77,10 +77,10 @@ if err != nil {
 }
 defer conn.Close()
 
-if err := conn.WriteMessage(websocket.TextMessage, []byte("hello")); err != nil {
+if err := conn.WriteMessage(ctx, websocket.TextMessage, []byte("hello")); err != nil {
 	log.Fatal(err)
 }
-_, data, err := conn.ReadMessage()
+_, data, err := conn.ReadMessage(ctx)
 if err != nil {
 	log.Fatal(err)
 }

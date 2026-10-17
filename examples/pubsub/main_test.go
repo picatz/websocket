@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -26,7 +27,7 @@ func send(t *testing.T, conn *websocket.Conn, req envelope) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+	if err := conn.WriteMessage(context.Background(), websocket.TextMessage, data); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -36,7 +37,7 @@ func expect(t *testing.T, conn *websocket.Conn, want envelope) {
 	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	_, msg, err := conn.ReadMessage()
+	_, msg, err := conn.ReadMessage(context.Background())
 	if err != nil {
 		t.Fatalf("ReadMessage: %v", err)
 	}

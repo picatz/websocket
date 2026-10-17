@@ -148,7 +148,7 @@ func handle(w http.ResponseWriter, r *http.Request) {
 
 	inFlight := make(chan struct{}, maxInFlight)
 	for {
-		typ, data, err := conn.ReadMessage()
+		typ, data, err := conn.ReadMessage(r.Context())
 		if err != nil {
 			return
 		}

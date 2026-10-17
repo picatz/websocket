@@ -228,6 +228,7 @@ func dial(ctx context.Context, urlStr string, opts *dialOptions) (ws *Conn, resp
 	}
 
 	// If using TLS, perform the handshake
+	var tlsState *tls.ConnectionState
 	if u.Scheme == "wss" {
 		config := &tls.Config{}
 		if opts.tlsConfig != nil {
@@ -243,6 +244,8 @@ func dial(ctx context.Context, urlStr string, opts *dialOptions) (ws *Conn, resp
 			return nil, nil, fmt.Errorf("%w: failed to perform TLS handshake: %w", ErrBadHandshake, err)
 		}
 		conn = tlsConn
+		state := tlsConn.ConnectionState()
+		tlsState = &state
 	}
 
 	key := generateKey()
@@ -284,6 +287,9 @@ func dial(ctx context.Context, urlStr string, opts *dialOptions) (ws *Conn, resp
 		conn.Close()
 		return nil, nil, fmt.Errorf("%w: failed to read handshake response: %w", ErrBadHandshake, err)
 	}
+	// As with http.Transport, a response received over TLS carries the
+	// connection's TLS state.
+	resp.TLS = tlsState
 	if resp.StatusCode != http.StatusSwitchingProtocols {
 		keepRejectedBody(conn, resp)
 		conn.Close()

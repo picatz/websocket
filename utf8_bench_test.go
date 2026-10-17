@@ -2,6 +2,7 @@ package websocket
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"testing"
@@ -28,7 +29,7 @@ func BenchmarkReadTextMessage(b *testing.B) {
 					for b.Loop() {
 						reader.Reset(wire)
 						c.br.Reset(reader)
-						op, p, err := c.ReadMessage()
+						op, p, err := c.ReadMessage(context.Background())
 						if err != nil || op != TextMessage || len(p) != len(payload) {
 							b.Fatal(op, len(p), err)
 						}

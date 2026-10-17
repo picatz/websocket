@@ -18,12 +18,12 @@ import (
 var ErrNotText = errors.New("wsjson: message is not text")
 
 // Read reads the next message from c and decodes it into v with
-// json.Unmarshal. It uses ReadMessageContext, so ctx ending mid-read aborts
-// the connection. A binary message returns an error matching ErrNotText; a
+// json.Unmarshal. ctx bounds the read as for Conn.ReadMessage, so ctx ending
+// mid-read aborts the connection. A binary message returns an error matching ErrNotText; a
 // message that is not valid JSON for v returns the decoding error. Neither
 // closes the connection.
 func Read(ctx context.Context, c *websocket.Conn, v any) error {
-	typ, data, err := c.ReadMessageContext(ctx)
+	typ, data, err := c.ReadMessage(ctx)
 	if err != nil {
 		return err
 	}
@@ -36,13 +36,14 @@ func Read(ctx context.Context, c *websocket.Conn, v any) error {
 	return nil
 }
 
-// Write encodes v with json.Marshal and sends it to c as one text message. It
-// uses WriteMessageContext, so ctx ending mid-write aborts the connection. An
+// Write encodes v with json.Marshal and sends it to c as one text message. ctx
+// bounds the write as for Conn.WriteMessage, so ctx ending mid-write aborts
+// the connection. An
 // encoding error is returned before any I/O.
 func Write(ctx context.Context, c *websocket.Conn, v any) error {
 	data, err := json.Marshal(v)
 	if err != nil {
 		return fmt.Errorf("wsjson: encode: %w", err)
 	}
-	return c.WriteMessageContext(ctx, websocket.TextMessage, data)
+	return c.WriteMessage(ctx, websocket.TextMessage, data)
 }

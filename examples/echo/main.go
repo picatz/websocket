@@ -85,7 +85,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	for {
-		messageType, message, err := conn.ReadMessage()
+		messageType, message, err := conn.ReadMessage(r.Context())
 		if err != nil {
 			// A *CloseError is the client leaving, and net.ErrClosed is the
 			// server's own Shutdown; anything else is worth a log line.
@@ -95,7 +95,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), writeWait)
-		err = conn.WriteMessageContext(ctx, messageType, message)
+		err = conn.WriteMessage(ctx, messageType, message)
 		cancel()
 		if err != nil {
 			return

@@ -26,7 +26,7 @@ func echoServer(t *testing.T, upgrader *websocket.Upgrader) string {
 		}
 		defer conn.Close()
 		for {
-			typ, data, err := conn.ReadMessage()
+			typ, data, err := conn.ReadMessage(context.Background())
 			if err != nil {
 				return
 			}
@@ -39,7 +39,7 @@ func echoServer(t *testing.T, upgrader *websocket.Upgrader) string {
 				conn.CloseWithStatus(websocket.StatusPolicyViolation, "kicked")
 				return
 			}
-			if err := conn.WriteMessage(typ, data); err != nil {
+			if err := conn.WriteMessage(context.Background(), typ, data); err != nil {
 				return
 			}
 		}

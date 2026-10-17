@@ -109,7 +109,7 @@ func (h *hub) handler(w http.ResponseWriter, r *http.Request) {
 		defer conn.Close()
 		for msg := range c.send {
 			ctx, cancel := context.WithTimeout(r.Context(), writeWait)
-			err := conn.WriteMessageContext(ctx, websocket.TextMessage, msg)
+			err := conn.WriteMessage(ctx, websocket.TextMessage, msg)
 			cancel()
 			if err != nil {
 				return
@@ -120,7 +120,7 @@ func (h *hub) handler(w http.ResponseWriter, r *http.Request) {
 	h.join(c)
 	defer h.leave(c)
 	for {
-		messageType, msg, err := conn.ReadMessage()
+		messageType, msg, err := conn.ReadMessage(r.Context())
 		if err != nil {
 			return
 		}

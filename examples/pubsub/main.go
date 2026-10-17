@@ -147,7 +147,7 @@ func (b *broker) handler(w http.ResponseWriter, r *http.Request) {
 		defer conn.Close()
 		for msg := range c.send {
 			ctx, cancel := context.WithTimeout(r.Context(), writeWait)
-			err := conn.WriteMessageContext(ctx, websocket.TextMessage, msg)
+			err := conn.WriteMessage(ctx, websocket.TextMessage, msg)
 			cancel()
 			if err != nil {
 				return
@@ -157,7 +157,7 @@ func (b *broker) handler(w http.ResponseWriter, r *http.Request) {
 	defer b.leave(c)
 
 	for {
-		_, msg, err := conn.ReadMessage()
+		_, msg, err := conn.ReadMessage(r.Context())
 		if err != nil {
 			return
 		}

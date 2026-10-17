@@ -41,7 +41,7 @@ func TestReadMessageAllocations(t *testing.T) {
 					got := testing.AllocsPerRun(100, func() {
 						r.Reset(wire)
 						c.br.Reset(r)
-						kind, p, err := c.ReadMessage()
+						kind, p, err := c.ReadMessage(context.Background())
 						if err != nil || kind != op || len(p) != size {
 							t.Fatal(kind, len(p), err)
 						}
@@ -82,7 +82,7 @@ func TestReadMessageFragmentedAllocations(t *testing.T) {
 				got := testing.AllocsPerRun(20, func() {
 					r.Reset(wire)
 					c.br.Reset(r)
-					if kind, p, err := c.ReadMessage(); err != nil || kind != op || !bytes.Equal(p, payload) {
+					if kind, p, err := c.ReadMessage(context.Background()); err != nil || kind != op || !bytes.Equal(p, payload) {
 						t.Fatal(kind, len(p), err)
 					}
 				})
@@ -104,7 +104,7 @@ func TestWriteAllocations(t *testing.T) {
 				payload := benchmarkPayload(size)
 				c := newTestConn(&benchmarkConn{writer: io.Discard}, ConnConfig{Server: server})
 				if got := testing.AllocsPerRun(100, func() {
-					if err := c.WriteMessage(BinaryMessage, payload); err != nil {
+					if err := c.WriteMessage(context.Background(), BinaryMessage, payload); err != nil {
 						t.Fatal(err)
 					}
 				}); got != 0 {
@@ -217,16 +217,16 @@ func TestPooledWritesRoundTrip(t *testing.T) {
 	s := <-server
 	defer s.Close()
 	payload := bytes.Repeat([]byte("abc"), 5000) // Larger than one write buffer.
-	if err := client.WriteMessage(BinaryMessage, payload); err != nil {
+	if err := client.WriteMessage(context.Background(), BinaryMessage, payload); err != nil {
 		t.Fatal(err)
 	}
-	if _, got, err := s.ReadMessage(); err != nil || !bytes.Equal(got, payload) {
+	if _, got, err := s.ReadMessage(context.Background()); err != nil || !bytes.Equal(got, payload) {
 		t.Fatalf("server read %d bytes, err=%v", len(got), err)
 	}
-	if err := s.WriteMessage(TextMessage, []byte("ok")); err != nil {
+	if err := s.WriteMessage(context.Background(), TextMessage, []byte("ok")); err != nil {
 		t.Fatal(err)
 	}
-	if _, got, err := client.ReadMessage(); err != nil || string(got) != "ok" {
+	if _, got, err := client.ReadMessage(context.Background()); err != nil || string(got) != "ok" {
 		t.Fatalf("client read %q, err=%v", got, err)
 	}
 }
@@ -251,7 +251,7 @@ func TestFragmentedReadStaysWithinLimit(t *testing.T) {
 		payload := bytes.Repeat([]byte{'a'}, limit)
 		wire := benchmarkWire(payload, true, fragments)
 		c := newTestConn(&benchmarkConn{reader: bytes.NewReader(wire), writer: io.Discard}, ConnConfig{Server: true, MaxMessageSize: limit})
-		_, got, err := c.ReadMessage()
+		_, got, err := c.ReadMessage(context.Background())
 		if err != nil || !bytes.Equal(got, payload) {
 			t.Fatalf("fragments=%d: read %d bytes, err=%v", fragments, len(got), err)
 		}
@@ -324,7 +324,7 @@ func TestLargeMaskedWrites(t *testing.T) {
 		orig := bytes.Clone(payload)
 		var wire writeCounter
 		client := newTestConn(&benchmarkConn{writer: &wire}, ConnConfig{})
-		if err := client.WriteMessage(BinaryMessage, payload); err != nil {
+		if err := client.WriteMessage(context.Background(), BinaryMessage, payload); err != nil {
 			t.Fatal(err)
 		}
 		if !bytes.Equal(payload, orig) {
@@ -334,7 +334,7 @@ func TestLargeMaskedWrites(t *testing.T) {
 			t.Errorf("size=%d: %d transport writes, want at most %d", size, wire.writes, limit)
 		}
 		server := newTestConn(&benchmarkConn{reader: &wire.Buffer, writer: io.Discard}, ConnConfig{Server: true})
-		if _, got, err := server.ReadMessage(); err != nil || !bytes.Equal(got, orig) {
+		if _, got, err := server.ReadMessage(context.Background()); err != nil || !bytes.Equal(got, orig) {
 			t.Fatalf("size=%d: err=%v equal=%t", size, err, bytes.Equal(got, orig))
 		}
 	}

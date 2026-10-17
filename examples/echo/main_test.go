@@ -35,10 +35,10 @@ func TestEcho(t *testing.T) {
 		{websocket.BinaryMessage, "\x00\x01\x02"},
 		{websocket.TextMessage, ""},
 	} {
-		if err := conn.WriteMessage(msg.typ, []byte(msg.data)); err != nil {
+		if err := conn.WriteMessage(context.Background(), msg.typ, []byte(msg.data)); err != nil {
 			t.Fatal(err)
 		}
-		typ, data, err := conn.ReadMessage()
+		typ, data, err := conn.ReadMessage(context.Background())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -58,15 +58,15 @@ func TestShutdown(t *testing.T) {
 	conn := dial(t, srv)
 
 	// A round trip proves the handler is running before shutdown starts.
-	if err := conn.WriteMessage(websocket.TextMessage, []byte("ping")); err != nil {
+	if err := conn.WriteMessage(context.Background(), websocket.TextMessage, []byte("ping")); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := conn.ReadMessage(); err != nil {
+	if _, _, err := conn.ReadMessage(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 
 	shutdown()
-	_, _, err := conn.ReadMessage()
+	_, _, err := conn.ReadMessage(context.Background())
 	var ce *websocket.CloseError
 	if !errors.As(err, &ce) || ce.Code != websocket.StatusGoingAway {
 		t.Fatalf("ReadMessage = %v, want a StatusGoingAway close", err)

@@ -1,6 +1,7 @@
 package websocket
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"testing"
@@ -48,7 +49,7 @@ func FuzzClosePayload(f *testing.F) {
 
 		wire := append([]byte{0x88, byte(len(payload))}, payload...)
 		c := frameConn(wire, false, 0)
-		_, _, err := c.ReadMessage()
+		_, _, err := c.ReadMessage(context.Background())
 		raw := c.conn.(*memoryConn)
 		var ce *CloseError
 		switch {

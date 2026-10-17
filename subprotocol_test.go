@@ -169,7 +169,7 @@ func TestSubprotocolSelectionHandshake(t *testing.T) {
 				t.Fatalf("Dial = %v, %v, %v", conn, resp, err)
 			}
 			if conn != nil {
-				_, data, readErr := conn.ReadMessage()
+				_, data, readErr := conn.ReadMessage(context.Background())
 				if readErr != nil || string(data) != "x" {
 					t.Fatalf("buffered message %q, %v", data, readErr)
 				}

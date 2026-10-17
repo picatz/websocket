@@ -2,6 +2,7 @@ package websocket
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -33,13 +34,13 @@ func TestReadMessageTruncatedFrameIsUnexpectedEOF(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, _, err := frameConn(tt.wire, tt.server, 0).ReadMessage()
+			_, _, err := frameConn(tt.wire, tt.server, 0).ReadMessage(context.Background())
 			if !errors.Is(err, io.ErrUnexpectedEOF) {
 				t.Fatalf("ReadMessage() error = %v, want unexpected EOF", err)
 			}
 		})
 	}
-	_, _, err := frameConn(nil, false, 0).ReadMessage()
+	_, _, err := frameConn(nil, false, 0).ReadMessage(context.Background())
 	if !errors.Is(err, io.EOF) {
 		t.Fatalf("empty stream error = %v, want EOF", err)
 	}
@@ -54,7 +55,7 @@ func TestWriteMessagePreservesTimeoutCause(t *testing.T) {
 			if err := raw.SetWriteDeadline(time.Now().Add(-time.Second)); err != nil {
 				t.Fatal(err)
 			}
-			err := newTestConn(raw, ConnConfig{Server: true}).WriteMessage(BinaryMessage, bytes.Repeat([]byte{'x'}, size))
+			err := newTestConn(raw, ConnConfig{Server: true}).WriteMessage(context.Background(), BinaryMessage, bytes.Repeat([]byte{'x'}, size))
 			if !errors.Is(err, errWriteFailed) {
 				t.Fatalf("error = %v, want errWriteFailed", err)
 			}
@@ -80,14 +81,14 @@ func TestWriteErrorsPreserveClosedPipeCause(t *testing.T) {
 			if control {
 				err = conn.writeControlFrame(opPing, []byte("ping"))
 			} else {
-				err = conn.WriteMessage(BinaryMessage, nil)
+				err = conn.WriteMessage(context.Background(), BinaryMessage, nil)
 			}
 			if !errors.Is(err, errWriteFailed) || !errors.Is(err, io.ErrClosedPipe) {
 				t.Fatalf("error = %v, want errWriteFailed and closed pipe", err)
 			}
 			// bufio retains the transport failure; the next call fails while writing
 			// its header rather than attempting to send another frame.
-			err = conn.WriteMessage(BinaryMessage, nil)
+			err = conn.WriteMessage(context.Background(), BinaryMessage, nil)
 			if !errors.Is(err, errWriteFailed) || !errors.Is(err, io.ErrClosedPipe) {
 				t.Fatalf("subsequent error = %v, want errWriteFailed and closed pipe", err)
 			}
@@ -102,16 +103,16 @@ func TestReadMessageEOFAtMessageBoundaries(t *testing.T) {
 		{0x88, 0}, // A peer may close during a fragmented message.
 		{0x02, 1, 'a', 0x88, 0},
 	} {
-		_, _, err := frameConn(wire, false, 0).ReadMessage()
+		_, _, err := frameConn(wire, false, 0).ReadMessage(context.Background())
 		if !errors.Is(err, io.EOF) {
 			t.Errorf("wire %x: error = %v, want EOF", wire, err)
 		}
 	}
 	conn := frameConn([]byte{0x82, 1, 'a'}, false, 0)
-	if _, data, err := conn.ReadMessage(); err != nil || string(data) != "a" {
+	if _, data, err := conn.ReadMessage(context.Background()); err != nil || string(data) != "a" {
 		t.Fatalf("complete message = %q, %v", data, err)
 	}
-	if _, _, err := conn.ReadMessage(); err != io.EOF {
+	if _, _, err := conn.ReadMessage(context.Background()); err != io.EOF {
 		t.Fatalf("error after complete message = %v, want EOF", err)
 	}
 }
@@ -134,7 +135,7 @@ func TestReadMessagePreservesExtensionEOFCause(t *testing.T) {
 	cause := fmt.Errorf("extension failed: %w", io.EOF)
 	conn := frameConn([]byte{0x02, 1, 'a', 0x80, 1, 'b'}, false, 0)
 	conn.extensions = []frameExtension{&continuationErrorExtension{err: cause}}
-	_, _, err := conn.ReadMessage()
+	_, _, err := conn.ReadMessage(context.Background())
 	if !errors.Is(err, cause) || errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Fatalf("error = %v, want extension cause", err)
 	}

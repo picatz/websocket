@@ -40,11 +40,11 @@ func newEchoTarget(t *testing.T, useTLS bool) *echoTarget {
 			return
 		}
 		defer c.Close()
-		kind, data, err := c.ReadMessage()
+		kind, data, err := c.ReadMessage(context.Background())
 		if err != nil {
 			return
 		}
-		_ = c.WriteMessage(kind, data)
+		_ = c.WriteMessage(context.Background(), kind, data)
 	})
 	if useTLS {
 		target.Server = httptest.NewTLSServer(handler)
@@ -144,10 +144,10 @@ func dialEcho(t *testing.T, target *echoTarget, rawURL string, d websocket.Diale
 		t.Fatal(err)
 	}
 	defer c.Close()
-	if err := c.WriteMessageContext(t.Context(), websocket.TextMessage, []byte("through")); err != nil {
+	if err := c.WriteMessage(t.Context(), websocket.TextMessage, []byte("through")); err != nil {
 		t.Fatal(err)
 	}
-	_, data, err := c.ReadMessageContext(t.Context())
+	_, data, err := c.ReadMessage(t.Context())
 	if err != nil || string(data) != "through" {
 		t.Fatalf("echo = %q, %v", data, err)
 	}

@@ -2,7 +2,9 @@ package websocket
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"fmt"
 	"io"
 )
 
@@ -31,7 +33,28 @@ var errReaderSuperseded = errors.New("websocket: message reader superseded by a 
 // NextReader discards data messages like ReadMessage, and a reader whose
 // message Shutdown discarded returns Shutdown's outcome: the peer's
 // *CloseError, or an error. The reader must not be used concurrently.
-func (c *Conn) NextReader() (messageType MessageType, r io.Reader, err error) {
+//
+// ctx bounds both the wait for the message and the reading of its payload.
+// If ctx is already done, NextReader returns the context's cause without
+// reading. If ctx ends before the reader returns io.EOF or an error, the
+// connection is aborted as described for ReadMessage, and the call or the
+// reader returns an error matching both the context's cause and the
+// underlying failure. Once the message ends, ctx no longer matters.
+func (c *Conn) NextReader(ctx context.Context) (messageType MessageType, r io.Reader, err error) {
+	stop, err := c.watch(ctx)
+	if err != nil {
+		return 0, nil, err
+	}
+	messageType, mr, err := c.nextDataReader()
+	if err != nil {
+		return 0, nil, ctxError(ctx, stop, err)
+	}
+	mr.ctx, mr.stopCtx = ctx, stop
+	return messageType, mr, nil
+}
+
+// nextDataReader is NextReader without a context.
+func (c *Conn) nextDataReader() (messageType MessageType, r *messageReader, err error) {
 	for {
 		op, mr, err := c.nextReader()
 		if err != nil {
@@ -135,12 +158,23 @@ type messageReader struct {
 	read       uint64 // Payload bytes returned so far.
 	peerClosed bool
 	err        error // Sticky once the message ends or fails.
+
+	// ctx is NextReader's context, which bounds the message. stopCtx
+	// unregisters its abort when the message ends; ctxEnded records that
+	// ctx had already ended the message by then.
+	ctx      context.Context
+	stopCtx  func() bool
+	ctxEnded bool
 }
 
 func (r *messageReader) Read(p []byte) (int, error) {
 	r.c.readMu.Lock()
 	n, err := r.readLocked(p)
+	ctxEnded := r.ctxEnded
 	r.c.readMu.Unlock()
+	if ctxEnded && err != nil && err != io.EOF {
+		return n, fmt.Errorf("%w: %w", context.Cause(r.ctx), err)
+	}
 	if err == errReaderSuperseded && r.c.shuttingDown.Load() {
 		// Shutdown discarded this message; report how it ended.
 		return 0, r.c.shutdownReadError()
@@ -221,7 +255,16 @@ func (r *messageReader) end(err error) error {
 	if r.c.reader == r {
 		r.c.reader = nil
 	}
+	r.release()
 	return err
+}
+
+// release unregisters the message's context, if any.
+func (r *messageReader) release() {
+	if r.stopCtx != nil && !r.stopCtx() {
+		r.ctxEnded = true
+	}
+	r.stopCtx = nil
 }
 
 // fail makes the connection terminal, sending a close status when known.
@@ -244,6 +287,7 @@ func (c *Conn) discardReader() error {
 		}
 		if err == io.EOF {
 			r.err = errReaderSuperseded
+			r.release()
 			return nil
 		}
 		return err

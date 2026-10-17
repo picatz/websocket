@@ -102,7 +102,8 @@ type Dialer struct {
 // matching ErrBadHandshake together with the server's response. Its Body
 // holds up to the first 4 KiB of the response body, read before the
 // connection is closed, so an explanation such as a 401's can still be read.
-// An invalid URL, or a NetDialContext that returns neither a connection nor an
+// For a wss URL, the response's TLS field holds the connection's TLS state,
+// as with net/http. An invalid URL, or a NetDialContext that returns neither a connection nor an
 // error, fails with ErrInvalidConfig.
 func (d *Dialer) Dial(ctx context.Context, urlStr string) (*Conn, *http.Response, error) {
 	return d.dial(ctx, urlStr, nil)

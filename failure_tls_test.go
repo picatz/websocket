@@ -212,7 +212,7 @@ func TestFailureTLSNewConnAbortsWithoutCloseNotify(t *testing.T) {
 			})
 			readDone := make(chan error, 1)
 			start := time.Now()
-			wg.Go(func() { _, _, err := c.ReadMessage(); readDone <- err })
+			wg.Go(func() { _, _, err := c.ReadMessage(context.Background()); readDone <- err })
 			if err := failureTLSWaitError(t, peerDone, "error Close"); err != nil {
 				t.Fatal(err)
 			}
@@ -229,7 +229,7 @@ func TestFailureTLSNewConnAbortsWithoutCloseNotify(t *testing.T) {
 			if raw.closes.Load() != 1 {
 				t.Fatalf("abort count=%d", raw.closes.Load())
 			}
-			if _, _, err := c.ReadMessage(); !errors.Is(err, net.ErrClosed) {
+			if _, _, err := c.ReadMessage(context.Background()); !errors.Is(err, net.ErrClosed) {
 				t.Fatal(err)
 			}
 		})
@@ -244,7 +244,7 @@ func TestFailureTLSConcurrentCloseCancelsNotification(t *testing.T) {
 	peerDone := make(chan error, 1)
 	wg.Go(func() { _, err := peer.Write(failureTLSWire(false)); peerDone <- err })
 	readDone := make(chan error, 1)
-	wg.Go(func() { _, _, err := c.ReadMessage(); readDone <- err })
+	wg.Go(func() { _, _, err := c.ReadMessage(context.Background()); readDone <- err })
 	if err := failureTLSWaitError(t, peerDone, "invalid frame write"); err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +272,7 @@ func TestFailureTLSNormalCloseFirstStillAllowsAbort(t *testing.T) {
 	var wg sync.WaitGroup
 	t.Cleanup(func() { raw.Close(); peerRaw.Close(); wg.Wait() })
 	readDone := make(chan error, 1)
-	wg.Go(func() { _, _, err := c.ReadMessage(); readDone <- err })
+	wg.Go(func() { _, _, err := c.ReadMessage(context.Background()); readDone <- err })
 	failureTLSWaitSignal(t, raw.reads, "already-running TLS read")
 	closeDone := make(chan error, 1)
 	wg.Go(func() { closeDone <- c.Close() })
@@ -333,7 +333,7 @@ func TestFailureTLSUpgradeRetainsAbortTransport(t *testing.T) {
 	setters := raw.deadlineCount()
 	readDone := make(chan error, 1)
 	start := time.Now()
-	wg.Go(func() { _, _, err := c.ReadMessage(); readDone <- err })
+	wg.Go(func() { _, _, err := c.ReadMessage(context.Background()); readDone <- err })
 	if err := failureTLSWaitError(t, peerDone, "Upgrade error Close"); err != nil {
 		t.Fatal(err)
 	}
@@ -388,7 +388,7 @@ func TestFailureTLSDialRetainsRawAbortTransport(t *testing.T) {
 	if !ok || c.abortConn != tlsConn.NetConn() {
 		t.Fatal("Dial did not preserve its raw TLS transport")
 	}
-	if _, _, err := c.ReadMessage(); err != errInvalidFrame {
+	if _, _, err := c.ReadMessage(context.Background()); err != errInvalidFrame {
 		t.Fatal(err)
 	}
 	if err := failureTLSWaitError(t, peerDone, "Dial error Close"); err != nil {
@@ -397,7 +397,7 @@ func TestFailureTLSDialRetainsRawAbortTransport(t *testing.T) {
 	if _, err := c.abortConn.Write([]byte{0}); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("raw transport remains writable: %v", err)
 	}
-	if _, _, err := c.ReadMessage(); !errors.Is(err, net.ErrClosed) {
+	if _, _, err := c.ReadMessage(context.Background()); !errors.Is(err, net.ErrClosed) {
 		t.Fatal(err)
 	}
 }
