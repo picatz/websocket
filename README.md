@@ -192,6 +192,8 @@ Each directory under [`examples`](examples) is a small program with tests:
   protocol.
 - [`rpc`](examples/rpc) is a JSON-RPC 2.0 server that runs calls
   concurrently, with a bound per connection.
+- [`tunnel`](examples/tunnel) forwards TCP connections, such as SSH, over
+  WebSocket with `NetConn`.
 - [`browser`](examples/browser) serves a page running Go compiled to
   WebAssembly that talks to the server with the `browser` package. Start it
   with `go run ./examples/browser`.
