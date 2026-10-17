@@ -24,7 +24,6 @@ package main
 import (
 	"bufio"
 	"context"
-	"encoding/binary"
 	"errors"
 	"flag"
 	"fmt"
@@ -157,15 +156,14 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	}
 }
 
-// finish sends a Close frame with code and keeps printing messages until the
-// server's Close frame arrives, so replies already on their way are not lost.
-// Conn.Shutdown would discard them. A server that does not answer within
+// finish closes the write side with code and keeps printing messages until
+// the server's Close frame arrives, so replies already on their way are not
+// lost. Conn.Shutdown would discard them. A server that does not answer within
 // closeWait is cut off.
 func finish(conn *websocket.Conn, code websocket.StatusCode, received <-chan error, stderr io.Writer) error {
-	// The write fails if the server has closed meanwhile; its Close frame
+	// CloseWrite fails if the server has closed meanwhile; its Close frame
 	// then arrives below.
-	payload := binary.BigEndian.AppendUint16(nil, uint16(code))
-	_ = conn.WriteControlFrame(websocket.CloseMessage, payload)
+	_ = conn.CloseWrite(code, "")
 	select {
 	case err := <-received:
 		return closed(err, stderr)

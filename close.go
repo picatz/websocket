@@ -173,6 +173,32 @@ func (c *Conn) CloseWithStatus(code StatusCode, reason string) error {
 	return c.closeWithPayload(payload)
 }
 
+// CloseWrite starts the closing handshake and keeps reading: it sends a Close
+// frame with code and reason and ends the write side, like
+// net.TCPConn.CloseWrite. Later writes, Pings and Close frames return an error
+// matching net.ErrClosed; Pongs that ReadMessage sends in reply to Pings still
+// go out. ReadMessage keeps delivering the messages the peer sent before it
+// answered, then returns the peer's *CloseError, and the connection closes.
+//
+// CloseWrite does not wait for the peer. Bound the drain with SetReadDeadline
+// or ReadMessageContext, and call Close if the peer never answers. Use
+// Shutdown instead to discard the peer's remaining messages and wait for its
+// answer in one call.
+//
+// An invalid status returns an error matching ErrInvalidCloseStatus before
+// any I/O and leaves the connection open. If a Close frame was already sent
+// or the connection is closed, CloseWrite returns an error matching
+// net.ErrClosed.
+//
+// https://datatracker.ietf.org/doc/html/rfc6455#section-7.1.2
+func (c *Conn) CloseWrite(code StatusCode, reason string) error {
+	payload, err := closePayload(code, reason)
+	if err != nil {
+		return err
+	}
+	return c.WriteControlFrame(CloseMessage, payload)
+}
+
 // Shutdown closes the connection with the closing handshake: it sends a Close
 // frame with code and reason, waits for the peer's Close frame, and then
 // closes the transport. It returns nil once the peer has answered.
