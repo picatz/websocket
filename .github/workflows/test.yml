@@ -9,8 +9,16 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -19,12 +27,22 @@ jobs:
         with:
           go-version: '1.27.2'
           cache: false
-      - run: test -z "$(gofmt -l .)"
+      # Formatting, 32-bit and fuzz smoke checks are platform-independent, so
+      # they run once on Linux. Windows checkouts may also rewrite line endings,
+      # which gofmt would report.
+      - if: runner.os == 'Linux'
+        run: test -z "$(gofmt -l .)"
       - run: go vet ./...
-      - run: go test -race -count=1 -timeout=2m ./...
-      - run: GOARCH=386 CGO_ENABLED=0 go test -count=1 -timeout=2m ./...
-      - run: go test . -run '^$' -fuzz '^FuzzReadMessage$' -fuzztime=15s -parallel=2
-      - run: go test . -run '^$' -fuzz '^FuzzExtensionNegotiation$' -fuzztime=15s -parallel=2
-      - run: go test . -run '^$' -fuzz '^FuzzUTF8Fragments$' -fuzztime=15s -parallel=2
-      - run: go test . -run '^$' -fuzz '^FuzzCanonicalOrigin$' -fuzztime=15s -parallel=2
-      - run: go test . -run '^$' -fuzz '^FuzzResponseHeadBound$' -fuzztime=15s -parallel=2
+      - run: go test -race -count=1 -timeout=3m ./...
+      - if: runner.os == 'Linux'
+        run: GOARCH=386 CGO_ENABLED=0 go test -count=1 -timeout=2m ./...
+      - if: runner.os == 'Linux'
+        run: go test . -run '^$' -fuzz '^FuzzReadMessage$' -fuzztime=15s -parallel=2
+      - if: runner.os == 'Linux'
+        run: go test . -run '^$' -fuzz '^FuzzExtensionNegotiation$' -fuzztime=15s -parallel=2
+      - if: runner.os == 'Linux'
+        run: go test . -run '^$' -fuzz '^FuzzUTF8Fragments$' -fuzztime=15s -parallel=2
+      - if: runner.os == 'Linux'
+        run: go test . -run '^$' -fuzz '^FuzzCanonicalOrigin$' -fuzztime=15s -parallel=2
+      - if: runner.os == 'Linux'
+        run: go test . -run '^$' -fuzz '^FuzzResponseHeadBound$' -fuzztime=15s -parallel=2
