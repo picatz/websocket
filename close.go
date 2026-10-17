@@ -89,8 +89,9 @@ const maxCloseReason = 125 - 2
 // cannot send.
 var ErrInvalidCloseStatus = errors.New("websocket: invalid close status")
 
-// CloseError is the peer's close frame, returned by ReadMessage (and
-// ReadMessageContext) when the peer starts or completes the closing handshake.
+// CloseError is the peer's close frame, returned by ReadMessage,
+// ReadMessageContext and NextReader when the peer starts or completes the
+// closing handshake.
 // A close frame without a body reports StatusNoStatusReceived and an empty
 // reason. CloseError matches io.EOF with errors.Is, so code that checks
 // errors.Is(err, io.EOF) for an orderly close keeps working.
