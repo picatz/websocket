@@ -74,7 +74,7 @@ def main():
     text = "\n".join([
         "# Autobahn baseline: " + args.agent,
         "",
-        "Informational protocol baseline, not a certification or all-pass gate.",
+        "Protocol baseline, not a certification. gate.py accepts only OK and INFORMATIONAL outcomes.",
         "",
         "- Available: {available}; selected: {selected}; reported: {reported}; excluded: {excluded}".format(**result),
         "- Behavior: " + json.dumps(result["behavior"], sort_keys=True),

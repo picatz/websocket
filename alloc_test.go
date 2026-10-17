@@ -40,7 +40,7 @@ func TestReadMessageAllocations(t *testing.T) {
 					}
 					got := testing.AllocsPerRun(100, func() {
 						r.Reset(wire)
-						c.rw.Reader.Reset(r)
+						c.br.Reset(r)
 						kind, p, err := c.ReadMessage()
 						if err != nil || kind != op || len(p) != size {
 							t.Fatal(kind, len(p), err)
@@ -62,20 +62,35 @@ func TestReadMessageFragmentedAllocations(t *testing.T) {
 	if raceEnabled {
 		t.Skip("allocation counts are not meaningful with the race detector")
 	}
-	payload := bytes.Repeat([]byte{'a'}, 64)
-	wire := benchmarkWire(payload, true, 4)
-	r := bytes.NewReader(wire)
-	c := newTestConn(&benchmarkConn{reader: r, writer: io.Discard}, ConnConfig{Server: true})
-	// One payload per frame plus the growing message.
-	got := testing.AllocsPerRun(100, func() {
-		r.Reset(wire)
-		c.rw.Reader.Reset(r)
-		if _, p, err := c.ReadMessage(); err != nil || len(p) != len(payload) {
-			t.Fatal(len(p), err)
+	// Without extensions, fragments are read straight onto the end of the
+	// message. Storage doubles with what has arrived, so many small
+	// fragments are not copied once per frame.
+	for _, tc := range []struct{ size, fragments, max int }{
+		{64, 4, 1},       // Everything is buffered: one allocation.
+		{65536, 4, 5},    // As many as one 64 KiB frame.
+		{1000, 1000, 1},  // One byte per frame, all buffered.
+		{8192, 8192, 4},  // More than the read buffer holds: doubling.
+		{1 << 20, 64, 9}, // As many as one 1 MiB frame.
+	} {
+		for _, op := range []Opcode{BinaryMessage, TextMessage} {
+			t.Run(fmt.Sprintf("bytes=%d/fragments=%d/type=%s", tc.size, tc.fragments, op), func(t *testing.T) {
+				payload := bytes.Repeat([]byte{'a'}, tc.size)
+				wire := benchmarkWire(payload, true, tc.fragments)
+				wire[0] = wire[0]&0xf0 | byte(op)
+				r := bytes.NewReader(wire)
+				c := newTestConn(&benchmarkConn{reader: r, writer: io.Discard}, ConnConfig{Server: true})
+				got := testing.AllocsPerRun(20, func() {
+					r.Reset(wire)
+					c.br.Reset(r)
+					if kind, p, err := c.ReadMessage(); err != nil || kind != op || !bytes.Equal(p, payload) {
+						t.Fatal(kind, len(p), err)
+					}
+				})
+				if got > float64(tc.max) {
+					t.Fatalf("allocations = %v, want at most %d", got, tc.max)
+				}
+			})
 		}
-	})
-	if got > 8 {
-		t.Fatalf("allocations = %v, want at most 8", got)
 	}
 }
 
@@ -117,7 +132,7 @@ func TestPayloadReaderGrowsWithReceivedBytes(t *testing.T) {
 	for _, sent := range []int{0, 1, 10, minPayloadAlloc, minPayloadAlloc + 1, 3 * minPayloadAlloc} {
 		data := benchmarkPayload(sent)
 		r := payloadReader{r: bufio.NewReaderSize(bytes.NewReader(data), 16), remaining: declared}
-		got, err := r.readAll()
+		got, err := r.readAll(nil, 0)
 		if err != nil || !bytes.Equal(got, data) {
 			t.Fatalf("sent=%d: got %d bytes, err=%v", sent, len(got), err)
 		}
@@ -140,7 +155,7 @@ func TestPayloadReaderExactCapacity(t *testing.T) {
 			}
 			source := &streamChunkReader{data: wire, sizes: []int{1, 7, 4093, 65536}, tail: io.EOF}
 			r := payloadReader{r: bufio.NewReader(source), remaining: int64(size), key: key, masked: masked}
-			got, err := r.readAll()
+			got, err := r.readAll(nil, 0)
 			if err != nil || !bytes.Equal(got, want) {
 				t.Fatalf("size=%d masked=%t: err=%v equal=%t", size, masked, err, bytes.Equal(got, want))
 			}
@@ -180,10 +195,10 @@ func TestWriteMaskedEveryChunkBoundary(t *testing.T) {
 	}
 }
 
-func TestIdleConnHoldsNoWriteBuffer(t *testing.T) {
+func TestPooledWritesRoundTrip(t *testing.T) {
 	// Every frame is flushed, so connections borrow a write buffer per frame
-	// rather than holding one while idle. Both ends must still exchange
-	// messages through the borrowed buffers.
+	// rather than holding one while idle. Both ends of a real handshake must
+	// exchange messages larger than one buffer through the borrowed buffers.
 	server := make(chan *Conn, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c, err := Upgrade(w, r)
@@ -201,11 +216,6 @@ func TestIdleConnHoldsNoWriteBuffer(t *testing.T) {
 	defer client.Close()
 	s := <-server
 	defer s.Close()
-	for _, c := range []*Conn{client, s} {
-		if c.rw.Writer != nil {
-			t.Fatalf("server=%t: connection holds a write buffer", c.isServer)
-		}
-	}
 	payload := bytes.Repeat([]byte("abc"), 5000) // Larger than one write buffer.
 	if err := client.WriteMessage(BinaryMessage, payload); err != nil {
 		t.Fatal(err)
@@ -230,5 +240,23 @@ func TestReleasedWriterDropsFailedFrame(t *testing.T) {
 	releaseWriter(w)
 	if w.Buffered() != 0 {
 		t.Fatalf("released writer keeps %d bytes", w.Buffered())
+	}
+}
+
+func TestFragmentedReadStaysWithinLimit(t *testing.T) {
+	// Storage for a fragmented message grows ahead of later fragments, but a
+	// message limit bounds what is allocated as well as what is accepted.
+	const limit = 10000
+	for _, fragments := range []int{2, 7, 100, limit} {
+		payload := bytes.Repeat([]byte{'a'}, limit)
+		wire := benchmarkWire(payload, true, fragments)
+		c := newTestConn(&benchmarkConn{reader: bytes.NewReader(wire), writer: io.Discard}, ConnConfig{Server: true, MaxMessageSize: limit})
+		_, got, err := c.ReadMessage()
+		if err != nil || !bytes.Equal(got, payload) {
+			t.Fatalf("fragments=%d: read %d bytes, err=%v", fragments, len(got), err)
+		}
+		if cap(got) > limit {
+			t.Fatalf("fragments=%d: capacity %d exceeds the %d byte limit", fragments, cap(got), limit)
+		}
 	}
 }

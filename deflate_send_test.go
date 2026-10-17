@@ -65,10 +65,10 @@ func wireFrames(t *testing.T, wire []byte) []*wireFrame {
 			t.Fatal(err)
 		}
 		if f.Masked {
-			io.ReadFull(c.rw, f.MaskKey[:])
+			io.ReadFull(c.br, f.MaskKey[:])
 		}
 		f.Payload = make([]byte, n)
-		if _, err := io.ReadFull(c.rw, f.Payload); err != nil {
+		if _, err := io.ReadFull(c.br, f.Payload); err != nil {
 			t.Fatal(err)
 		}
 		if f.Masked {

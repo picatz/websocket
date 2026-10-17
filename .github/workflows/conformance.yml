@@ -29,7 +29,7 @@ permissions:
 
 jobs:
   baseline:
-    name: ${{ matrix.role }} / ${{ matrix.profile }} (informational)
+    name: ${{ matrix.role }} / ${{ matrix.profile }}
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     strategy:
@@ -77,3 +77,6 @@ jobs:
           path: ${{ runner.temp }}/autobahn
           if-no-files-found: error
           retention-days: 30
+      # Runs only after a complete run, so the artifact is always uploaded first.
+      - name: Require every case to be OK or INFORMATIONAL
+        run: python3 conformance/autobahn/gate.py '${{ runner.temp }}/autobahn/reports/summary.json'

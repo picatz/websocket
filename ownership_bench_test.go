@@ -64,7 +64,7 @@ func ownershipBenchmarkRead(b *testing.B, op Opcode, payload []byte, masked bool
 	b.SetBytes(int64(len(payload)))
 	for b.Loop() {
 		r.Reset(wire)
-		c.rw.Reader.Reset(r)
+		c.br.Reset(r)
 		kind, got, err = c.ReadMessage()
 		if err != nil || kind != op || len(got) != len(payload) {
 			b.Fatal(kind, len(got), err)

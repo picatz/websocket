@@ -1,7 +1,6 @@
 package websocket
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/binary"
@@ -103,8 +102,9 @@ func TestReadMessageFragmentation(t *testing.T) {
 func TestReadFrameLengthBoundaries(t *testing.T) {
 	for _, n := range []int{0, 1, 125, 126, 65535, 65536} {
 		t.Run(strconv.Itoa(n), func(t *testing.T) {
-			var wire bytes.Buffer
-			writer := &Conn{rw: bufio.NewReadWriter(bufio.NewReader(bytes.NewReader(nil)), bufio.NewWriter(&wire)), isServer: true}
+			raw := &memoryConn{Reader: bytes.NewReader(nil)}
+			wire := &raw.written
+			writer := newTestConn(raw, ConnConfig{Server: true})
 			data := bytes.Repeat([]byte{'x'}, n)
 			if err := writer.WriteMessage(BinaryMessage, data); err != nil {
 				t.Fatal(err)

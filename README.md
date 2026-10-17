@@ -2,6 +2,7 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/picatz/websocket.svg)](https://pkg.go.dev/github.com/picatz/websocket)
 [![Test](https://github.com/picatz/websocket/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/picatz/websocket/actions/workflows/test.yml)
+[![Autobahn](https://github.com/picatz/websocket/actions/workflows/conformance.yml/badge.svg?branch=main)](#conformance)
  
 This package provides a small, standard-library-only [WebSocket] client and server implementation for Go 1.26 and later.
 It supports text and binary messages, ping/pong/close frames, message fragmentation, and
@@ -505,9 +506,9 @@ same for server and client:
 | compression | 12–13 (permessage-deflate) | 216 | 216 | 0 | 0 |
 
 Informational cases have no pass or fail verdict in the suite. The workflow
-fails on an incomplete run but not on a failed case, so this table is updated by
-hand from a reviewed run rather than shown as a badge. Each run's artifact holds
-the full Autobahn report for 30 days; see
+fails when a run is incomplete or any case is anything other than OK or
+informational, so the Autobahn badge above is green only while that holds. Each
+run's artifact holds the full Autobahn report for 30 days; see
 [`conformance/autobahn`](conformance/autobahn) to reproduce it locally with
 Docker.
 

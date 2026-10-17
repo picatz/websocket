@@ -260,7 +260,7 @@ func TestHighLevelDefaultExtensionHeaderLimit(t *testing.T) {
 					// reject before reading a body or even the client's mask,
 					// including when an extension could shrink the payload.
 					input := &headerOnlyConn{memoryConn: memoryConn{Reader: bytes.NewReader(limitHeader(server, 0xc2, size))}}
-					c.rw.Reader = bufio.NewReader(input)
+					c.br = bufio.NewReader(input)
 					if _, p, err := c.ReadMessage(); !errors.Is(err, ErrPayloadTooLarge) || p != nil || input.bodyReads != 0 || ext.incoming != 0 {
 						t.Fatalf("payload %d, error %v, body reads %d, transforms %d", len(p), err, input.bodyReads, ext.incoming)
 					}

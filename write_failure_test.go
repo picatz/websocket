@@ -1,7 +1,6 @@
 package websocket
 
 import (
-	"bufio"
 	"bytes"
 	"errors"
 	"fmt"
@@ -80,7 +79,9 @@ func requireWriteCause(t *testing.T, err, errorCause error) {
 }
 func TestWriteFailureWritePoisonPreventsWireReuse(t *testing.T) {
 	for _, server := range []bool{false, true} {
-		for _, stage := range []string{"header", "payload", "flush"} {
+		// Headers go into an empty, pooled write buffer and cannot fail;
+		// the transport sees a frame only when its payload or flush does.
+		for _, stage := range []string{"payload", "flush"} {
 			for _, prefix := range []int{0, 1, -1} {
 				t.Run(fmt.Sprintf("server=%v/%s/prefix=%d", server, stage, prefix), func(t *testing.T) {
 					cause := &failedWriteError{"synthetic write error"}
@@ -88,15 +89,12 @@ func TestWriteFailureWritePoisonPreventsWireReuse(t *testing.T) {
 					ext := &failedWriteExtension{}
 					c := newTestConn(raw, ConnConfig{Server: server}, []frameExtension{ext}...)
 					data := []byte("outbound")
-					if stage == "header" {
-						c.rw.Writer = bufio.NewWriterSize(raw, 1)
-					}
 					if stage == "payload" {
 						data = bytes.Repeat([]byte{'x'}, 8192)
 					}
 					err := c.WriteMessage(BinaryMessage, data)
 					requireWriteCause(t, err, cause)
-					if !strings.Contains(err.Error(), map[string]string{"header": "write frame header", "payload": "write frame payload", "flush": "flush data"}[stage]) {
+					if !strings.Contains(err.Error(), map[string]string{"payload": "write frame payload", "flush": "flush data"}[stage]) {
 						t.Fatal(err)
 					}
 					before := bytes.Clone(raw.wire.Bytes())

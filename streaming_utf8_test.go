@@ -376,7 +376,7 @@ func TestReadMessageTextNetworkChunks(t *testing.T) {
 				wire = append(wire, failureWire(server, 0x81, []byte("next"))...)
 				source := &streamChunkReader{data: wire, sizes: []int{chunk}, tail: io.EOF}
 				c := newTestConn(&benchmarkConn{reader: source, writer: io.Discard}, ConnConfig{Server: server})
-				c.rw.Reader = bufio.NewReaderSize(source, 16)
+				c.br = bufio.NewReaderSize(source, 16)
 				op, got, err := c.ReadMessage()
 				if err != nil || op != TextMessage || !bytes.Equal(got, p) {
 					t.Fatalf("server=%v size=%d chunk=%d: op=%v err=%v", server, size, chunk, op, err)
@@ -474,7 +474,7 @@ func FuzzUTF8NetworkChunks(f *testing.F) {
 		wire[0] = 0x81
 		src := &streamChunkReader{data: wire, sizes: []int{1 + int(chunk)}, tail: io.EOF}
 		c := newTestConn(&benchmarkConn{reader: src, writer: io.Discard}, ConnConfig{Server: server})
-		c.rw.Reader = bufio.NewReaderSize(src, 16)
+		c.br = bufio.NewReaderSize(src, 16)
 		op, got, err := c.ReadMessage()
 		if utf8.Valid(p) {
 			if err != nil || op != TextMessage || !bytes.Equal(got, p) {

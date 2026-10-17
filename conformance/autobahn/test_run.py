@@ -204,7 +204,7 @@ class ShardTests(unittest.TestCase):
             self.assertTrue(result["complete"])
             html = (output / "reports/index.html").read_text()
             self.assertIn('../shards/0001/reports/12.1.2.html', html)
-            self.assertIn("not a certification or all-pass gate", html)
+            self.assertIn("not a certification. gate.py accepts only OK", html)
             self.assertEqual(load_json(output / "reports/index.json")[self.agent]["12.1.2"]["reportfile"],
                              "../shards/0001/reports/12.1.2.json")
 
