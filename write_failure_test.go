@@ -136,10 +136,10 @@ func TestWriteFailureWritePoisonPreventsWireReuse(t *testing.T) {
 					if raw.closes != 1 || raw.calls != 1 || ext.outgoing != 1 || raw.deadlines != 1 || !bytes.Equal(before, raw.wire.Bytes()) {
 						t.Fatal("Close retried poisoned stream, altered deadlines or invoked extension")
 					}
-					if _, _, err := c.ReadMessage(); err != io.ErrClosedPipe {
+					if _, _, err := c.ReadMessage(); !errors.Is(err, net.ErrClosed) {
 						t.Fatal(err)
 					}
-					if err := c.WriteMessage(BinaryMessage, nil); err != io.ErrClosedPipe {
+					if err := c.WriteMessage(BinaryMessage, nil); !errors.Is(err, net.ErrClosed) {
 						t.Fatal(err)
 					}
 					if err := c.Close(); err != ErrAlreadyClosed {
@@ -175,9 +175,9 @@ func TestWriteFailureWritePreflightRemainsUsable(t *testing.T) {
 		cause := errors.New("extension declined this message")
 		ext.call = func(*Frame) error { return cause }
 		err := c.WriteMessage(BinaryMessage, nil)
-		// Current outgoing extension errors use %v, unlike incoming errors. Do not
-		// change their wrapping contract while guarding transport errors.
-		if err == nil || errors.Is(err, cause) || errors.Is(err, ErrWriteFailed) || !strings.Contains(err.Error(), cause.Error()) {
+		// Outgoing extension errors wrap the extension's error, like incoming
+		// ones, without looking like a transport failure.
+		if err == nil || !errors.Is(err, cause) || errors.Is(err, ErrWriteFailed) || !strings.Contains(err.Error(), cause.Error()) {
 			t.Fatalf("extension error identity changed: %v", err)
 		}
 		if raw.calls != 0 || raw.closes != 0 || c.writeErr != nil || c.closed.Load() {
@@ -274,7 +274,7 @@ func TestWriteFailurePartialWriteThenClearAndClose(t *testing.T) {
 	if raw.writes.Load() != 1 {
 		t.Fatal("Close appended a frame after partial output")
 	}
-	if _, _, err := c.ReadMessage(); err != io.ErrClosedPipe {
+	if _, _, err := c.ReadMessage(); !errors.Is(err, net.ErrClosed) {
 		t.Fatal(err)
 	}
 }
@@ -485,7 +485,7 @@ func TestWriteFailureValidationPrecedence(t *testing.T) {
 		} {
 			err := write()
 			if closed {
-				if err != io.ErrClosedPipe {
+				if !errors.Is(err, net.ErrClosed) {
 					t.Fatal(err)
 				}
 			} else {
@@ -510,10 +510,10 @@ func TestWriteFailureAfterSuccessfulClose(t *testing.T) {
 	if !c.closeSent || c.closed.Load() {
 		t.Fatal("successful close state lost")
 	}
-	if err := c.WriteMessage(BinaryMessage, nil); err != io.ErrClosedPipe {
+	if err := c.WriteMessage(BinaryMessage, nil); !errors.Is(err, net.ErrClosed) {
 		t.Fatal(err)
 	}
-	if err := c.WriteControlFrame(CloseMessage, nil); err != io.ErrClosedPipe {
+	if err := c.WriteControlFrame(CloseMessage, nil); !errors.Is(err, net.ErrClosed) {
 		t.Fatal(err)
 	}
 	requireWriteCause(t, c.WriteControlFrame(PingMessage, nil), cause)

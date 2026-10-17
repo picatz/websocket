@@ -121,7 +121,7 @@ func TestReadMessageReturnsPeerCloseError(t *testing.T) {
 			if got := failureClosePayload(t, raw.written.Bytes(), server); !bytes.Equal(got, tt.payload) {
 				t.Fatalf("echo = %x, want %x", got, tt.payload)
 			}
-			if _, _, err := c.ReadMessage(); !errors.Is(err, io.ErrClosedPipe) || CloseStatus(err) != -1 {
+			if _, _, err := c.ReadMessage(); !errors.Is(err, net.ErrClosed) || CloseStatus(err) != -1 {
 				t.Fatalf("read after peer close: %v", err)
 			}
 		}

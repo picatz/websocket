@@ -3,7 +3,6 @@ package websocket_test
 import (
 	"context"
 	"errors"
-	"io"
 	"net"
 	"testing"
 	"time"
@@ -41,11 +40,11 @@ func contextAwait[T any](t *testing.T, ch <-chan T) T {
 // requireContextTerminal checks the connection behaves as after Close.
 func requireContextTerminal(t *testing.T, c *websocket.Conn) {
 	t.Helper()
-	if _, _, err := c.ReadMessage(); !errors.Is(err, io.ErrClosedPipe) {
-		t.Fatalf("read after cancellation = %v, want io.ErrClosedPipe", err)
+	if _, _, err := c.ReadMessage(); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("read after cancellation = %v, want net.ErrClosed", err)
 	}
-	if err := c.WriteMessage(websocket.TextMessage, []byte("late")); !errors.Is(err, io.ErrClosedPipe) {
-		t.Fatalf("write after cancellation = %v, want io.ErrClosedPipe", err)
+	if err := c.WriteMessage(websocket.TextMessage, []byte("late")); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("write after cancellation = %v, want net.ErrClosed", err)
 	}
 	if err := c.Close(); !errors.Is(err, websocket.ErrAlreadyClosed) {
 		t.Fatalf("Close after cancellation = %v, want ErrAlreadyClosed", err)
