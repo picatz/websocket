@@ -3,6 +3,7 @@ package websocket
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/subtle"
 	"encoding/binary"
 	"fmt"
@@ -161,7 +162,7 @@ func BenchmarkReadMessage(b *testing.B) {
 					wire := benchmarkWire(payload, masked, fragments)
 					r := bytes.NewReader(wire)
 					c := newTestConn(&benchmarkConn{reader: r, writer: io.Discard}, ConnConfig{Server: masked})
-					kind, got, err := c.ReadMessage()
+					kind, got, err := c.ReadMessage(context.Background())
 					if err != nil || kind != BinaryMessage || !bytes.Equal(got, payload) {
 						b.Fatalf("invalid fixture: kind=%v bytes=%d err=%v", kind, len(got), err)
 					}
@@ -170,7 +171,7 @@ func BenchmarkReadMessage(b *testing.B) {
 					for b.Loop() {
 						r.Reset(wire)
 						c.br.Reset(r)
-						kind, got, err = c.ReadMessage()
+						kind, got, err = c.ReadMessage(context.Background())
 						if err != nil || kind != BinaryMessage || len(got) != size {
 							b.Fatal(kind, len(got), err)
 						}
@@ -188,13 +189,13 @@ func BenchmarkWriteMessage(b *testing.B) {
 				payload := benchmarkPayload(size)
 				c := newTestConn(&benchmarkConn{writer: io.Discard}, ConnConfig{Server: server})
 				// Exclude one-time crypto/rand initialization from steady-state results.
-				if err := c.WriteMessage(BinaryMessage, payload); err != nil {
+				if err := c.WriteMessage(context.Background(), BinaryMessage, payload); err != nil {
 					b.Fatal(err)
 				}
 				b.SetBytes(int64(size))
 				b.ReportAllocs()
 				for b.Loop() {
-					if err := c.WriteMessage(BinaryMessage, payload); err != nil {
+					if err := c.WriteMessage(context.Background(), BinaryMessage, payload); err != nil {
 						b.Fatal(err)
 					}
 				}
@@ -254,7 +255,7 @@ func BenchmarkTransport(b *testing.B) {
 					go func() {
 						defer close(finished)
 						for i := 0; i < b.N; i++ {
-							if err := writer.WriteMessage(BinaryMessage, payload); err != nil {
+							if err := writer.WriteMessage(context.Background(), BinaryMessage, payload); err != nil {
 								sender.Close()
 								done <- err
 								return
@@ -263,7 +264,7 @@ func BenchmarkTransport(b *testing.B) {
 						done <- nil
 					}()
 					for i := 0; i < b.N; i++ {
-						kind, got, err := reader.ReadMessage()
+						kind, got, err := reader.ReadMessage(context.Background())
 						if err != nil || kind != BinaryMessage || len(got) != size {
 							b.Fatal(kind, len(got), err)
 						}
@@ -286,7 +287,7 @@ func TestBenchmarkWire(t *testing.T) {
 				wire := benchmarkWire(payload, masked, fragments)
 				r := bytes.NewReader(wire)
 				c := newTestConn(&benchmarkConn{reader: r, writer: io.Discard}, ConnConfig{Server: masked})
-				kind, got, err := c.ReadMessage()
+				kind, got, err := c.ReadMessage(context.Background())
 				if err != nil || kind != BinaryMessage || !bytes.Equal(got, payload) {
 					t.Fatalf("%d/%t/%d: %v, %v", size, masked, fragments, kind, err)
 				}
@@ -329,7 +330,7 @@ func TestBenchmarkWriteWire(t *testing.T) {
 			original := bytes.Clone(payload)
 			var wire bytes.Buffer
 			c := newTestConn(&benchmarkConn{writer: &wire}, ConnConfig{Server: server})
-			if err := c.WriteMessage(BinaryMessage, payload); err != nil {
+			if err := c.WriteMessage(context.Background(), BinaryMessage, payload); err != nil {
 				t.Fatal(err)
 			}
 			if !bytes.Equal(payload, original) {

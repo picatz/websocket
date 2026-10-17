@@ -69,12 +69,12 @@ func TestUpgradeMiddlewareLoopback(t *testing.T) {
 			done <- err
 			return
 		}
-		opcode, data, err := conn.ReadMessage()
+		opcode, data, err := conn.ReadMessage(context.Background())
 		if err != nil || opcode != TextMessage || string(data) != "first" {
 			done <- fmt.Errorf("pipelined message = %d, %q, %v", opcode, data, err)
 			return
 		}
-		done <- conn.WriteMessage(TextMessage, data)
+		done <- conn.WriteMessage(context.Background(), TextMessage, data)
 	}))
 	defer srv.Close()
 	peer, err := net.DialTimeout("tcp", strings.TrimPrefix(srv.URL, "http://"), 5*time.Second)
@@ -108,7 +108,7 @@ func TestUpgradeMiddlewareLoopback(t *testing.T) {
 	}
 	client := newTestConn(peer, ConnConfig{})
 	client.br = reader
-	if opcode, data, err := client.ReadMessage(); err != nil || opcode != TextMessage || string(data) != "first" {
+	if opcode, data, err := client.ReadMessage(context.Background()); err != nil || opcode != TextMessage || string(data) != "first" {
 		t.Fatalf("echo = %d, %q, %v", opcode, data, err)
 	}
 	if err := <-done; err != nil {
@@ -134,7 +134,7 @@ func TestUpgradeMiddlewarePreservesHijackedBuffers(t *testing.T) {
 	if conn.conn != raw || conn.br != rw.Reader || rw.Reader.Buffered() != len(wire) || rw.Writer.Buffered() != 0 {
 		t.Fatal("Upgrade replaced the hijacked connection or reader, consumed input, or did not flush the handshake")
 	}
-	if opcode, data, err := conn.ReadMessage(); err != nil || opcode != TextMessage || string(data) != "x" {
+	if opcode, data, err := conn.ReadMessage(context.Background()); err != nil || opcode != TextMessage || string(data) != "x" {
 		t.Fatalf("buffered message = %d, %q, %v", opcode, data, err)
 	}
 	if !strings.HasPrefix(raw.written.String(), "HTTP/1.1 101 Switching Protocols\r\n") {

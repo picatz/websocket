@@ -188,7 +188,7 @@ func TestDialExtensionSelection(t *testing.T) {
 				t.Fatalf("Dial = %v, %v, %v; valid = %v", conn, resp, err, tc.valid)
 			}
 			if tc.valid {
-				opcode, data, err := conn.ReadMessage()
+				opcode, data, err := conn.ReadMessage(context.Background())
 				if err != nil || opcode != BinaryMessage || string(data) != "x" {
 					t.Fatalf("buffered message = %v, %q, %v", opcode, data, err)
 				}

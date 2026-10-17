@@ -25,7 +25,7 @@ func subprotocolServer(t *testing.T, u *Upgrader) (url string, offers <-chan []s
 		}
 		defer conn.Close()
 		selectedc <- conn.Subprotocol()
-		_, _, _ = conn.ReadMessage()
+		_, _, _ = conn.ReadMessage(context.Background())
 	}))
 	t.Cleanup(srv.Close)
 	return "ws" + srv.URL[4:], offerc, selectedc

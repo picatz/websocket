@@ -16,7 +16,7 @@ import (
 //
 // If ctx is already done, Ping returns its cause without writing. If ctx ends
 // while the Ping frame is being written, the connection is aborted as for
-// WriteMessageContext, because a partial frame cannot be retried. If ctx ends
+// WriteMessage, because a partial frame cannot be retried. If ctx ends
 // while waiting for the Pong, Ping returns ctx's cause and the connection is
 // left open: deciding that a missing Pong means the peer is gone, and closing,
 // is up to the caller. If ctx ends just as the frame is written, the connection

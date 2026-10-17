@@ -91,8 +91,8 @@ const maxCloseReason = 125 - 2
 // 1014 and 3000 to 4999; the reason must be valid UTF-8 of at most 123 bytes.
 var ErrInvalidCloseStatus = errors.New("websocket: invalid close status")
 
-// CloseError is the peer's close frame, returned by ReadMessage,
-// ReadMessageContext and NextReader when the peer starts or completes the
+// CloseError is the peer's close frame, returned by ReadMessage and
+// NextReader when the peer starts or completes the
 // closing handshake.
 // A close frame without a body reports StatusNoStatusReceived and an empty
 // reason. A normal close (StatusNormalClosure, StatusGoingAway or no status)
@@ -197,7 +197,7 @@ func (c *Conn) CloseWithStatus(code StatusCode, reason string) error {
 // answered, then returns the peer's *CloseError, and the connection closes.
 //
 // CloseWrite does not wait for the peer. Bound the drain with SetReadDeadline
-// or ReadMessageContext, and call Close if the peer never answers. Use
+// or ReadMessage's context, and call Close if the peer never answers. Use
 // Shutdown instead to discard the peer's remaining messages and wait for its
 // answer in one call.
 //
@@ -277,7 +277,7 @@ func (c *Conn) Shutdown(ctx context.Context, code StatusCode, reason string) err
 	// only once the peer's Close frame arrives or the connection fails. A
 	// concurrent read loop may get there first; then this call waits for it
 	// and returns as soon as the connection is closed.
-	_, _, _ = c.ReadMessage()
+	_, _, _ = c.readDataMessage()
 	<-c.doneChan()
 	if c.peerClosed.Load() {
 		return nil

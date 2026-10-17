@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -24,7 +25,7 @@ func expect(t *testing.T, conn *websocket.Conn, want string) {
 	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	_, msg, err := conn.ReadMessage()
+	_, msg, err := conn.ReadMessage(context.Background())
 	if err != nil || string(msg) != want {
 		t.Fatalf("ReadMessage = %q, %v; want %q", msg, err, want)
 	}
@@ -42,7 +43,7 @@ func TestBroadcast(t *testing.T) {
 	expect(t, ada, "* bob joined")
 	expect(t, bob, "* bob joined")
 
-	if err := ada.WriteMessage(websocket.TextMessage, []byte("hello")); err != nil {
+	if err := ada.WriteMessage(context.Background(), websocket.TextMessage, []byte("hello")); err != nil {
 		t.Fatal(err)
 	}
 	expect(t, ada, "ada: hello")

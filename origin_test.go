@@ -262,7 +262,7 @@ func TestUpgradeOriginRealLoopback(t *testing.T) {
 					return
 				}
 				defer c.Close()
-				if err := c.WriteMessage(TextMessage, []byte("ok")); err != nil {
+				if err := c.WriteMessage(context.Background(), TextMessage, []byte("ok")); err != nil {
 					t.Error(err)
 				}
 			}))
@@ -289,7 +289,7 @@ func TestUpgradeOriginRealLoopback(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					_, p, e := c.ReadMessage()
+					_, p, e := c.ReadMessage(context.Background())
 					c.Close()
 					if e != nil || string(p) != "ok" {
 						t.Fatalf("message %q %v", p, e)

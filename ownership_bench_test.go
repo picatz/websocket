@@ -2,6 +2,7 @@ package websocket
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"testing"
@@ -56,7 +57,7 @@ func ownershipBenchmarkRead(b *testing.B, op MessageType, payload []byte, masked
 	wire[0] = wire[0]&0xf0 | byte(op)
 	r := bytes.NewReader(wire)
 	c := newTestConn(&benchmarkConn{reader: r, writer: io.Discard}, ConnConfig{Server: masked}, extensions...)
-	kind, got, err := c.ReadMessage()
+	kind, got, err := c.ReadMessage(context.Background())
 	if err != nil || kind != op || !bytes.Equal(got, payload) {
 		b.Fatal(kind, len(got), err)
 	}
@@ -65,7 +66,7 @@ func ownershipBenchmarkRead(b *testing.B, op MessageType, payload []byte, masked
 	for b.Loop() {
 		r.Reset(wire)
 		c.br.Reset(r)
-		kind, got, err = c.ReadMessage()
+		kind, got, err = c.ReadMessage(context.Background())
 		if err != nil || kind != op || len(got) != len(payload) {
 			b.Fatal(kind, len(got), err)
 		}

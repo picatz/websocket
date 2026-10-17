@@ -303,18 +303,15 @@ func (c *Conn) signal() {
 // connection ended are returned first. Then ReadMessage returns a
 // *websocket.CloseError carrying the peer's code and reason if the peer closed
 // the connection, which matches io.EOF for a normal close; an error matching
-// net.ErrClosed after
-// Close; an error matching websocket.ErrMessageTooLarge if a message exceeded
-// the limit; or one matching io.ErrUnexpectedEOF if the host reported a
-// failure or the connection closed without a closing handshake.
-func (c *Conn) ReadMessage() (messageType websocket.MessageType, data []byte, err error) {
-	return c.ReadMessageContext(context.Background())
-}
-
-// ReadMessageContext is ReadMessage bounded by ctx. If ctx ends before a
-// message is available, the connection is closed, as with
-// websocket.Conn.ReadMessageContext, and the error wraps context.Cause(ctx).
-func (c *Conn) ReadMessageContext(ctx context.Context) (messageType websocket.MessageType, data []byte, err error) {
+// net.ErrClosed after Close; an error matching websocket.ErrMessageTooLarge if
+// a message exceeded the limit; or one matching io.ErrUnexpectedEOF if the
+// host reported a failure or the connection closed without a closing
+// handshake.
+//
+// ctx bounds the wait. If ctx ends before a message is available, the
+// connection is closed, as with websocket.Conn.ReadMessage, and the error
+// wraps context.Cause(ctx).
+func (c *Conn) ReadMessage(ctx context.Context) (messageType websocket.MessageType, data []byte, err error) {
 	c.readMu.Lock()
 	defer c.readMu.Unlock()
 	for {
@@ -359,26 +356,19 @@ const (
 	writePollMax = 50 * time.Millisecond
 )
 
-// WriteMessage sends a text or binary message. Text must be valid UTF-8. It
-// is WriteMessageContext without a deadline.
-func (c *Conn) WriteMessage(messageType websocket.MessageType, data []byte) error {
-	return c.WriteMessageContext(context.Background(), messageType, data)
-}
-
-// WriteMessageContext sends a text or binary message. Text must be valid
-// UTF-8.
+// WriteMessage sends a text or binary message. Text must be valid UTF-8.
 //
 // The host queues outgoing messages without limit, so for backpressure the
 // write first waits while more than 1 MiB is already queued and unsent. Then
 // it hands the message to the host and returns; it does not wait for the
 // network. If ctx is done before then, it returns an error wrapping
 // context.Cause(ctx). Nothing has been sent at that point, so unlike
-// websocket.Conn.WriteMessageContext the connection stays open. Writes are
+// websocket.Conn.WriteMessage the connection stays open. Writes are
 // serialized, so concurrent writers keep their order and share the wait.
 //
 // It returns an error matching net.ErrClosed once the connection is closing
 // or closed, where the host would silently discard the message.
-func (c *Conn) WriteMessageContext(ctx context.Context, messageType websocket.MessageType, data []byte) error {
+func (c *Conn) WriteMessage(ctx context.Context, messageType websocket.MessageType, data []byte) error {
 	var payload any
 	switch messageType {
 	case websocket.TextMessage:

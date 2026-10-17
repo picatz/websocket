@@ -71,10 +71,10 @@ func ExampleRead() {
 			return
 		}
 		defer conn.Close()
-		_ = conn.WriteMessage(websocket.BinaryMessage, []byte{0xca, 0xfe})
-		_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"name":`))
-		_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"name":"gopher"}`))
-		_, _, _ = conn.ReadMessage()
+		_ = conn.WriteMessage(context.Background(), websocket.BinaryMessage, []byte{0xca, 0xfe})
+		_ = conn.WriteMessage(context.Background(), websocket.TextMessage, []byte(`{"name":`))
+		_ = conn.WriteMessage(context.Background(), websocket.TextMessage, []byte(`{"name":"gopher"}`))
+		_, _, _ = conn.ReadMessage(context.Background())
 	}))
 	defer srv.Close()
 

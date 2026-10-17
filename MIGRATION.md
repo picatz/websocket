@@ -510,6 +510,32 @@ connection without an error, with `ErrInvalidConfig` instead of
 context still matches `ErrBadHandshake`, and now also its
 `context.Cause`.
 
+## A context on every message method
+
+`ReadMessage`, `WriteMessage`, `NextReader` and `NextWriter` now take a
+`context.Context` as their first argument, and `ReadMessageContext` and
+`WriteMessageContext` are gone. A connection has one way to bound a call
+instead of two names for the same operation. `context.Background()` costs
+nothing: the method skips the cancellation machinery for a context that is
+never done, so a read loop allocates exactly what it did before.
+
+```go
+// Before
+typ, data, err := conn.ReadMessage()
+err = conn.WriteMessageContext(ctx, websocket.TextMessage, data)
+w, err := conn.NextWriter(websocket.BinaryMessage)
+// After
+typ, data, err := conn.ReadMessage(ctx)
+err = conn.WriteMessage(ctx, websocket.TextMessage, data)
+w, err := conn.NextWriter(ctx, websocket.BinaryMessage)
+```
+
+A context passed to `NextReader` or `NextWriter` bounds the whole message:
+if it ends before the reader returns `io.EOF` or the writer is closed, the
+connection is aborted and the reader or writer returns an error matching the
+context's cause. Deadlines are unchanged and still apply to the transport.
+`browser.Conn` follows the same signatures.
+
 ## Verification scope
 
 Default-policy tests exercise omitted options separately from configured protocol

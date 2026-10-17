@@ -24,11 +24,11 @@ func ExampleDial() {
 	}
 	defer conn.Close()
 
-	if err := conn.WriteMessage(websocket.TextMessage, []byte("hello")); err != nil {
+	if err := conn.WriteMessage(context.Background(), websocket.TextMessage, []byte("hello")); err != nil {
 		log.Fatal(err)
 	}
 	for {
-		_, data, err := conn.ReadMessage()
+		_, data, err := conn.ReadMessage(context.Background())
 		if err != nil {
 			fmt.Println("closed with", websocket.CloseStatus(err))
 			return

@@ -26,7 +26,7 @@ func TestNextReaderStreamsFragmentsAndControls(t *testing.T) {
 	)
 	raw := &memoryConn{Reader: bytes.NewReader(wire)}
 	c := newTestConn(raw, ConnConfig{})
-	typ, r, err := c.NextReader()
+	typ, r, err := c.NextReader(context.Background())
 	if err != nil || typ != BinaryMessage {
 		t.Fatalf("NextReader = %v, %v", typ, err)
 	}
@@ -40,7 +40,7 @@ func TestNextReaderStreamsFragmentsAndControls(t *testing.T) {
 	if pong, err := frameConn(raw.written.Bytes(), true, 0).readFrame(); err != nil || pong.Opcode != opPong || string(pong.Payload) != "ping" {
 		t.Fatalf("automatic pong = %+v, %v", pong, err)
 	}
-	if typ, data, err := c.ReadMessage(); err != nil || typ != TextMessage || string(data) != "next" {
+	if typ, data, err := c.ReadMessage(context.Background()); err != nil || typ != TextMessage || string(data) != "next" {
 		t.Fatalf("next message = %v %q %v", typ, data, err)
 	}
 }
@@ -60,7 +60,7 @@ func TestNextReaderTextValidation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			raw := &failureMemoryConn{memoryConn: memoryConn{Reader: bytes.NewReader(tt.wire)}}
 			c := newTestConn(raw, ConnConfig{})
-			_, r, err := c.NextReader()
+			_, r, err := c.NextReader(context.Background())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -87,7 +87,7 @@ func TestNextReaderMessageLimit(t *testing.T) {
 	wire := clientWire(failureWire(false, 0x02, bytes.Repeat([]byte{'a'}, 6)), failureWire(false, 0x80, bytes.Repeat([]byte{'b'}, 6)))
 	raw := &failureMemoryConn{memoryConn: memoryConn{Reader: bytes.NewReader(wire)}}
 	c := newTestConn(raw, ConnConfig{Server: false, MaxMessageSize: 10})
-	_, r, err := c.NextReader()
+	_, r, err := c.NextReader(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestNextReaderMessageLimit(t *testing.T) {
 	if got := failureClosePayload(t, raw.written.Bytes(), false); !bytes.Equal(got, []byte{0x03, 0xf1}) {
 		t.Fatalf("close payload = %x, want 1009", got)
 	}
-	if _, _, err := c.NextReader(); !errors.Is(err, net.ErrClosed) {
+	if _, _, err := c.NextReader(context.Background()); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("NextReader after failure = %v", err)
 	}
 }
@@ -111,7 +111,7 @@ func TestNextReaderPeerClose(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			c := newTestConn(&memoryConn{Reader: bytes.NewReader(wire)}, ConnConfig{})
-			_, r, err := c.NextReader()
+			_, r, err := c.NextReader(context.Background())
 			if err == nil {
 				_, err = io.ReadAll(r)
 			}
@@ -129,14 +129,14 @@ func TestNextReaderDiscardsUnreadRest(t *testing.T) {
 		failureWire(false, 0x81, []byte("second")),
 	)
 	c := newTestConn(&memoryConn{Reader: bytes.NewReader(wire)}, ConnConfig{})
-	_, first, err := c.NextReader()
+	_, first, err := c.NextReader(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := first.Read(make([]byte, 3)); err != nil {
 		t.Fatal(err)
 	}
-	if _, data, err := c.ReadMessage(); err != nil || string(data) != "second" {
+	if _, data, err := c.ReadMessage(context.Background()); err != nil || string(data) != "second" {
 		t.Fatalf("ReadMessage = %q, %v", data, err)
 	}
 	if _, err := first.Read(make([]byte, 3)); !errors.Is(err, errReaderSuperseded) {
@@ -154,11 +154,11 @@ func TestNextReaderCompressed(t *testing.T) {
 		}
 		defer conn.Close()
 		for _, msg := range [][]byte{payload, []byte("second"), []byte("third")} {
-			if err := conn.WriteMessage(TextMessage, msg); err != nil {
+			if err := conn.WriteMessage(context.Background(), TextMessage, msg); err != nil {
 				t.Error(err)
 			}
 		}
-		_, _, _ = conn.ReadMessage()
+		_, _, _ = conn.ReadMessage(context.Background())
 	}))
 	defer srv.Close()
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
@@ -168,7 +168,7 @@ func TestNextReaderCompressed(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	typ, r, err := conn.NextReader()
+	typ, r, err := conn.NextReader(context.Background())
 	if err != nil || typ != TextMessage {
 		t.Fatalf("NextReader = %v, %v", typ, err)
 	}
@@ -177,14 +177,14 @@ func TestNextReaderCompressed(t *testing.T) {
 	}
 
 	// A compressed message is superseded like an uncompressed one.
-	_, r, err = conn.NextReader()
+	_, r, err = conn.NextReader(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := r.Read(make([]byte, 1)); err != nil {
 		t.Fatal(err)
 	}
-	if _, data, err := conn.ReadMessage(); err != nil || string(data) != "third" {
+	if _, data, err := conn.ReadMessage(context.Background()); err != nil || string(data) != "third" {
 		t.Fatalf("ReadMessage = %q, %v", data, err)
 	}
 	if _, err := r.Read(make([]byte, 1)); !errors.Is(err, errReaderSuperseded) {
@@ -205,10 +205,10 @@ func FuzzNextReaderMatchesReadMessage(f *testing.F) {
 	f.Fuzz(func(t *testing.T, wire []byte, server bool) {
 		const limit = 6
 		wantRaw := &memoryConn{Reader: bytes.NewReader(wire)}
-		wantType, want, wantErr := newTestConn(wantRaw, ConnConfig{Server: server, MaxMessageSize: limit}).ReadMessage()
+		wantType, want, wantErr := newTestConn(wantRaw, ConnConfig{Server: server, MaxMessageSize: limit}).ReadMessage(context.Background())
 
 		gotRaw := &memoryConn{Reader: bytes.NewReader(wire)}
-		gotType, r, gotErr := newTestConn(gotRaw, ConnConfig{Server: server, MaxMessageSize: limit}).NextReader()
+		gotType, r, gotErr := newTestConn(gotRaw, ConnConfig{Server: server, MaxMessageSize: limit}).NextReader(context.Background())
 		var got []byte
 		if gotErr == nil {
 			got, gotErr = io.ReadAll(r)
@@ -283,7 +283,7 @@ func TestNextReaderDuringShutdown(t *testing.T) {
 		_, _ = io.Copy(io.Discard, b)
 	}()
 
-	_, r, err := c.NextReader()
+	_, r, err := c.NextReader(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -314,7 +314,7 @@ func TestNextReaderDiscardsDataWhileShuttingDown(t *testing.T) {
 			wire := clientWire(message, failureWire(false, 0x88, []byte{0x03, 0xe9}))
 			c := newTestConn(&memoryConn{Reader: bytes.NewReader(wire)}, ConnConfig{})
 			c.shuttingDown.Store(true)
-			if _, _, err := c.NextReader(); CloseStatus(err) != StatusGoingAway {
+			if _, _, err := c.NextReader(context.Background()); CloseStatus(err) != StatusGoingAway {
 				t.Fatalf("NextReader = %v, want the peer's CloseError", err)
 			}
 		})
@@ -332,7 +332,7 @@ func TestNextReaderLocalCloseAnswer(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			c := newTestConn(&memoryConn{Reader: bytes.NewReader(wire)}, ConnConfig{})
 			c.localClosed.Store(true)
-			_, r, err := c.NextReader()
+			_, r, err := c.NextReader(context.Background())
 			if err == nil {
 				_, err = io.ReadAll(r)
 			}
@@ -352,7 +352,7 @@ func TestNextReaderBlockedAcrossShutdown(t *testing.T) {
 	c := newTestConn(a, ConnConfig{})
 	read := make(chan error, 1)
 	go func() {
-		_, _, err := c.NextReader()
+		_, _, err := c.NextReader(context.Background())
 		read <- err
 	}()
 	peer := make(chan error, 1)

@@ -115,7 +115,7 @@ func TestDialRequiresSingleAccept(t *testing.T) {
 				if err != nil || conn == nil {
 					t.Fatalf("valid accept: connection = %v, error = %v", conn, err)
 				}
-				opcode, payload, err := conn.ReadMessage()
+				opcode, payload, err := conn.ReadMessage(context.Background())
 				if err != nil || opcode != BinaryMessage || string(payload) != "x" {
 					t.Fatalf("buffered message = (%v, %q, %v)", opcode, payload, err)
 				}

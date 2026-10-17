@@ -74,12 +74,12 @@ func (k keepalive) handler() http.HandlerFunc {
 		})
 
 		for {
-			messageType, message, err := conn.ReadMessage()
+			messageType, message, err := conn.ReadMessage(r.Context())
 			if err != nil {
 				return
 			}
 			writeCtx, cancelWrite := context.WithTimeout(ctx, k.writeWait)
-			err = conn.WriteMessageContext(writeCtx, messageType, message)
+			err = conn.WriteMessage(writeCtx, messageType, message)
 			cancelWrite()
 			if err != nil {
 				return

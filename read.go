@@ -1,6 +1,7 @@
 package websocket
 
 import (
+	"context"
 	"encoding/binary"
 	"io"
 	"time"
@@ -102,7 +103,30 @@ func (c *Conn) failureCloseSafe() bool {
 // discards data messages and returns only the peer's *CloseError or an error. A
 // read interrupted by Close or CloseWithStatus returns an error matching
 // net.ErrClosed, even if the peer's answer to the Close frame arrived first.
-func (c *Conn) ReadMessage() (messageType MessageType, data []byte, err error) {
+//
+// ctx bounds the call. If ctx is already done, ReadMessage returns the
+// context's cause without reading, and the connection is unaffected. If ctx
+// ends while the read is in progress, the connection is aborted: the transport
+// closes without a closing handshake, the read returns an error matching both
+// the context's cause and the underlying failure, and later operations fail as
+// after Close. This is the same terminal contract as a read timeout, and ctx
+// never changes the deadlines set with SetDeadline or SetReadDeadline. A
+// message that completed as ctx ended is still returned. A context that is
+// never done, such as context.Background, adds no cost.
+func (c *Conn) ReadMessage(ctx context.Context) (messageType MessageType, data []byte, err error) {
+	stop, err := c.watch(ctx)
+	if err != nil {
+		return 0, nil, err
+	}
+	messageType, data, err = c.readDataMessage()
+	if err = ctxError(ctx, stop, err); err != nil {
+		return 0, nil, err
+	}
+	return messageType, data, nil
+}
+
+// readDataMessage is ReadMessage without a context.
+func (c *Conn) readDataMessage() (messageType MessageType, data []byte, err error) {
 	for {
 		op, data, err := c.readMessage()
 		if err != nil || !c.shuttingDown.Load() {

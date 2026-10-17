@@ -1,6 +1,7 @@
 package websocket
 
 import (
+	"context"
 	"fmt"
 	"unicode/utf8"
 )
@@ -12,7 +13,23 @@ import (
 // writes fail with the original cause, unless argument validation or a closed
 // connection takes precedence. Argument validation before transport I/O does
 // not poison writes.
-func (c *Conn) WriteMessage(messageType MessageType, data []byte) error {
+//
+// ctx bounds the call, including any wait for a concurrent writer. If ctx is
+// already done, WriteMessage returns the context's cause without writing, and
+// the connection is unaffected. If ctx ends while the write is in progress,
+// the connection is aborted as described for ReadMessage, because a partially
+// written frame cannot be retried; the returned error matches both the
+// context's cause and the underlying failure.
+func (c *Conn) WriteMessage(ctx context.Context, messageType MessageType, data []byte) error {
+	stop, err := c.watch(ctx)
+	if err != nil {
+		return err
+	}
+	return ctxError(ctx, stop, c.writeMessage(messageType, data))
+}
+
+// writeMessage is WriteMessage without a context.
+func (c *Conn) writeMessage(messageType MessageType, data []byte) error {
 	if messageType != TextMessage && messageType != BinaryMessage {
 		return errInvalidMessageType
 	}

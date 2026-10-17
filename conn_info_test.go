@@ -30,7 +30,7 @@ func TestConnInfo(t *testing.T) {
 				if got := conn.RemoteAddr().String(); got != r.RemoteAddr {
 					t.Errorf("server RemoteAddr = %s, want %s", got, r.RemoteAddr)
 				}
-				_, _, _ = conn.ReadMessage()
+				_, _, _ = conn.ReadMessage(context.Background())
 			})
 			var srv *httptest.Server
 			var d Dialer

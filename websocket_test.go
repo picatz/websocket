@@ -25,7 +25,7 @@ func testEchoHandler(t *testing.T, u *websocket.Upgrader) func(w http.ResponseWr
 		defer conn.Close()
 
 		for {
-			messageType, message, err := conn.ReadMessage()
+			messageType, message, err := conn.ReadMessage(context.Background())
 			if err != nil {
 				// Check if the connection is closed
 				if errors.Is(err, io.EOF) {
@@ -35,7 +35,7 @@ func testEchoHandler(t *testing.T, u *websocket.Upgrader) func(w http.ResponseWr
 				break
 			}
 			// Echo the message back
-			err = conn.WriteMessage(messageType, message)
+			err = conn.WriteMessage(context.Background(), messageType, message)
 			if err != nil {
 				t.Logf("Error writing message: %v", err)
 				break
@@ -65,13 +65,13 @@ func TestWebSocketEcho(t *testing.T) {
 
 	// Send a message
 	testMessage := "Hello, WebSocket!"
-	err = conn.WriteMessage(websocket.TextMessage, []byte(testMessage))
+	err = conn.WriteMessage(context.Background(), websocket.TextMessage, []byte(testMessage))
 	if err != nil {
 		t.Fatalf("WriteMessage failed: %v", err)
 	}
 
 	// Read the echoed message
-	messageType, message, err := conn.ReadMessage()
+	messageType, message, err := conn.ReadMessage(context.Background())
 	if err != nil {
 		t.Fatalf("ReadMessage failed: %v", err)
 	}
@@ -104,13 +104,13 @@ func TestWebSocketBinaryMessage(t *testing.T) {
 
 	// Send a binary message
 	testData := []byte{0x00, 0xFF, 0x7F, 0x80}
-	err = conn.WriteMessage(websocket.BinaryMessage, testData)
+	err = conn.WriteMessage(context.Background(), websocket.BinaryMessage, testData)
 	if err != nil {
 		t.Fatalf("WriteMessage failed: %v", err)
 	}
 
 	// Read the echoed binary message
-	messageType, message, err := conn.ReadMessage()
+	messageType, message, err := conn.ReadMessage(context.Background())
 	if err != nil {
 		t.Fatalf("ReadMessage failed: %v", err)
 	}
@@ -147,7 +147,7 @@ func TestWebSocketClose(t *testing.T) {
 	}
 
 	// Attempt to send a message after closing
-	err = conn.WriteMessage(websocket.TextMessage, []byte("should fail"))
+	err = conn.WriteMessage(context.Background(), websocket.TextMessage, []byte("should fail"))
 	if err == nil {
 		t.Fatalf("Expected error when writing to closed connection, got nil")
 	}
@@ -174,13 +174,13 @@ func TestWebSocketCompression(t *testing.T) {
 
 	// Send a message
 	testMessage := "Hello, compressed WebSocket!"
-	err = conn.WriteMessage(websocket.TextMessage, []byte(testMessage))
+	err = conn.WriteMessage(context.Background(), websocket.TextMessage, []byte(testMessage))
 	if err != nil {
 		t.Fatalf("WriteMessage failed: %v", err)
 	}
 
 	// Read the echoed message
-	messageType, message, err := conn.ReadMessage()
+	messageType, message, err := conn.ReadMessage(context.Background())
 	if err != nil {
 		t.Fatalf("ReadMessage failed: %v", err)
 	}
@@ -225,12 +225,12 @@ func TestWebSocketPerMessageDeflateNoContextTakeover(t *testing.T) {
 	}
 
 	for _, testMessage := range messages {
-		err = conn.WriteMessage(websocket.TextMessage, []byte(testMessage))
+		err = conn.WriteMessage(context.Background(), websocket.TextMessage, []byte(testMessage))
 		if err != nil {
 			t.Fatalf("WriteMessage failed: %v", err)
 		}
 
-		messageType, message, err := conn.ReadMessage()
+		messageType, message, err := conn.ReadMessage(context.Background())
 		if err != nil {
 			t.Fatalf("ReadMessage failed: %v", err)
 		}

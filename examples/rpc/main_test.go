@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -23,14 +24,14 @@ func dial(t *testing.T) *websocket.Conn {
 
 func send(t *testing.T, conn *websocket.Conn, typ websocket.MessageType, msg string) {
 	t.Helper()
-	if err := conn.WriteMessage(typ, []byte(msg)); err != nil {
+	if err := conn.WriteMessage(context.Background(), typ, []byte(msg)); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func receive(t *testing.T, conn *websocket.Conn) string {
 	t.Helper()
-	_, data, err := conn.ReadMessage()
+	_, data, err := conn.ReadMessage(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}

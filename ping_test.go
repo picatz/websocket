@@ -21,7 +21,7 @@ func readLoop(c *websocket.Conn) (<-chan []byte, <-chan error) {
 	messages, done := make(chan []byte, 16), make(chan error, 1)
 	go func() {
 		for {
-			_, data, err := c.ReadMessage()
+			_, data, err := c.ReadMessage(context.Background())
 			if err != nil {
 				done <- err
 				return
@@ -78,7 +78,7 @@ func TestPingTimeoutLeavesConnectionOpen(t *testing.T) {
 	}
 	// Waiting for a Pong is not terminal: data still flows.
 	errc := make(chan error, 1)
-	go func() { errc <- client.WriteMessage(websocket.TextMessage, []byte("still open")) }()
+	go func() { errc <- client.WriteMessage(context.Background(), websocket.TextMessage, []byte("still open")) }()
 	if f := p.next(t); f.opcode != wireText || string(f.payload) != "still open" {
 		t.Fatalf("peer got %#x %q, want the text message", f.opcode, f.payload)
 	}
@@ -138,7 +138,7 @@ func TestPingContextAlreadyDone(t *testing.T) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}
 	// Nothing was written: the next frame the server sees is this message.
-	if err := client.WriteMessage(websocket.TextMessage, []byte("first")); err != nil {
+	if err := client.WriteMessage(context.Background(), websocket.TextMessage, []byte("first")); err != nil {
 		t.Fatal(err)
 	}
 	if got := contextAwait(t, serverMessages); string(got) != "first" {
@@ -170,11 +170,11 @@ func TestPingWithCompression(t *testing.T) {
 		}
 		defer c.Close()
 		for {
-			kind, data, err := c.ReadMessage()
+			kind, data, err := c.ReadMessage(context.Background())
 			if err != nil {
 				return
 			}
-			if err := c.WriteMessage(kind, data); err != nil {
+			if err := c.WriteMessage(context.Background(), kind, data); err != nil {
 				return
 			}
 		}
@@ -190,7 +190,7 @@ func TestPingWithCompression(t *testing.T) {
 	}
 	messages, _ := readLoop(client)
 	payload := []byte(strings.Repeat("compressible ", 64))
-	if err := client.WriteMessage(websocket.TextMessage, payload); err != nil {
+	if err := client.WriteMessage(context.Background(), websocket.TextMessage, payload); err != nil {
 		t.Fatal(err)
 	}
 	if err := client.Ping(t.Context()); err != nil {

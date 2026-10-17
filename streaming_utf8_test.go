@@ -3,6 +3,7 @@ package websocket
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -61,7 +62,7 @@ func TestReadMessageRejectsUnfinishedTextFrame(t *testing.T) {
 					payload := append(append([]byte("ok"), prefix...), []byte("withheld")...)
 					c := &streamChoppedConn{chunks: streamParts(server, payload, 2+split, 2+len(prefix)), tailErr: streamWithheld}
 					ws := newTestConn(c, ConnConfig{Server: server})
-					_, p, err := ws.ReadMessage()
+					_, p, err := ws.ReadMessage(context.Background())
 					if err != errInvalidFrame || p != nil || c.tailReads != 0 || c.closes != 1 {
 						t.Fatalf("err=%v p=%x tailReads=%d closes=%d", err, p, c.tailReads, c.closes)
 					}
@@ -69,10 +70,10 @@ func TestReadMessageRejectsUnfinishedTextFrame(t *testing.T) {
 						t.Fatalf("close code %d", code)
 					}
 					before := bytes.Clone(c.written.Bytes())
-					if _, _, err := ws.ReadMessage(); !errors.Is(err, net.ErrClosed) {
+					if _, _, err := ws.ReadMessage(context.Background()); !errors.Is(err, net.ErrClosed) {
 						t.Fatal(err)
 					}
-					if err := ws.WriteMessage(TextMessage, []byte("later")); !errors.Is(err, net.ErrClosed) {
+					if err := ws.WriteMessage(context.Background(), TextMessage, []byte("later")); !errors.Is(err, net.ErrClosed) {
 						t.Fatal(err)
 					}
 					if c.closes != 1 || !bytes.Equal(before, c.written.Bytes()) {
@@ -89,7 +90,7 @@ func TestReadMessageIncompleteRuneEOFAndResume(t *testing.T) {
 		for _, prefix := range [][]byte{{0xc2}, {0xe0, 0xa0}, {0xf0, 0x90, 0x80}} {
 			payload := append(append([]byte{}, prefix...), 0x80)
 			raw := &streamChoppedConn{chunks: streamParts(server, payload, len(prefix)), tailErr: io.EOF}
-			_, _, err := newTestConn(raw, ConnConfig{Server: server}).ReadMessage()
+			_, _, err := newTestConn(raw, ConnConfig{Server: server}).ReadMessage(context.Background())
 			if !errors.Is(err, io.ErrUnexpectedEOF) || raw.written.Len() != 0 {
 				t.Fatalf("prefix=%x err=%v written=%x", prefix, err, raw.written.Bytes())
 			}
@@ -98,7 +99,7 @@ func TestReadMessageIncompleteRuneEOFAndResume(t *testing.T) {
 		c := newTestConn(raw, ConnConfig{Server: server})
 		done := make(chan error, 1)
 		go func() {
-			op, p, err := c.ReadMessage()
+			op, p, err := c.ReadMessage(context.Background())
 			if err == nil && (op != TextMessage || !bytes.Equal(p, []byte("a𐀀z"))) {
 				err = fmt.Errorf("bad result %v %x", op, p)
 			}
@@ -137,7 +138,7 @@ func TestReadMessagePartialTextDeadlineTerminal(t *testing.T) {
 			t.Fatal(err)
 		}
 		done := make(chan error, 1)
-		go func() { _, _, err := c.ReadMessage(); done <- err }()
+		go func() { _, _, err := c.ReadMessage(context.Background()); done <- err }()
 		wire := failureWire(server, 0x81, []byte("𐀀"))
 		h := 2
 		if server {
@@ -154,10 +155,10 @@ func TestReadMessagePartialTextDeadlineTerminal(t *testing.T) {
 		if !errors.As(err, &ne) || !ne.Timeout() {
 			t.Fatalf("timeout type lost: %v", err)
 		}
-		if _, _, err := c.ReadMessage(); !errors.Is(err, net.ErrClosed) {
+		if _, _, err := c.ReadMessage(context.Background()); !errors.Is(err, net.ErrClosed) {
 			t.Fatalf("retry not terminal: %v", err)
 		}
-		if err := c.WriteMessage(TextMessage, []byte("later")); !errors.Is(err, net.ErrClosed) {
+		if err := c.WriteMessage(context.Background(), TextMessage, []byte("later")); !errors.Is(err, net.ErrClosed) {
 			t.Fatalf("write not terminal: %v", err)
 		}
 		raw.Close()
@@ -292,7 +293,7 @@ func TestReadMessagePreservesExtensionOwnership(t *testing.T) {
 	ext := &headerTransformExtension{enabled: true, process: func(f *wireFrame) error { f.Payload = shared; return nil }}
 	raw := &memoryConn{Reader: bytes.NewReader([]byte{0x81, 1, 'x', 0x81, 1, 'y'})}
 	c := newTestConn(raw, ConnConfig{}, []frameExtension{ext}...)
-	_, got, err := c.ReadMessage()
+	_, got, err := c.ReadMessage(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -305,7 +306,7 @@ func TestReadMessagePreservesExtensionOwnership(t *testing.T) {
 		t.Fatal("caller data aliases extension")
 	}
 	first := bytes.Clone(got)
-	if _, _, err := c.ReadMessage(); err != nil {
+	if _, _, err := c.ReadMessage(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(first, got) {
@@ -377,11 +378,11 @@ func TestReadMessageTextNetworkChunks(t *testing.T) {
 				source := &streamChunkReader{data: wire, sizes: []int{chunk}, tail: io.EOF}
 				c := newTestConn(&benchmarkConn{reader: source, writer: io.Discard}, ConnConfig{Server: server})
 				c.br = bufio.NewReaderSize(source, 16)
-				op, got, err := c.ReadMessage()
+				op, got, err := c.ReadMessage(context.Background())
 				if err != nil || op != TextMessage || !bytes.Equal(got, p) {
 					t.Fatalf("server=%v size=%d chunk=%d: op=%v err=%v", server, size, chunk, op, err)
 				}
-				if _, next, err := c.ReadMessage(); err != nil || string(next) != "next" {
+				if _, next, err := c.ReadMessage(context.Background()); err != nil || string(next) != "next" {
 					t.Fatalf("next %q %v", next, err)
 				}
 			}
@@ -407,7 +408,7 @@ func TestReadMessageInvalidRuneBridgeWithinUnfinishedContinuation(t *testing.T) 
 				}
 				return true
 			}
-			if _, _, err := c.ReadMessage(); err != errInvalidFrame || raw.tailReads != 0 || pings != 1 {
+			if _, _, err := c.ReadMessage(context.Background()); err != errInvalidFrame || raw.tailReads != 0 || pings != 1 {
 				t.Fatalf("server=%v prefix=%x err=%v tail=%d pings=%d", server, prefix, err, raw.tailReads, pings)
 			}
 			if code := binary.BigEndian.Uint16(failureClosePayload(t, raw.written.Bytes(), server)); code != 1007 {
@@ -424,7 +425,7 @@ func TestReadMessageRegisteredExtensionsKeepCompleteFramePath(t *testing.T) {
 			ext := &headerTransformExtension{enabled: enabled, process: func(f *wireFrame) error { calls++; f.Payload = []byte("valid"); return nil }}
 			payload := []byte{0xff, 'a', 'b', 'c'}
 			raw := &streamChoppedConn{chunks: streamParts(server, payload, 1), tailErr: streamWithheld}
-			_, _, err := newTestConn(raw, ConnConfig{Server: server}, []frameExtension{ext}...).ReadMessage()
+			_, _, err := newTestConn(raw, ConnConfig{Server: server}, []frameExtension{ext}...).ReadMessage(context.Background())
 			if !errors.Is(err, streamWithheld) || raw.tailReads != 1 || calls != 0 || raw.written.Len() != 0 {
 				t.Fatalf("server=%v enabled=%v err=%v tail=%d calls=%d", server, enabled, err, raw.tailReads, calls)
 			}
@@ -447,7 +448,7 @@ func TestReadMessageTextHugeDeclarationIsIncremental(t *testing.T) {
 				}
 			}
 			raw := &streamChoppedConn{chunks: [][]byte{h, p}, tailErr: io.EOF}
-			_, _, err := newTestConn(raw, ConnConfig{Server: server, MaxMessageSize: -1}).ReadMessage()
+			_, _, err := newTestConn(raw, ConnConfig{Server: server, MaxMessageSize: -1}).ReadMessage(context.Background())
 			if len(prefix) > 0 && prefix[0] == 0xff {
 				if err != errInvalidFrame || raw.tailReads != 0 {
 					t.Fatal(err, raw.tailReads)
@@ -475,7 +476,7 @@ func FuzzUTF8NetworkChunks(f *testing.F) {
 		src := &streamChunkReader{data: wire, sizes: []int{1 + int(chunk)}, tail: io.EOF}
 		c := newTestConn(&benchmarkConn{reader: src, writer: io.Discard}, ConnConfig{Server: server})
 		c.br = bufio.NewReaderSize(src, 16)
-		op, got, err := c.ReadMessage()
+		op, got, err := c.ReadMessage(context.Background())
 		if utf8.Valid(p) {
 			if err != nil || op != TextMessage || !bytes.Equal(got, p) {
 				t.Fatalf("valid %x got=%x op=%v err=%v", p, got, op, err)

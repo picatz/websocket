@@ -72,15 +72,13 @@ func (c *Conn) ConnectionState() (tls.ConnectionState, bool)
 
 func (c *Conn) LocalAddr() net.Addr
 
-func (c *Conn) NextReader() (messageType MessageType, r io.Reader, err error)
+func (c *Conn) NextReader(ctx context.Context) (messageType MessageType, r io.Reader, err error)
 
-func (c *Conn) NextWriter(messageType MessageType) (io.WriteCloser, error)
+func (c *Conn) NextWriter(ctx context.Context, messageType MessageType) (io.WriteCloser, error)
 
 func (c *Conn) Ping(ctx context.Context) error
 
-func (c *Conn) ReadMessage() (messageType MessageType, data []byte, err error)
-
-func (c *Conn) ReadMessageContext(ctx context.Context) (messageType MessageType, data []byte, err error)
+func (c *Conn) ReadMessage(ctx context.Context) (messageType MessageType, data []byte, err error)
 
 func (c *Conn) RemoteAddr() net.Addr
 
@@ -94,9 +92,7 @@ func (c *Conn) Shutdown(ctx context.Context, code StatusCode, reason string) err
 
 func (c *Conn) Subprotocol() string
 
-func (c *Conn) WriteMessage(messageType MessageType, data []byte) error
-
-func (c *Conn) WriteMessageContext(ctx context.Context, messageType MessageType, data []byte) error
+func (c *Conn) WriteMessage(ctx context.Context, messageType MessageType, data []byte) error
 
 type ConnConfig struct {
 	Server bool
@@ -203,15 +199,11 @@ func (c *Conn) Close() error
 
 func (c *Conn) CloseWithStatus(code websocket.StatusCode, reason string) error
 
-func (c *Conn) ReadMessage() (messageType websocket.MessageType, data []byte, err error)
-
-func (c *Conn) ReadMessageContext(ctx context.Context) (messageType websocket.MessageType, data []byte, err error)
+func (c *Conn) ReadMessage(ctx context.Context) (messageType websocket.MessageType, data []byte, err error)
 
 func (c *Conn) Subprotocol() string
 
-func (c *Conn) WriteMessage(messageType websocket.MessageType, data []byte) error
-
-func (c *Conn) WriteMessageContext(ctx context.Context, messageType websocket.MessageType, data []byte) error
+func (c *Conn) WriteMessage(ctx context.Context, messageType websocket.MessageType, data []byte) error
 
 type Dialer struct {
 	Subprotocols []string
