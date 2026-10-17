@@ -24,11 +24,33 @@ var errReaderSuperseded = errors.New("websocket: message reader superseded by a 
 //
 // Calling NextReader or ReadMessage again discards whatever is left of the
 // previous message; the old reader then returns an error. Reads follow
-// ReadMessage's error contract: a peer close returns a *CloseError, and any
-// other error, including one returned partway through a message, makes the
-// connection terminal. The reader must not be used concurrently, and must not
-// be read from a ping or pong handler.
+// ReadMessage's error contract: a peer close returns a *CloseError, a read
+// interrupted by Close or CloseWithStatus returns an error matching
+// net.ErrClosed, and any other error, including one returned partway through
+// a message, makes the connection terminal. Once Shutdown has started,
+// NextReader discards data messages like ReadMessage, and a reader whose
+// message Shutdown discarded returns Shutdown's outcome: the peer's
+// *CloseError, or an error. The reader must not be used concurrently, and must
+// not be read from a ping or pong handler.
 func (c *Conn) NextReader() (messageType Opcode, r io.Reader, err error) {
+	for {
+		messageType, mr, err := c.nextReader()
+		if err != nil {
+			return 0, nil, c.readError(err)
+		}
+		if !c.shuttingDown.Load() {
+			return messageType, mr, nil
+		}
+		// Shutdown has started: drop the message and keep reading until the
+		// peer's Close frame or an error, as ReadMessage does.
+		if _, err := io.Copy(io.Discard, mr); err != nil {
+			return 0, nil, err
+		}
+	}
+}
+
+// nextReader starts reading one data message for NextReader.
+func (c *Conn) nextReader() (Opcode, *messageReader, error) {
 	if c.closed.Load() {
 		return 0, nil, errClosed
 	}
@@ -39,17 +61,6 @@ func (c *Conn) NextReader() (messageType Opcode, r io.Reader, err error) {
 	}
 	if err := c.discardReader(); err != nil {
 		return 0, nil, err
-	}
-	for _, ext := range c.extensions {
-		if _, builtin := ext.(*perMessageDeflate); !builtin && ext.IsEnabled() {
-			// Custom extensions may transform whole frames; keep their
-			// established complete-message path.
-			typ, data, err := c.readMessageLocked()
-			if err != nil {
-				return 0, nil, err
-			}
-			return typ, bytes.NewReader(data), nil
-		}
 	}
 	pmd, err := messageCompression(c.extensions)
 	if err != nil {
@@ -77,6 +88,7 @@ func (c *Conn) NextReader() (messageType Opcode, r io.Reader, err error) {
 				return 0, nil, c.failRead(err)
 			}
 		case TextMessage, BinaryMessage:
+			mr := &messageReader{c: c, text: frame.Opcode == TextMessage}
 			if pmd != nil && frame.Rsv1 {
 				data, peerClosed, err := c.readCompressedMessage(pmd, &frame, n)
 				if peerClosed {
@@ -85,12 +97,12 @@ func (c *Conn) NextReader() (messageType Opcode, r io.Reader, err error) {
 				if err != nil {
 					return 0, nil, c.failRead(err)
 				}
-				return frame.Opcode, bytes.NewReader(data), nil
-			}
-			mr := &messageReader{c: c, text: frame.Opcode == TextMessage}
-			mr.src = deflateFrameReader{c: c, peerClosed: &mr.peerClosed}
-			if err := mr.src.start(&frame, n); err != nil {
-				return 0, nil, c.failRead(err)
+				mr.decoded = bytes.NewReader(data)
+			} else {
+				mr.src = deflateFrameReader{c: c, peerClosed: &mr.peerClosed}
+				if err := mr.src.start(&frame, n); err != nil {
+					return 0, nil, c.failRead(err)
+				}
 			}
 			c.reader = mr
 			return frame.Opcode, mr, nil
@@ -100,13 +112,25 @@ func (c *Conn) NextReader() (messageType Opcode, r io.Reader, err error) {
 	}
 }
 
-// messageReader streams one uncompressed message. deflateFrameReader already
-// unmasks payloads, handles interleaved controls and rejects anything but a
-// continuation inside the message; messageReader adds the message size limit
-// and UTF-8 validation. All methods run with readMu held.
+// readError maps a read's error to ReadMessage's contract: the peer's answer
+// to a local Close or CloseWithStatus is reported as net.ErrClosed.
+func (c *Conn) readError(err error) error {
+	if _, ok := err.(*CloseError); ok && c.localClosed.Load() {
+		return errClosed
+	}
+	return err
+}
+
+// messageReader is one NextReader message. An uncompressed message streams
+// from src: deflateFrameReader already unmasks payloads, handles interleaved
+// controls and rejects anything but a continuation inside the message, and
+// messageReader adds the message size limit and UTF-8 validation. A
+// compressed message was decoded and validated whole, and replays from
+// decoded. Methods other than Read run with readMu held.
 type messageReader struct {
 	c          *Conn
 	src        deflateFrameReader
+	decoded    *bytes.Reader // Non-nil for a compressed message.
 	text       bool
 	utf8       utf8Stream
 	read       uint64 // Payload bytes returned so far.
@@ -116,8 +140,26 @@ type messageReader struct {
 
 func (r *messageReader) Read(p []byte) (int, error) {
 	r.c.readMu.Lock()
-	defer r.c.readMu.Unlock()
-	return r.readLocked(p)
+	n, err := r.readLocked(p)
+	r.c.readMu.Unlock()
+	if err == errReaderSuperseded && r.c.shuttingDown.Load() {
+		// Shutdown discarded this message; report how it ended.
+		return 0, r.c.shutdownReadError()
+	}
+	return n, err
+}
+
+// shutdownReadError waits for the connection to close and returns what
+// ReadMessage would have: the peer's Close, or net.ErrClosed. readMu must not
+// be held, since Shutdown reads until the peer's Close frame arrives.
+func (c *Conn) shutdownReadError() error {
+	<-c.doneChan()
+	c.readMu.Lock()
+	defer c.readMu.Unlock()
+	if c.peerClose != nil {
+		return c.peerClose
+	}
+	return errClosed
 }
 
 func (r *messageReader) readLocked(p []byte) (int, error) {
@@ -129,6 +171,13 @@ func (r *messageReader) readLocked(p []byte) (int, error) {
 	}
 	if r.c.closed.Load() {
 		return 0, r.end(errClosed)
+	}
+	if r.decoded != nil {
+		n, err := r.decoded.Read(p)
+		if err != nil {
+			return n, r.end(err)
+		}
+		return n, nil
 	}
 	if err := r.src.advance(); err != nil {
 		return 0, r.stop(err)
@@ -157,7 +206,7 @@ func (r *messageReader) readLocked(p []byte) (int, error) {
 func (r *messageReader) stop(err error) error {
 	switch {
 	case r.peerClosed:
-		return r.end(r.c.peerClose)
+		return r.end(r.c.readError(r.c.peerClose))
 	case err != io.EOF:
 		return r.fail(err)
 	case r.text && r.utf8.pending != 0:

@@ -640,12 +640,10 @@ func (c *Conn) SetPongHandler(handler func(appData string) error) {
 func (c *Conn) ReadMessage() (messageType Opcode, data []byte, err error) {
 	for {
 		messageType, data, err = c.readMessage()
-		if _, ok := err.(*CloseError); ok && c.localClosed.Load() {
-			// The peer answered our Close frame before the transport closed.
-			return 0, nil, errClosed
-		}
 		if err != nil || !c.shuttingDown.Load() {
-			return messageType, data, err
+			// The peer may have answered our Close frame before the
+			// transport closed; readError reports that as net.ErrClosed.
+			return messageType, data, c.readError(err)
 		}
 		// Shutdown has started: drop the message and keep reading until the
 		// peer's Close frame or an error.

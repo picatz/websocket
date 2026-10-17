@@ -153,8 +153,10 @@ func TestNextReaderCompressed(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-		if err := conn.WriteMessage(TextMessage, payload); err != nil {
-			t.Error(err)
+		for _, msg := range [][]byte{payload, []byte("second"), []byte("third")} {
+			if err := conn.WriteMessage(TextMessage, msg); err != nil {
+				t.Error(err)
+			}
 		}
 		_, _, _ = conn.ReadMessage()
 	}))
@@ -172,6 +174,21 @@ func TestNextReaderCompressed(t *testing.T) {
 	}
 	if got, err := io.ReadAll(r); err != nil || !bytes.Equal(got, payload) {
 		t.Fatalf("ReadAll = %d bytes, %v", len(got), err)
+	}
+
+	// A compressed message is superseded like an uncompressed one.
+	_, r, err = conn.NextReader()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Read(make([]byte, 1)); err != nil {
+		t.Fatal(err)
+	}
+	if _, data, err := conn.ReadMessage(); err != nil || string(data) != "third" {
+		t.Fatalf("ReadMessage = %q, %v", data, err)
+	}
+	if _, err := r.Read(make([]byte, 1)); !errors.Is(err, errReaderSuperseded) {
+		t.Fatalf("superseded Read = %v", err)
 	}
 }
 
@@ -237,4 +254,131 @@ func sameFrames(t *testing.T, a, b []byte, server bool) bool {
 		}
 	}
 	return true
+}
+
+// Shutdown discards a message the application is still reading, like any
+// other data message, and the application's reader then reports Shutdown's
+// outcome rather than an internal error.
+func TestNextReaderDuringShutdown(t *testing.T) {
+	a, b := net.Pipe()
+	defer b.Close()
+	c := newTestConn(a, ConnConfig{})
+	peer := make(chan error, 1)
+	go func() {
+		if _, err := b.Write(failureWire(false, 0x02, []byte("first "))); err != nil {
+			peer <- err
+			return
+		}
+		// Wait for Shutdown's Close frame (2-byte header, mask, 1000) before
+		// finishing the message and answering it.
+		if _, err := io.ReadFull(b, make([]byte, 8)); err != nil {
+			peer <- err
+			return
+		}
+		_, err := b.Write(clientWire(
+			failureWire(false, 0x80, []byte("rest")),
+			failureWire(false, 0x88, []byte{0x03, 0xe8}),
+		))
+		peer <- err
+		_, _ = io.Copy(io.Discard, b)
+	}()
+
+	_, r, err := c.NextReader()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Read(make([]byte, 2)); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	if err := c.Shutdown(ctx, StatusNormalClosure, ""); err != nil {
+		t.Fatalf("Shutdown = %v", err)
+	}
+	if err := <-peer; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.ReadAll(r); CloseStatus(err) != StatusNormalClosure {
+		t.Fatalf("Read after Shutdown = %v, want the peer's CloseError", err)
+	}
+}
+
+// Once Shutdown has started, NextReader drops data messages until the peer's
+// Close frame, as ReadMessage does.
+func TestNextReaderDiscardsDataWhileShuttingDown(t *testing.T) {
+	for name, message := range map[string][]byte{
+		"single frame": failureWire(false, 0x82, []byte("dropped")),
+		"fragmented":   clientWire(failureWire(false, 0x02, []byte("drop")), failureWire(false, 0x80, []byte("ped"))),
+	} {
+		t.Run(name, func(t *testing.T) {
+			wire := clientWire(message, failureWire(false, 0x88, []byte{0x03, 0xe9}))
+			c := newTestConn(&memoryConn{Reader: bytes.NewReader(wire)}, ConnConfig{})
+			c.shuttingDown.Store(true)
+			if _, _, err := c.NextReader(); CloseStatus(err) != StatusGoingAway {
+				t.Fatalf("NextReader = %v, want the peer's CloseError", err)
+			}
+		})
+	}
+}
+
+// The peer's answer to a local Close is reported as net.ErrClosed, before and
+// inside a message, as ReadMessage reports it.
+func TestNextReaderLocalCloseAnswer(t *testing.T) {
+	closeFrame := failureWire(false, 0x88, []byte{0x03, 0xe8})
+	for name, wire := range map[string][]byte{
+		"before message": closeFrame,
+		"inside message": clientWire(failureWire(false, 0x02, []byte("part")), closeFrame),
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := newTestConn(&memoryConn{Reader: bytes.NewReader(wire)}, ConnConfig{})
+			c.localClosed.Store(true)
+			_, r, err := c.NextReader()
+			if err == nil {
+				_, err = io.ReadAll(r)
+			}
+			if !errors.Is(err, net.ErrClosed) {
+				t.Fatalf("error = %v, want net.ErrClosed", err)
+			}
+		})
+	}
+}
+
+// A NextReader blocked when Shutdown starts drops the data message the peer
+// sends before its Close frame, and Shutdown's own read never sees a live
+// reader.
+func TestNextReaderBlockedAcrossShutdown(t *testing.T) {
+	a, b := net.Pipe()
+	defer b.Close()
+	c := newTestConn(a, ConnConfig{})
+	read := make(chan error, 1)
+	go func() {
+		_, _, err := c.NextReader()
+		read <- err
+	}()
+	peer := make(chan error, 1)
+	go func() {
+		// Wait for Shutdown's Close frame, then send a message and answer.
+		if _, err := io.ReadFull(b, make([]byte, 8)); err != nil {
+			peer <- err
+			return
+		}
+		_, err := b.Write(clientWire(
+			failureWire(false, 0x81, []byte("late")),
+			failureWire(false, 0x88, []byte{0x03, 0xe8}),
+		))
+		peer <- err
+		_, _ = io.Copy(io.Discard, b)
+	}()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	if err := c.Shutdown(ctx, StatusNormalClosure, ""); err != nil {
+		t.Fatalf("Shutdown = %v", err)
+	}
+	if err := <-peer; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-read; CloseStatus(err) != StatusNormalClosure && !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("NextReader = %v, want the peer's CloseError or net.ErrClosed", err)
+	}
 }

@@ -19,7 +19,9 @@ var errWriterClosed = errors.New("websocket: message writer closed")
 // NextWriter wait until the writer is closed or fails, or the connection
 // becomes terminal. Control frames, including Ping and the automatic Pong from
 // ReadMessage, may be sent between the message's frames, as RFC 6455 section
-// 5.4 allows. The returned writer must not be used concurrently.
+// 5.4 allows. A WriteMessageContext waiting behind an open writer counts as
+// in progress: if its ctx ends, the connection is aborted. The returned writer
+// must not be used concurrently.
 //
 // For TextMessage, the payload is checked as UTF-8 across Write calls. An
 // invalid sequence, or a rune left incomplete at Close, fails the writer with
