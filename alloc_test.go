@@ -261,39 +261,6 @@ func TestFragmentedReadStaysWithinLimit(t *testing.T) {
 	}
 }
 
-// writeCounter counts the writes that reach it.
-type writeCounter struct {
-	bytes.Buffer
-	writes int
-}
-
-func (w *writeCounter) Write(p []byte) (int, error) {
-	w.writes++
-	return w.Buffer.Write(p)
-}
-
-func TestLargeMaskedWrites(t *testing.T) {
-	// A client message too large for the default write buffer is masked
-	// through a larger pooled one: few transport writes, the caller's payload
-	// untouched, and a server reads back exactly what was sent.
-	for _, size := range []int{writeBufferSize - 14, writeBufferSize, writeBufferSize + 1, maskedWriteBufferSize - 1, maskedWriteBufferSize + 1, 100_003} {
-		payload := benchmarkPayload(size)
-		orig := bytes.Clone(payload)
-		var wire writeCounter
-		client := newTestConn(&benchmarkConn{writer: &wire}, ConnConfig{})
-		if err := client.WriteMessage(BinaryMessage, payload); err != nil {
-			t.Fatal(err)
-		}
-		if !bytes.Equal(payload, orig) {
-			t.Fatalf("size=%d: caller payload modified", size)
-		}
-		if limit := size/maskedWriteBufferSize + 2; wire.writes > limit {
-			t.Errorf("size=%d: %d transport writes, want at most %d", size, wire.writes, limit)
-		}
-		server := newTestConn(&benchmarkConn{reader: &wire.Buffer, writer: io.Discard}, ConnConfig{Server: true})
-		if _, got, err := server.ReadMessage(); err != nil || !bytes.Equal(got, orig) {
-			t.Fatalf("size=%d: err=%v equal=%t", size, err, bytes.Equal(got, orig))
-
 // TestHandshakeAllocations pins the server's request checks to the one
 // allocation it keeps, the Sec-WebSocket-Accept value, and the key helpers
 // to none.
@@ -333,6 +300,42 @@ func TestHandshakeAllocations(t *testing.T) {
 	} {
 		if got := testing.AllocsPerRun(100, tc.f); got != tc.want {
 			t.Errorf("%s: %v allocations, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// writeCounter counts the writes that reach it.
+type writeCounter struct {
+	bytes.Buffer
+	writes int
+}
+
+func (w *writeCounter) Write(p []byte) (int, error) {
+	w.writes++
+	return w.Buffer.Write(p)
+}
+
+func TestLargeMaskedWrites(t *testing.T) {
+	// A client message too large for the default write buffer is masked
+	// through a larger pooled one: few transport writes, the caller's payload
+	// untouched, and a server reads back exactly what was sent.
+	for _, size := range []int{writeBufferSize - 14, writeBufferSize, writeBufferSize + 1, maskedWriteBufferSize - 1, maskedWriteBufferSize + 1, 100_003} {
+		payload := benchmarkPayload(size)
+		orig := bytes.Clone(payload)
+		var wire writeCounter
+		client := newTestConn(&benchmarkConn{writer: &wire}, ConnConfig{})
+		if err := client.WriteMessage(BinaryMessage, payload); err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(payload, orig) {
+			t.Fatalf("size=%d: caller payload modified", size)
+		}
+		if limit := size/maskedWriteBufferSize + 2; wire.writes > limit {
+			t.Errorf("size=%d: %d transport writes, want at most %d", size, wire.writes, limit)
+		}
+		server := newTestConn(&benchmarkConn{reader: &wire.Buffer, writer: io.Discard}, ConnConfig{Server: true})
+		if _, got, err := server.ReadMessage(); err != nil || !bytes.Equal(got, orig) {
+			t.Fatalf("size=%d: err=%v equal=%t", size, err, bytes.Equal(got, orig))
 		}
 	}
 }
