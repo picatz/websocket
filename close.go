@@ -169,6 +169,7 @@ func (c *Conn) CloseWithStatus(code StatusCode, reason string) error {
 	if err != nil {
 		return err
 	}
+	c.localClosed.Store(true)
 	return c.closeWithPayload(payload)
 }
 
