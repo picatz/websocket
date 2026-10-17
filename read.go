@@ -63,13 +63,42 @@ func (c *Conn) failRead(err error) error {
 	})
 	var payload [2]byte
 	binary.BigEndian.PutUint16(payload[:], uint16(code))
-	_ = c.writeFrameRaw(&wireFrame{Final: true, Opcode: opClose, Payload: payload[:], Masked: !c.isServer})
+	werr := c.writeFrameRaw(&wireFrame{Final: true, Opcode: opClose, Payload: payload[:], Masked: !c.isServer})
 	c.releaseSendCompression()
-	c.abort()
 	if !timer.Stop() {
-		<-done
+		<-done // The watchdog aborted the transport.
+		return err
+	}
+	if werr == nil {
+		c.lingerAbort()
+	} else {
+		c.abort()
 	}
 	return err
+}
+
+// rstAvoidanceDelay bounds how long lingerAbort keeps reading after the
+// failure Close frame, the delay net/http uses in closeWriteAndWait.
+const rstAvoidanceDelay = 500 * time.Millisecond
+
+// lingerAbort closes the transport after a failure Close frame was written
+// without resetting it. Closing a TCP connection that still holds unread data
+// sends a reset, and a peer that receives it may discard the Close frame
+// before reading it (Windows does), so the peer would see a reset instead of
+// the status code. Failures usually leave data unread: the rest of an
+// oversized or invalid message. lingerAbort half-closes the write side, so
+// the peer reads the Close frame and then EOF, and discards what the peer
+// sends until it closes too or rstAvoidanceDelay passes. Transports that
+// cannot half-close are closed at once.
+//
+// https://www.rfc-editor.org/rfc/rfc6455#section-7.1.1
+func (c *Conn) lingerAbort() {
+	cw, ok := c.abortConn.(interface{ CloseWrite() error })
+	if ok && cw.CloseWrite() == nil &&
+		c.abortConn.SetReadDeadline(time.Now().Add(rstAvoidanceDelay)) == nil {
+		_, _ = io.Copy(io.Discard, c.abortConn)
+	}
+	c.abort()
 }
 
 // The built-in extension leaves control frames unchanged. Custom extensions
@@ -98,8 +127,11 @@ func (c *Conn) failureCloseSafe() bool {
 // limits do not bound CPU time. Any error makes the connection terminal: later
 // reads and writes fail. Known protocol and size violations send an appropriate
 // best-effort Close when safe, then abort the transport. Notification uses at
-// most one second without changing caller deadlines. A custom transport's Close
-// implementation can still block. Once Shutdown has started, ReadMessage
+// most one second without changing caller deadlines. Over TCP, the transport
+// then half-closes and discards incoming data for up to 500ms or until the peer
+// closes, so the peer reads the Close frame instead of a connection reset; the
+// error is returned after that. A custom transport's Close implementation can
+// still block. Once Shutdown has started, ReadMessage
 // discards data messages and returns only the peer's *CloseError or an error. A
 // read interrupted by Close or CloseWithStatus returns an error matching
 // net.ErrClosed, even if the peer's answer to the Close frame arrived first.
