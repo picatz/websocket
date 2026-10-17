@@ -62,20 +62,35 @@ func TestReadMessageFragmentedAllocations(t *testing.T) {
 	if raceEnabled {
 		t.Skip("allocation counts are not meaningful with the race detector")
 	}
-	payload := bytes.Repeat([]byte{'a'}, 64)
-	wire := benchmarkWire(payload, true, 4)
-	r := bytes.NewReader(wire)
-	c := NewConn(&benchmarkConn{reader: r, writer: io.Discard}, true, nil)
-	// One payload per frame plus the growing message.
-	got := testing.AllocsPerRun(100, func() {
-		r.Reset(wire)
-		c.rw.Reader.Reset(r)
-		if _, p, err := c.ReadMessage(); err != nil || len(p) != len(payload) {
-			t.Fatal(len(p), err)
+	// Without extensions, fragments are read straight onto the end of the
+	// message. Storage doubles with what has arrived, so many small
+	// fragments are not copied once per frame.
+	for _, tc := range []struct{ size, fragments, max int }{
+		{64, 4, 1},       // Everything is buffered: one allocation.
+		{65536, 4, 5},    // As many as one 64 KiB frame.
+		{1000, 1000, 1},  // One byte per frame, all buffered.
+		{8192, 8192, 4},  // More than the read buffer holds: doubling.
+		{1 << 20, 64, 9}, // As many as one 1 MiB frame.
+	} {
+		for _, op := range []Opcode{BinaryMessage, TextMessage} {
+			t.Run(fmt.Sprintf("bytes=%d/fragments=%d/type=%s", tc.size, tc.fragments, op), func(t *testing.T) {
+				payload := bytes.Repeat([]byte{'a'}, tc.size)
+				wire := benchmarkWire(payload, true, tc.fragments)
+				wire[0] = wire[0]&0xf0 | byte(op)
+				r := bytes.NewReader(wire)
+				c := NewConn(&benchmarkConn{reader: r, writer: io.Discard}, true, nil)
+				got := testing.AllocsPerRun(20, func() {
+					r.Reset(wire)
+					c.rw.Reader.Reset(r)
+					if kind, p, err := c.ReadMessage(); err != nil || kind != op || !bytes.Equal(p, payload) {
+						t.Fatal(kind, len(p), err)
+					}
+				})
+				if got > float64(tc.max) {
+					t.Fatalf("allocations = %v, want at most %d", got, tc.max)
+				}
+			})
 		}
-	})
-	if got > 8 {
-		t.Fatalf("allocations = %v, want at most 8", got)
 	}
 }
 
@@ -117,7 +132,7 @@ func TestPayloadReaderGrowsWithReceivedBytes(t *testing.T) {
 	for _, sent := range []int{0, 1, 10, minPayloadAlloc, minPayloadAlloc + 1, 3 * minPayloadAlloc} {
 		data := benchmarkPayload(sent)
 		r := payloadReader{r: bufio.NewReaderSize(bytes.NewReader(data), 16), remaining: declared}
-		got, err := r.readAll()
+		got, err := r.readAll(nil, true)
 		if err != nil || !bytes.Equal(got, data) {
 			t.Fatalf("sent=%d: got %d bytes, err=%v", sent, len(got), err)
 		}
@@ -140,7 +155,7 @@ func TestPayloadReaderExactCapacity(t *testing.T) {
 			}
 			source := &streamChunkReader{data: wire, sizes: []int{1, 7, 4093, 65536}, tail: io.EOF}
 			r := payloadReader{r: bufio.NewReader(source), remaining: int64(size), key: key, masked: masked}
-			got, err := r.readAll()
+			got, err := r.readAll(nil, true)
 			if err != nil || !bytes.Equal(got, want) {
 				t.Fatalf("size=%d masked=%t: err=%v equal=%t", size, masked, err, bytes.Equal(got, want))
 			}

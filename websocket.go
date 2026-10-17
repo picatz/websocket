@@ -715,14 +715,26 @@ func (c *Conn) ReadMessage() (messageType Opcode, data []byte, err error) {
 			}
 			return frame.Opcode, data, nil
 		}
-		var checkedText bool
+		var checkedText, inPlace bool
 		var pending int
 		if err == nil {
 			// Extensions may transform payload, opcode, or FIN. Even registered
 			// disabled extensions keep the complete-frame, post-decode path.
 			checkedText = len(c.extensions) == 0 && (frame.Opcode == TextMessage ||
 				(frame.Opcode == ContinuationFrame && messageType == TextMessage))
-			pending, err = c.readFramePayloadText(&frame, payloadLen, checkedText, message[validated:])
+			// Without extensions, validateMessageHeader has already checked the
+			// message state and size, so a data frame's payload can be read
+			// straight onto the end of the message.
+			inPlace = len(c.extensions) == 0 && frame.Opcode < CloseMessage
+			var dst []byte
+			if inPlace {
+				dst = message
+			}
+			var buf []byte
+			buf, pending, err = c.readFramePayloadText(&frame, payloadLen, checkedText, message[validated:], dst)
+			if err == nil && inPlace {
+				message = buf
+			}
 		}
 		if err != nil {
 			if messageTypeSet && err == io.EOF {
@@ -739,15 +751,10 @@ func (c *Conn) ReadMessage() (messageType Opcode, data []byte, err error) {
 			messageType = frame.Opcode
 			messageTypeSet = true
 
-			if c.maxBytes > 0 && len(frame.Payload) > c.maxBytes-len(message) {
-				return 0, nil, failWith(StatusMessageTooBig, ErrPayloadTooLarge)
-			}
-
-			// A final, extension-free frame owns its payload. Retain it only
-			// without spare capacity so small messages do not keep a large buffer.
-			if frame.Final && len(c.extensions) == 0 && len(frame.Payload) > 0 && cap(frame.Payload) == len(frame.Payload) {
-				message = frame.Payload
-			} else {
+			if !inPlace {
+				if c.maxBytes > 0 && len(frame.Payload) > c.maxBytes-len(message) {
+					return 0, nil, failWith(StatusMessageTooBig, ErrPayloadTooLarge)
+				}
 				message = append(message, frame.Payload...)
 			}
 			if messageType == TextMessage {
@@ -771,10 +778,12 @@ func (c *Conn) ReadMessage() (messageType Opcode, data []byte, err error) {
 			if !messageTypeSet {
 				return 0, nil, failWith(StatusProtocolError, ErrUnexpectedContinuation)
 			}
-			if c.maxBytes > 0 && len(frame.Payload) > c.maxBytes-len(message) {
-				return 0, nil, failWith(StatusMessageTooBig, ErrPayloadTooLarge)
+			if !inPlace {
+				if c.maxBytes > 0 && len(frame.Payload) > c.maxBytes-len(message) {
+					return 0, nil, failWith(StatusMessageTooBig, ErrPayloadTooLarge)
+				}
+				message = append(message, frame.Payload...)
 			}
-			message = append(message, frame.Payload...)
 			if messageType == TextMessage {
 				valid := true
 				if checkedText {
@@ -1094,57 +1103,61 @@ func (c *Conn) readFrame() (*Frame, error) {
 }
 
 func (c *Conn) readFramePayload(frame *Frame, payloadLen uint64) error {
-	_, err := c.readFramePayloadText(frame, payloadLen, false, nil)
+	_, _, err := c.readFramePayloadText(frame, payloadLen, false, nil, nil)
 	return err
 }
 
 // readFramePayloadText optionally validates an extension-free text payload as
 // bytes arrive. tail contains at most three incomplete UTF-8 bytes from the
 // previous frame; the returned count carries them across empty continuations.
-func (c *Conn) readFramePayloadText(frame *Frame, payloadLen uint64, checkText bool, tail []byte) (pending int, err error) {
-	if pending, err = c.readFrameBodyText(frame, payloadLen, checkText, tail); err != nil {
-		return 0, err
+// The payload is appended to dst, which may be nil; buf is the result and
+// frame.Payload its new part.
+func (c *Conn) readFramePayloadText(frame *Frame, payloadLen uint64, checkText bool, tail, dst []byte) (buf []byte, pending int, err error) {
+	if buf, pending, err = c.readFrameBodyText(frame, payloadLen, checkText, tail, dst); err != nil {
+		return nil, 0, err
 	}
-	return pending, c.processIncomingFrame(frame)
+	return buf, pending, c.processIncomingFrame(frame)
 }
 
 // readFrameBody reads and unmasks a frame payload without calling extensions.
 func (c *Conn) readFrameBody(frame *Frame, payloadLen uint64) error {
-	_, err := c.readFrameBodyText(frame, payloadLen, false, nil)
+	_, _, err := c.readFrameBodyText(frame, payloadLen, false, nil, nil)
 	return err
 }
 
-func (c *Conn) readFrameBodyText(frame *Frame, payloadLen uint64, checkText bool, tail []byte) (pending int, err error) {
+func (c *Conn) readFrameBodyText(frame *Frame, payloadLen uint64, checkText bool, tail, dst []byte) (buf []byte, pending int, err error) {
 	if checkText {
 		pending = len(tail)
 	}
 	// Read masking key if necessary
 	if frame.Masked {
 		if err := readField(c.rw.Reader, frame.MaskKey[:], "masking key"); err != nil {
-			return 0, err
+			return nil, 0, err
 		}
 	}
 
 	// Read payload data
+	buf = dst
 	if payloadLen > 0 {
 		r := payloadReader{r: c.rw.Reader, remaining: int64(payloadLen), key: frame.MaskKey, masked: frame.Masked, text: checkText}
 		if checkText {
 			r.pending = byte(copy(r.carry[:], tail))
 		}
-		frame.Payload, err = r.readAll()
+		buf, err = r.readAll(dst, frame.Final)
 		pending = int(r.pending)
 		if err != nil {
 			// Preserve the typed protocol failure for failRead's close mapping.
 			if _, invalid := err.(*readFailure); invalid {
-				return 0, err
+				return nil, 0, err
 			}
-			return 0, readError("payload data", err)
+			return nil, 0, readError("payload data", err)
 		}
-		if uint64(len(frame.Payload)) != payloadLen {
-			return 0, io.ErrUnexpectedEOF
+		if uint64(len(buf)-len(dst)) != payloadLen {
+			return nil, 0, io.ErrUnexpectedEOF
 		}
 	}
-	return pending, nil
+	frame.Payload = buf[len(dst):]
+	return buf, pending, nil
 }
 
 // readSmall fills p, which must be no larger than br's buffer, from br. It
@@ -1255,30 +1268,36 @@ type payloadReader struct {
 // of an idle connection.
 const minPayloadAlloc = 4096
 
-// readAll reads the rest of the payload. Storage grows with the bytes that
-// have actually arrived, never with the declared length alone: it starts at
-// minPayloadAlloc or what is already buffered, then doubles. The result's
-// capacity is its length, so the caller may keep it without trimming.
-func (r *payloadReader) readAll() ([]byte, error) {
-	n := int(r.remaining)
-	buf := make([]byte, min(n, max(minPayloadAlloc, r.r.Buffered())))
-	var read int
-	for read < n {
-		if read == len(buf) {
-			grown := make([]byte, min(n, 2*len(buf)))
+// readAll appends the rest of the payload to dst. Storage grows with the
+// bytes that have actually arrived, never with the declared length alone:
+// each step adds what dst already holds, what is already buffered, or the
+// rest of the frame up to minPayloadAlloc, whichever is most. For a final frame growth stops at the
+// payload's end, so a single-frame message has no spare capacity and the
+// caller may keep it without trimming. A message's earlier frames grow past
+// their own end, so a long run of fragments is not copied once per frame.
+func (r *payloadReader) readAll(dst []byte, final bool) ([]byte, error) {
+	buf := dst
+	end := len(dst) + int(r.remaining)
+	for len(buf) < end {
+		if len(buf) == cap(buf) {
+			size := len(buf) + max(len(buf), min(end-len(buf), minPayloadAlloc), r.r.Buffered())
+			if final {
+				size = min(size, end)
+			}
+			grown := make([]byte, len(buf), size)
 			copy(grown, buf)
 			buf = grown
 		}
-		m, err := r.Read(buf[read:])
-		read += m
+		m, err := r.Read(buf[len(buf):min(cap(buf), end)])
+		buf = buf[:len(buf)+m]
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
-			return buf[:read], err
+			return buf, err
 		}
 	}
-	return buf[:read], nil
+	return buf, nil
 }
 
 func (r *payloadReader) Read(p []byte) (int, error) {
