@@ -828,12 +828,12 @@ func validUTF8Prefix(p []byte) (int, bool) {
 }
 
 // WriteMessage writes a WebSocket message. Transport errors wrap the
-// underlying error for errors.Is and errors.As. Close the connection
-// after a transport error; the transport is not closed automatically, and clearing
-// a write deadline cannot make a partially written message safe to retry. Later
+// underlying error for errors.Is and errors.As. Close the connection after a
+// transport error; the transport is not closed automatically, and clearing a
+// write deadline cannot make a partially written message safe to retry. Later
 // writes fail with the original cause, unless argument validation or a closed
-// connection takes precedence. Argument validation before transport I/O does not
-// poison writes.
+// connection takes precedence. Argument validation before transport I/O does
+// not poison writes.
 func (c *Conn) WriteMessage(messageType MessageType, data []byte) error {
 	if messageType != TextMessage && messageType != BinaryMessage {
 		return errInvalidMessageType
@@ -882,17 +882,17 @@ func (c *Conn) WriteMessage(messageType MessageType, data []byte) error {
 
 // writeControlFrame writes a control frame to the connection for Ping,
 // CloseWrite, Shutdown and the automatic Pong reply. A successful Close frame
-// starts the closing handshake: subsequent data,
-// Ping and Close frames return an error matching net.ErrClosed, while reads
-// and Pongs remain available until the peer closes or Close is called. Call
-// Close to release the transport if the peer does not respond; this method
-// does not impose a handshake timeout.
+// starts the closing handshake: subsequent data, Ping and Close frames return
+// an error matching net.ErrClosed, while reads and Pongs remain available until
+// the peer closes or Close is called. Call Close to release the transport if
+// the peer does not respond; this method does not impose a handshake timeout.
 //
-// Transport errors wrap the underlying error for errors.Is and errors.As. Close after a transport error; the transport is not
-// closed automatically, and clearing a write deadline cannot make the frame
-// stream reusable. Later writes fail with the original cause, unless argument
-// validation or the closing state takes precedence. Argument validation before
-// transport I/O does not poison writes.
+// Transport errors wrap the underlying error for errors.Is and errors.As.
+// Close after a transport error; the transport is not closed automatically,
+// and clearing a write deadline cannot make the frame stream reusable. Later
+// writes fail with the original cause, unless argument validation or the
+// closing state takes precedence. Argument validation before transport I/O
+// does not poison writes.
 func (c *Conn) writeControlFrame(opcode opcode, data []byte) error {
 	if opcode != opClose && opcode != opPing && opcode != opPong {
 		return errInvalidOpcode
