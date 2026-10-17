@@ -1,7 +1,6 @@
 package websocket
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/binary"
 	"errors"
@@ -433,7 +432,6 @@ func TestReadFailureNeverRetriesPoisonedWriter(t *testing.T) {
 	// A sticky error encountered while writing a new header is also retained.
 	raw := &failureFaultConn{failureMemoryConn: failureMemoryConn{memoryConn: memoryConn{Reader: bytes.NewReader(nil)}}, cause: io.ErrClosedPipe}
 	c := NewConn(raw, ConnConfig{Server: true})
-	c.rw.Writer = bufio.NewWriterSize(raw, 16)
 	c.WriteMessage(BinaryMessage, bytes.Repeat([]byte{'a'}, 32))
 	if err := c.WriteMessage(BinaryMessage, nil); !errors.Is(err, ErrWriteFailed) || !errors.Is(err, io.ErrClosedPipe) || !strings.Contains(err.Error(), "header") {
 		t.Fatal(err)
