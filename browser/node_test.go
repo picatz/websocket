@@ -139,6 +139,19 @@ func testServer() http.Handler {
 		_, _, _ = conn.ReadMessage()
 	})
 
+	// /stall upgrades and never reads, until the client goes away.
+	mux.HandleFunc("/stall", func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Upgrade(w, r, anyOrigin)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		select {
+		case <-r.Context().Done():
+		case <-time.After(10 * time.Second):
+		}
+	})
+
 	// /reject fails the handshake.
 	mux.HandleFunc("/reject", func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no", http.StatusForbidden)

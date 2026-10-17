@@ -30,7 +30,8 @@
 //     until ReadMessage takes them. WithMaxMessageSize bounds each message, and
 //     reading promptly bounds the queue.
 //   - WriteMessage returns once the host accepts the message for sending, not
-//     when it reaches the network.
+//     when it reaches the network. The host's send queue is unbounded, so a
+//     write first waits while more than 1 MiB is queued and unsent.
 //   - Control frames cannot be sent or observed, so there is no Ping: the host
 //     answers the peer's Pings itself. CloseWithStatus accepts only the codes
 //     hosts let programs send, 1000 and 3000 through 4999.
