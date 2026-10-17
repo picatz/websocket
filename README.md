@@ -349,6 +349,45 @@ Protocols are case-sensitive HTTP tokens and must be unique. Setting
 `Sec-WebSocket-Protocol` through `Dialer.Header` or `Upgrader.Header` still
 works, but combining it with `Subprotocols` is an error.
 
+## Streaming large messages
+
+`NextWriter(messageType)` returns an `io.WriteCloser` for one message, so a large
+payload can be sent without holding it in memory. Each `Write` may send complete
+frames, and `Close` sends the final one. Until `Close`, other data messages wait;
+pings and pongs can still go out between the message's frames.
+
+```go
+w, err := conn.NextWriter(websocket.BinaryMessage)
+if err != nil {
+	return err
+}
+if _, err := io.Copy(w, file); err != nil {
+	return err
+}
+return w.Close()
+```
+
+Text is checked as UTF-8 across writes, including a rune split between two
+`Write` calls. A failure ends the writer. If part of the message was already
+sent, the connection can't continue, so close it.
+
+`NextReader()` is the reading side. It returns the next data message's type and
+an `io.Reader` that ends with `io.EOF`. Uncompressed messages stream frame by
+frame, with UTF-8 and the message size limit checked as data arrives, so raise
+`MaxMessageSize` for large streams. Compressed messages are still decoded
+whole before the first byte is returned.
+
+```go
+typ, r, err := conn.NextReader()
+if err != nil {
+	return err
+}
+_, err = io.Copy(file, r)
+```
+
+Calling `NextReader` or `ReadMessage` again drops whatever is left of the
+previous message.
+
 ## Compression
 
 `permessage-deflate` ([RFC 7692]) is opt-in: set `Compression` on a `Dialer` or

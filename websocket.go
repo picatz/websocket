@@ -342,13 +342,14 @@ type Conn struct {
 	writeMu sync.Mutex // Protects write operations
 	closeMu sync.Mutex // Protects shutdown reservation; never held during I/O
 
-	closed    atomic.Bool // Indicates if the connection is closed
-	failed    bool        // Protected by closeMu; failure permits concurrent abort
-	closeSent bool        // Protected by writeMu; forbids later data frames
-	peerClose *CloseError // Protected by readMu; the peer's close frame, once received
-	writeErr  error       // Protected by writeMu; first transport write failure
-	abortConn net.Conn    // Raw transport for abnormal shutdown (never protocol I/O)
-	abortOnce sync.Once   // Independent of normal, potentially graceful TLS Close
+	closed    atomic.Bool    // Indicates if the connection is closed
+	failed    bool           // Protected by closeMu; failure permits concurrent abort
+	closeSent bool           // Protected by writeMu; forbids later data frames
+	peerClose *CloseError    // Protected by readMu; the peer's close frame, once received
+	reader    *messageReader // Protected by readMu; the unfinished NextReader message
+	writeErr  error          // Protected by writeMu; first transport write failure
+	abortConn net.Conn       // Raw transport for abnormal shutdown (never protocol I/O)
+	abortOnce sync.Once      // Independent of normal, potentially graceful TLS Close
 
 	// peerClosed reports, to goroutines other than the reader, that the
 	// peer's Close frame arrived. It is set before the connection is closed.
@@ -371,6 +372,11 @@ type Conn struct {
 
 	// Reusable buffers for compressed messages. Protected by writeMu.
 	writeBuf, writeScratch []byte
+
+	// dataSlot admits one data message at a time, from WriteMessage or for a
+	// NextWriter's whole lifetime. It is taken before writeMu.
+	dataOnce sync.Once
+	dataSlot chan struct{}
 
 	// Ping bookkeeping. done is created lazily and closed, under closeMu, once
 	// the connection becomes terminal; pings maps outstanding Ping payloads to
@@ -634,12 +640,10 @@ func (c *Conn) SetPongHandler(handler func(appData string) error) {
 func (c *Conn) ReadMessage() (messageType Opcode, data []byte, err error) {
 	for {
 		messageType, data, err = c.readMessage()
-		if _, ok := err.(*CloseError); ok && c.localClosed.Load() {
-			// The peer answered our Close frame before the transport closed.
-			return 0, nil, errClosed
-		}
 		if err != nil || !c.shuttingDown.Load() {
-			return messageType, data, err
+			// The peer may have answered our Close frame before the
+			// transport closed; readError reports that as net.ErrClosed.
+			return messageType, data, c.readError(err)
 		}
 		// Shutdown has started: drop the message and keep reading until the
 		// peer's Close frame or an error.
@@ -657,7 +661,15 @@ func (c *Conn) readMessage() (messageType Opcode, data []byte, err error) {
 	if c.closed.Load() {
 		return 0, nil, errClosed
 	}
+	if err := c.discardReader(); err != nil {
+		return 0, nil, err
+	}
+	return c.readMessageLocked()
+}
 
+// readMessageLocked is ReadMessage after readMu is held and any NextReader
+// message has been discarded.
+func (c *Conn) readMessageLocked() (messageType Opcode, data []byte, err error) {
 	pmd, compositionErr := messageCompression(c.extensions)
 	if compositionErr != nil {
 		return 0, nil, c.failRead(compositionErr)
@@ -846,6 +858,10 @@ func (c *Conn) WriteMessage(messageType Opcode, data []byte) error {
 	if c.closed.Load() {
 		return errClosed
 	}
+	if err := c.acquireData(); err != nil {
+		return err
+	}
+	defer c.releaseData()
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 	if c.closed.Load() || c.closeSent {
