@@ -180,8 +180,8 @@ func TestUpgradeMiddlewareUnsupported(t *testing.T) {
 			if conn != nil || err != ErrNotHijacker {
 				t.Fatalf("Upgrade = %v, %v; want ErrNotHijacker", conn, err)
 			}
-			if recorder.Code != http.StatusOK || recorder.Body.Len() != 0 || len(recorder.Header()) != 0 || recorder.Flushed {
-				t.Fatal("unsupported writer received a response")
+			if recorder.Code != http.StatusInternalServerError {
+				t.Fatalf("unsupported writer got status %d, want 500", recorder.Code)
 			}
 		})
 	}
@@ -239,10 +239,13 @@ func TestUpgradeMiddlewareHijackErrors(t *testing.T) {
 				if conn != nil {
 					t.Fatal("unexpected connection after hijack failure")
 				}
+				// Without a hijack the writer is still usable, so the 500 is
+				// written; after a failed Hijack call nothing may be written.
 				if wrap && errors.Is(cause, http.ErrNotSupported) {
-					if err != ErrNotHijacker {
-						t.Fatalf("error = %v; want ErrNotHijacker", err)
+					if err != ErrNotHijacker || recorder.Code != http.StatusInternalServerError {
+						t.Fatalf("error = %v, status %d; want ErrNotHijacker and 500", err, recorder.Code)
 					}
+					return
 				} else if !errors.Is(err, ErrHandshakeFailed) || err.Error() != ErrHandshakeFailed.Error()+": "+cause.Error() {
 					t.Fatalf("error = %v; want original ErrHandshakeFailed contract", err)
 				}
@@ -270,6 +273,7 @@ func TestUpgradeMiddlewareValidatesBeforeUnwrap(t *testing.T) {
 		{"extensions", func(r *http.Request) { r.Header.Set("Sec-WebSocket-Extensions", "invalid;") }, nil, ErrInvalidExtension},
 		{"custom response", nil, []UpgradeOption{WithResponseHeader(http.Header{"X-Test": {"bad\r\nheader"}})}, ErrInvalidHandshakeHeader},
 	} {
+		status := upgradeErrorStatus(tc.want)
 		t.Run(tc.name, func(t *testing.T) {
 			r := upgradeRequest()
 			if tc.change != nil {
@@ -281,8 +285,9 @@ func TestUpgradeMiddlewareValidatesBeforeUnwrap(t *testing.T) {
 			if conn != nil || !errors.Is(err, tc.want) {
 				t.Fatalf("Upgrade = %v, %v; want %v", conn, err, tc.want)
 			}
-			if outer.unwraps != 0 || inner.calls != 0 || outer.status != 0 || outer.writes != 0 || inner.Body.Len() != 0 {
-				t.Fatalf("invalid handshake reached middleware: %+v", outer)
+			// The error response goes through the middleware like any other.
+			if outer.unwraps != 0 || inner.calls != 0 || outer.status != status || inner.Code != status {
+				t.Fatalf("invalid handshake reached Hijack or wrote the wrong status (want %d): %+v", status, outer)
 			}
 		})
 	}

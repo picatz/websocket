@@ -17,11 +17,22 @@ import (
 )
 
 // Every ResponseWriter operation, including Header, is observable on rejection.
-type originWriter struct{ calls int }
+// originWriter records the response status and counts hijacks; a denied
+// origin must produce exactly a 403 and never reach Hijack.
+type originWriter struct {
+	calls  int // Hijack calls
+	status int
+	header http.Header
+}
 
-func (w *originWriter) Header() http.Header         { w.calls++; return make(http.Header) }
-func (w *originWriter) Write(p []byte) (int, error) { w.calls++; return len(p), nil }
-func (w *originWriter) WriteHeader(int)             { w.calls++ }
+func (w *originWriter) Header() http.Header {
+	if w.header == nil {
+		w.header = make(http.Header)
+	}
+	return w.header
+}
+func (w *originWriter) Write(p []byte) (int, error) { return len(p), nil }
+func (w *originWriter) WriteHeader(status int)      { w.status = status }
 func (w *originWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	w.calls++
 	return nil, nil, errors.New("unexpected hijack")
@@ -115,8 +126,8 @@ func TestUpgradeRejectsAmbiguousOriginBeforeCallback(t *testing.T) {
 			called := 0
 			ext := &negotiationExtension{name: "example", offer: "example"}
 			c, err := Upgrade(w, r, WithUpgradeExtensions(ext), WithUpgradeOriginCheck(func(*http.Request, string) bool { called++; return true }))
-			if c != nil || err != ErrOriginNotAllowed || called != 0 || ext.calls != 0 || w.calls != 0 {
-				t.Fatalf("conn %v, error %v, policy %d, extension %d, writer %d", c, err, called, ext.calls, w.calls)
+			if c != nil || err != ErrOriginNotAllowed || called != 0 || ext.calls != 0 || w.calls != 0 || w.status != http.StatusForbidden {
+				t.Fatalf("conn %v, error %v, policy %d, extension %d, hijacks %d, status %d", c, err, called, ext.calls, w.calls, w.status)
 			}
 			if !reflect.DeepEqual(before, r.Header) {
 				t.Fatal("mutated request headers")
@@ -239,9 +250,8 @@ func TestUpgradeOriginRealLoopback(t *testing.T) {
 	for _, secure := range []bool{false, true} {
 		t.Run(map[bool]string{false: "HTTP", true: "HTTPS"}[secure], func(t *testing.T) {
 			srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				c, err := Upgrade(w, r)
+				c, err := Upgrade(w, r) // Upgrade writes the 403 itself.
 				if err != nil {
-					http.Error(w, "forbidden", http.StatusForbidden)
 					return
 				}
 				defer c.Close()
@@ -333,8 +343,8 @@ func TestUpgradeOriginDenialHasNoSideEffects(t *testing.T) {
 		w := new(originWriter)
 		ext := &negotiationExtension{name: "example", offer: "example"}
 		c, err := Upgrade(w, r, WithUpgradeOriginCheck(tc.check), WithUpgradeExtensions(ext))
-		if c != nil || err != ErrOriginNotAllowed || w.calls != 0 || ext.calls != 0 {
-			t.Fatalf("rejection: conn %v err %v writer %d extension %d", c, err, w.calls, ext.calls)
+		if c != nil || err != ErrOriginNotAllowed || w.calls != 0 || ext.calls != 0 || w.status != http.StatusForbidden {
+			t.Fatalf("rejection: conn %v err %v hijacks %d extension %d status %d", c, err, w.calls, ext.calls, w.status)
 		}
 	}
 	r := upgradeRequest()

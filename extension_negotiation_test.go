@@ -67,7 +67,7 @@ func TestParseExtensions(t *testing.T) {
 				r.Header["Sec-WebSocket-Extensions"] = tc.values
 				w := &countingHijacker{ResponseRecorder: httptest.NewRecorder()}
 				conn, err := Upgrade(w, r) // Validate even without installed extensions.
-				if conn != nil || !errors.Is(err, ErrInvalidExtension) || w.calls != 0 || w.Body.Len() != 0 {
+				if conn != nil || !errors.Is(err, ErrInvalidExtension) || w.calls != 0 || w.Code != http.StatusBadRequest {
 					t.Fatalf("Upgrade = %v, %v; hijacks = %d, body = %q", conn, err, w.calls, w.Body.String())
 				}
 			}

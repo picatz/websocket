@@ -11,7 +11,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -94,7 +93,7 @@ func (h *hub) handler(w http.ResponseWriter, r *http.Request) {
 	}
 	conn, err := websocket.Upgrade(w, r, websocket.WithUpgradeMaxMessageSize(maxMessage))
 	if err != nil {
-		upgradeError(w, err)
+		// Upgrade has already written the HTTP error response.
 		return
 	}
 	defer conn.Close()
@@ -129,19 +128,6 @@ func (h *hub) handler(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		h.broadcast(fmt.Appendf(nil, "%s: %s", c.name, msg))
-	}
-}
-
-func upgradeError(w http.ResponseWriter, err error) {
-	switch {
-	case errors.Is(err, websocket.ErrOriginNotAllowed):
-		http.Error(w, "WebSocket origin not allowed", http.StatusForbidden)
-	case errors.Is(err, websocket.ErrUnsupportedVersion):
-		w.Header().Set("Sec-WebSocket-Version", "13")
-		http.Error(w, "Unsupported WebSocket version", http.StatusUpgradeRequired)
-	case !errors.Is(err, websocket.ErrHandshakeFailed):
-		// A failed hijack or 101 write may already own the transport.
-		http.Error(w, "Invalid WebSocket handshake", http.StatusBadRequest)
 	}
 }
 
