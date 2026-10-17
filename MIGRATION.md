@@ -359,6 +359,28 @@ agreement rather than checking it against an offer. It returns
 
 `github.com/picatz/openai` uses none of these and needs no change.
 
+A read that `Close` or `CloseWithStatus` interrupts now always reports
+`net.ErrClosed`, even when the peer's answer to the Close frame arrives before
+the transport closes; it no longer sometimes returns that answer as a
+`*CloseError`.
+
+## Half-close with CloseWrite
+
+`CloseWrite(code, reason)` replaces sending a Close frame by hand with
+`WriteControlFrame(CloseMessage, payload)`. It validates the status like
+`CloseWithStatus`, so there is no payload to encode, and keeps the connection
+reading until the peer answers:
+
+```go
+// Before
+_ = conn.WriteControlFrame(websocket.CloseMessage, binary.BigEndian.AppendUint16(nil, 1000))
+// After
+_ = conn.CloseWrite(websocket.StatusNormalClosure, "")
+```
+
+After a Close frame, from either call, a Ping now fails with an error matching
+`net.ErrClosed` instead of going out; Pongs answering the peer's Pings still do.
+
 ## Verification scope
 
 Default-policy tests exercise omitted options separately from configured protocol

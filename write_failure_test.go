@@ -514,7 +514,10 @@ func TestWriteFailureAfterSuccessfulClose(t *testing.T) {
 	if err := c.WriteControlFrame(CloseMessage, nil); !errors.Is(err, net.ErrClosed) {
 		t.Fatal(err)
 	}
-	requireWriteCause(t, c.WriteControlFrame(PingMessage, nil), cause)
+	// Only Pongs may follow a Close frame, so a Ping fails before the stream.
+	if err := c.WriteControlFrame(PingMessage, nil); !errors.Is(err, net.ErrClosed) {
+		t.Fatal(err)
+	}
 	requireWriteCause(t, c.WriteControlFrame(PongMessage, nil), cause)
 	if raw.calls != 2 || ext.outgoing != 2 || ext.enabled != 2 {
 		t.Fatal("retry reached callback or wire")
