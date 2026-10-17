@@ -694,13 +694,20 @@ func ExampleNewConn() {
 	}
 	defer client.Close()
 
+	// The server reads until the client closes, so it is reading when the
+	// client's Close frame arrives and answers it at once. A net.Pipe has no
+	// buffer: a side that stops reading stalls the other side's writes.
 	go func() {
 		defer server.Close()
-		typ, data, err := server.ReadMessage()
-		if err != nil {
-			return
+		for {
+			typ, data, err := server.ReadMessage()
+			if err != nil {
+				return
+			}
+			if err := server.WriteMessage(typ, append([]byte("echo: "), data...)); err != nil {
+				return
+			}
 		}
-		_ = server.WriteMessage(typ, append([]byte("echo: "), data...))
 	}()
 
 	if err := client.WriteMessage(websocket.TextMessage, []byte("over a pipe")); err != nil {
@@ -777,4 +784,56 @@ func ExampleDialer_proxy() {
 		log.Fatal(err)
 	}
 	defer conn.Close()
+}
+
+// A read loop ends at the first error, and the error says why. Here the
+// server limits messages to 16 bytes, so the client's second message ends the
+// connection: the server's ReadMessage reports ErrMessageTooLarge, and the
+// client is sent StatusMessageTooBig.
+func ExampleConn_ReadMessage() {
+	ended := make(chan string, 1)
+	upgrader := &websocket.Upgrader{MaxMessageSize: 16}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		for {
+			_, data, err := conn.ReadMessage()
+			switch {
+			case err == nil:
+				fmt.Printf("server read %q\n", data)
+				continue
+			case websocket.CloseStatus(err) != -1:
+				ended <- "the client closed"
+			case errors.Is(err, websocket.ErrMessageTooLarge):
+				ended <- "the client sent too large a message"
+			case errors.Is(err, websocket.ErrProtocol):
+				ended <- "the client broke the protocol"
+			case errors.Is(err, net.ErrClosed):
+				ended <- "this side closed the connection"
+			default:
+				ended <- "the transport failed or a deadline passed"
+			}
+			return
+		}
+	}))
+	defer srv.Close()
+
+	conn, _, err := websocket.Dial(context.Background(), wsURL(srv))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer conn.Close()
+	_ = conn.WriteMessage(websocket.TextMessage, []byte("short"))
+	_ = conn.WriteMessage(websocket.TextMessage, []byte("far longer than sixteen bytes"))
+
+	fmt.Println("server:", <-ended)
+	_, _, err = conn.ReadMessage()
+	fmt.Println("client:", websocket.CloseStatus(err))
+	// Output:
+	// server read "short"
+	// server: the client sent too large a message
+	// client: StatusMessageTooBig
 }

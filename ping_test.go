@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/picatz/websocket"
@@ -87,15 +88,17 @@ func TestPingTimeoutLeavesConnectionOpen(t *testing.T) {
 }
 
 func TestPingWithoutReaderWaitsForContext(t *testing.T) {
-	client, server := contextPipe(t)
-	readLoop(server)
-	// No client read loop: the Pong is sent but never processed.
-	cause := errors.New("synthetic keepalive budget")
-	ctx, cancel := context.WithTimeoutCause(t.Context(), 30*time.Millisecond, cause)
-	defer cancel()
-	if err := client.Ping(ctx); !errors.Is(err, cause) {
-		t.Fatalf("err = %v, want cause", err)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		client, server := contextPipe(t)
+		readLoop(server)
+		// No client read loop: the Pong is sent but never processed.
+		cause := errors.New("synthetic keepalive budget")
+		ctx, cancel := context.WithTimeoutCause(t.Context(), 30*time.Millisecond, cause)
+		defer cancel()
+		if err := client.Ping(ctx); !errors.Is(err, cause) {
+			t.Fatalf("err = %v, want cause", err)
+		}
+	})
 }
 
 func TestPingReturnsWhenConnectionCloses(t *testing.T) {
@@ -144,16 +147,18 @@ func TestPingContextAlreadyDone(t *testing.T) {
 }
 
 func TestPingCancelDuringStalledWriteAborts(t *testing.T) {
-	client, _ := contextPipe(t) // nobody reads from the peer, so the write blocks
-	ctx, cancel := context.WithCancel(t.Context())
-	done := make(chan error, 1)
-	go func() { done <- client.Ping(ctx) }()
-	time.Sleep(10 * time.Millisecond)
-	cancel()
-	if err := contextAwait(t, done); !errors.Is(err, context.Canceled) {
-		t.Fatalf("err = %v, want context.Canceled", err)
-	}
-	requireContextTerminal(t, client)
+	synctest.Test(t, func(t *testing.T) {
+		client, _ := contextPipe(t) // nobody reads from the peer, so the write blocks
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan error, 1)
+		go func() { done <- client.Ping(ctx) }()
+		synctest.Wait()
+		cancel()
+		if err := contextAwait(t, done); !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v, want context.Canceled", err)
+		}
+		requireContextTerminal(t, client)
+	})
 }
 
 func TestPingWithCompression(t *testing.T) {

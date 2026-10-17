@@ -13,6 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -276,108 +277,123 @@ func failureAwait(t *testing.T, done <-chan error) error {
 		return nil
 	}
 }
+
+// TestReadFailurePreservesTransportDeadlines checks that the Close frame sent
+// after a read failure honors the caller's write deadline when it is sooner
+// than the one-second watchdog, and is bounded by the watchdog otherwise. The
+// bubble's clock makes each bound exact.
 func TestReadFailurePreservesTransportDeadlines(t *testing.T) {
-	for _, delay := range []time.Duration{-time.Second, 40 * time.Millisecond, 0, 10 * time.Second} {
-		t.Run(delay.String(), func(t *testing.T) {
-			transport, peer := net.Pipe()
-			defer peer.Close()
-			defer transport.Close()
-			deadline := time.Time{}
-			if delay != 0 {
-				deadline = time.Now().Add(delay)
-			}
-			if err := transport.SetWriteDeadline(deadline); err != nil {
-				t.Fatal(err)
-			}
-			raw := &failurePipeConn{Conn: transport, input: bytes.NewReader([]byte{0x81, 1, 255}), started: make(chan struct{})}
-			c := newTestConn(raw, ConnConfig{})
-			start := time.Now()
-			_, _, err := c.ReadMessage()
-			elapsed := time.Since(start)
-			if err != errInvalidFrame || raw.setters.Load() != 0 || raw.closes.Load() != 1 {
-				t.Fatalf("error=%v setters=%d closes=%d", err, raw.setters.Load(), raw.closes.Load())
-			}
-			if elapsed > 2*time.Second || (delay > 0 && delay < time.Second && elapsed > 500*time.Millisecond) {
-				t.Fatalf("deadline extended: %s", elapsed)
-			}
-			if (delay == 0 || delay > time.Second) && elapsed < 800*time.Millisecond {
-				t.Fatalf("did not exercise watchdog: %s", elapsed)
-			}
+	for _, tc := range []struct {
+		delay time.Duration // write deadline from now; zero means none
+		want  time.Duration // time the failed read takes to return
+	}{
+		{-time.Second, 0},
+		{40 * time.Millisecond, 40 * time.Millisecond},
+		{0, time.Second},
+		{10 * time.Second, time.Second},
+	} {
+		t.Run(tc.delay.String(), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				transport, peer := net.Pipe()
+				defer peer.Close()
+				defer transport.Close()
+				deadline := time.Time{}
+				if tc.delay != 0 {
+					deadline = time.Now().Add(tc.delay)
+				}
+				if err := transport.SetWriteDeadline(deadline); err != nil {
+					t.Fatal(err)
+				}
+				raw := &failurePipeConn{Conn: transport, input: bytes.NewReader([]byte{0x81, 1, 255}), started: make(chan struct{})}
+				c := newTestConn(raw, ConnConfig{})
+				start := time.Now()
+				_, _, err := c.ReadMessage()
+				if err != errInvalidFrame || raw.setters.Load() != 0 || raw.closes.Load() != 1 {
+					t.Fatalf("error=%v setters=%d closes=%d", err, raw.setters.Load(), raw.closes.Load())
+				}
+				if elapsed := time.Since(start); elapsed != tc.want {
+					t.Fatalf("read returned after %v, want %v", elapsed, tc.want)
+				}
+			})
 		})
 	}
 }
 
 func TestConcurrentCloseCancelsFailureNotification(t *testing.T) {
-	for range 50 {
-		transport, peer := net.Pipe()
-		raw := &failurePipeConn{Conn: transport, input: bytes.NewReader([]byte{0x81, 1, 255}), started: make(chan struct{})}
-		c := newTestConn(raw, ConnConfig{})
-		done := make(chan error, 1)
-		finished := make(chan struct{})
-		t.Cleanup(func() { transport.Close(); peer.Close(); <-finished })
-		go func() { defer close(finished); _, _, err := c.ReadMessage(); done <- err }()
-		select {
-		case <-raw.started:
-		case <-time.After(2 * time.Second):
-			t.Fatal("notification never started")
+	synctest.Test(t, func(t *testing.T) {
+		for range 50 {
+			transport, peer := net.Pipe()
+			raw := &failurePipeConn{Conn: transport, input: bytes.NewReader([]byte{0x81, 1, 255}), started: make(chan struct{})}
+			c := newTestConn(raw, ConnConfig{})
+			done := make(chan error, 1)
+			finished := make(chan struct{})
+			t.Cleanup(func() { transport.Close(); peer.Close(); <-finished })
+			go func() { defer close(finished); _, _, err := c.ReadMessage(); done <- err }()
+			select {
+			case <-raw.started:
+			case <-time.After(2 * time.Second):
+				t.Fatal("notification never started")
+			}
+			if _, _, err := c.ReadMessage(); !errors.Is(err, net.ErrClosed) {
+				t.Fatal(err)
+			}
+			start := time.Now()
+			if err := c.Close(); err != errAlreadyClosed {
+				t.Fatal(err)
+			}
+			if err := failureAwait(t, done); err != errInvalidFrame {
+				t.Fatal(err)
+			}
+			if time.Since(start) != 0 || raw.closes.Load() != 1 {
+				t.Fatal("Close did not promptly cancel notification")
+			}
+			peer.Close()
+			transport.Close()
 		}
-		if _, _, err := c.ReadMessage(); !errors.Is(err, net.ErrClosed) {
-			t.Fatal(err)
-		}
-		start := time.Now()
-		if err := c.Close(); err != errAlreadyClosed {
-			t.Fatal(err)
-		}
-		if err := failureAwait(t, done); err != errInvalidFrame {
-			t.Fatal(err)
-		}
-		if time.Since(start) > 500*time.Millisecond || raw.closes.Load() != 1 {
-			t.Fatal("Close did not promptly cancel notification")
-		}
-		peer.Close()
-		transport.Close()
-	}
+	})
 }
 
 func TestReadFailureAbortsStalledDataWriter(t *testing.T) {
-	for _, server := range []bool{false, true} {
-		transport, peer := net.Pipe()
-		defer peer.Close()
-		defer transport.Close()
-		raw := &failurePipeConn{Conn: transport, input: bytes.NewReader(failureWire(server, 0x81, []byte{255})), started: make(chan struct{})}
-		c := newTestConn(raw, ConnConfig{Server: server})
-		done := make(chan error, 1)
-		finished := make(chan struct{})
-		t.Cleanup(func() { transport.Close(); peer.Close(); <-finished })
-		payload := bytes.Repeat([]byte{'a'}, 8192)
-		go func() { defer close(finished); done <- c.WriteMessage(BinaryMessage, payload) }()
-		if err := peer.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
-			t.Fatal(err)
+	synctest.Test(t, func(t *testing.T) {
+		for _, server := range []bool{false, true} {
+			transport, peer := net.Pipe()
+			defer peer.Close()
+			defer transport.Close()
+			raw := &failurePipeConn{Conn: transport, input: bytes.NewReader(failureWire(server, 0x81, []byte{255})), started: make(chan struct{})}
+			c := newTestConn(raw, ConnConfig{Server: server})
+			done := make(chan error, 1)
+			finished := make(chan struct{})
+			t.Cleanup(func() { transport.Close(); peer.Close(); <-finished })
+			payload := bytes.Repeat([]byte{'a'}, 8192)
+			go func() { defer close(finished); done <- c.WriteMessage(BinaryMessage, payload) }()
+			if err := peer.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			// Consume only the independently known data header, so payload is stalled.
+			header := make([]byte, 4)
+			if !server {
+				header = make([]byte, 8)
+			}
+			if _, err := io.ReadFull(peer, header); err != nil {
+				t.Fatal(err)
+			}
+			start := time.Now()
+			_, _, err := c.ReadMessage()
+			if err != errInvalidFrame || time.Since(start) != 0 {
+				t.Fatalf("failure=%v", err)
+			}
+			if err := failureAwait(t, done); !errors.Is(err, errWriteFailed) || !errors.Is(err, io.ErrClosedPipe) {
+				t.Fatalf("write error=%v", err)
+			}
+			rest, e := io.ReadAll(peer)
+			if e != nil || len(rest) != 0 {
+				t.Fatalf("bytes appended after partial frame: %x %v", rest, e)
+			}
+			if raw.closes.Load() != 1 || !bytes.Equal(payload, bytes.Repeat([]byte{'a'}, 8192)) {
+				t.Fatal("abort/immutability regression")
+			}
 		}
-		// Consume only the independently known data header, so payload is stalled.
-		header := make([]byte, 4)
-		if !server {
-			header = make([]byte, 8)
-		}
-		if _, err := io.ReadFull(peer, header); err != nil {
-			t.Fatal(err)
-		}
-		start := time.Now()
-		_, _, err := c.ReadMessage()
-		if err != errInvalidFrame || time.Since(start) > 500*time.Millisecond {
-			t.Fatalf("failure=%v", err)
-		}
-		if err := failureAwait(t, done); !errors.Is(err, errWriteFailed) || !errors.Is(err, io.ErrClosedPipe) {
-			t.Fatalf("write error=%v", err)
-		}
-		rest, e := io.ReadAll(peer)
-		if e != nil || len(rest) != 0 {
-			t.Fatalf("bytes appended after partial frame: %x %v", rest, e)
-		}
-		if raw.closes.Load() != 1 || !bytes.Equal(payload, bytes.Repeat([]byte{'a'}, 8192)) {
-			t.Fatal("abort/immutability regression")
-		}
-	}
+	})
 }
 
 type failureFaultConn struct {
@@ -499,20 +515,22 @@ func (c *unsupportedDeadlineConn) SetWriteDeadline(time.Time) error {
 }
 
 func TestReadFailureDoesNotRequireDeadlineSupport(t *testing.T) {
-	transport, peer := net.Pipe()
-	defer peer.Close()
-	defer transport.Close()
-	raw := &unsupportedDeadlineConn{&failurePipeConn{Conn: transport, input: bytes.NewReader([]byte{0x81, 1, 255}), started: make(chan struct{})}}
-	start := time.Now()
-	if _, _, err := newTestConn(raw, ConnConfig{}).ReadMessage(); err != errInvalidFrame {
-		t.Fatal(err)
-	}
-	if elapsed := time.Since(start); elapsed < 800*time.Millisecond || elapsed > 2*time.Second {
-		t.Fatalf("watchdog duration=%s", elapsed)
-	}
-	if raw.setters.Load() != 0 || raw.closes.Load() != 1 {
-		t.Fatal("cleanup depended on unsupported deadlines")
-	}
+	synctest.Test(t, func(t *testing.T) {
+		transport, peer := net.Pipe()
+		defer peer.Close()
+		defer transport.Close()
+		raw := &unsupportedDeadlineConn{&failurePipeConn{Conn: transport, input: bytes.NewReader([]byte{0x81, 1, 255}), started: make(chan struct{})}}
+		start := time.Now()
+		if _, _, err := newTestConn(raw, ConnConfig{}).ReadMessage(); err != errInvalidFrame {
+			t.Fatal(err)
+		}
+		if elapsed := time.Since(start); elapsed != time.Second {
+			t.Fatalf("watchdog duration=%s", elapsed)
+		}
+		if raw.setters.Load() != 0 || raw.closes.Load() != 1 {
+			t.Fatal("cleanup depended on unsupported deadlines")
+		}
+	})
 }
 
 type joinedAbortConn struct {
@@ -531,32 +549,34 @@ func (c *joinedAbortConn) Close() error {
 }
 
 func TestReadFailureJoinsRunningAbortWatchdog(t *testing.T) {
-	transport, peer := net.Pipe()
-	raw := &joinedAbortConn{failurePipeConn: &failurePipeConn{Conn: transport, input: bytes.NewReader([]byte{0x81, 1, 255}), started: make(chan struct{})}, entered: make(chan struct{}), release: make(chan struct{})}
-	c := newTestConn(raw, ConnConfig{})
-	done := make(chan error, 1)
-	finished := make(chan struct{})
-	var release sync.Once
-	t.Cleanup(func() { release.Do(func() { close(raw.release) }); transport.Close(); peer.Close(); <-finished })
-	go func() { defer close(finished); _, _, err := c.ReadMessage(); done <- err }()
-	// No peer reads and no deadline exists. Only the watchdog can end the write.
-	select {
-	case <-raw.entered:
-	case <-time.After(2 * time.Second):
-		t.Fatal("watchdog did not abort")
-	}
-	select {
-	case err := <-done:
-		t.Fatalf("read returned before abort callback completed: %v", err)
-	default:
-	}
-	release.Do(func() { close(raw.release) })
-	if err := failureAwait(t, done); err != errInvalidFrame {
-		t.Fatal(err)
-	}
-	if !raw.returned.Load() || raw.closes.Load() != 1 || raw.setters.Load() != 0 {
-		t.Fatal("abort callback not joined exactly once")
-	}
+	synctest.Test(t, func(t *testing.T) {
+		transport, peer := net.Pipe()
+		raw := &joinedAbortConn{failurePipeConn: &failurePipeConn{Conn: transport, input: bytes.NewReader([]byte{0x81, 1, 255}), started: make(chan struct{})}, entered: make(chan struct{}), release: make(chan struct{})}
+		c := newTestConn(raw, ConnConfig{})
+		done := make(chan error, 1)
+		finished := make(chan struct{})
+		var release sync.Once
+		t.Cleanup(func() { release.Do(func() { close(raw.release) }); transport.Close(); peer.Close(); <-finished })
+		go func() { defer close(finished); _, _, err := c.ReadMessage(); done <- err }()
+		// No peer reads and no deadline exists. Only the watchdog can end the write.
+		select {
+		case <-raw.entered:
+		case <-time.After(2 * time.Second):
+			t.Fatal("watchdog did not abort")
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("read returned before abort callback completed: %v", err)
+		default:
+		}
+		release.Do(func() { close(raw.release) })
+		if err := failureAwait(t, done); err != errInvalidFrame {
+			t.Fatal(err)
+		}
+		if !raw.returned.Load() || raw.closes.Load() != 1 || raw.setters.Load() != 0 {
+			t.Fatal("abort callback not joined exactly once")
+		}
+	})
 }
 
 func TestReadFailurePartialNotificationIsNeverRetried(t *testing.T) {

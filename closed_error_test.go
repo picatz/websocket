@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/picatz/websocket"
@@ -109,44 +110,47 @@ func (g *closeGate) Close() error {
 // reports net.ErrClosed even when the peer's Close reply is decoded before the
 // transport closes, so a local Close looks the same on every run.
 func TestInterruptedReadAfterPeerReply(t *testing.T) {
-	a, b := net.Pipe()
-	defer b.Close()
-	gate := &closeGate{Conn: a, release: make(chan struct{})}
-	c := mustNewConn(gate, websocket.ConnConfig{})
+	synctest.Test(t, func(t *testing.T) {
+		a, b := net.Pipe()
+		defer b.Close()
+		gate := &closeGate{Conn: a, release: make(chan struct{})}
+		c := mustNewConn(gate, websocket.ConnConfig{})
 
-	blocked := make(chan error, 1)
-	go func() {
-		_, _, err := c.ReadMessage()
-		blocked <- err
-	}()
+		blocked := make(chan error, 1)
+		go func() {
+			_, _, err := c.ReadMessage()
+			blocked <- err
+		}()
 
-	// A Ping answered with a Pong proves the read is in progress: ReadMessage
-	// keeps reading frames without rechecking for a local Close.
-	if _, err := b.Write([]byte{0x89, 0x00}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := io.ReadFull(b, make([]byte, 6)); err != nil { // masked Pong
-		t.Fatal(err)
-	}
-	// Let the reader release the write lock it took for the Pong; Close skips
-	// its frame rather than wait behind a writer.
-	time.Sleep(10 * time.Millisecond)
-
-	go func() {
-		defer close(gate.release)
-		// The client's masked Close: 2 header bytes, 4 mask bytes, 2 payload bytes.
-		_ = b.SetReadDeadline(time.Now().Add(time.Second))
-		if _, err := io.ReadFull(b, make([]byte, 8)); err != nil {
-			return
+		// A Ping answered with a Pong proves the read is in progress: ReadMessage
+		// keeps reading frames without rechecking for a local Close.
+		if _, err := b.Write([]byte{0x89, 0x00}); err != nil {
+			t.Fatal(err)
 		}
-		// net.Pipe returns once the reader has consumed the whole reply.
-		_, _ = b.Write([]byte{0x88, 0x02, 0x03, 0xe8})
-	}()
+		if _, err := io.ReadFull(b, make([]byte, 6)); err != nil { // masked Pong
+			t.Fatal(err)
+		}
+		// Wait for the reader to release the write lock it took for the Pong and
+		// block for the next frame; Close skips its frame rather than wait
+		// behind a writer.
+		synctest.Wait()
 
-	if err := c.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-	if err := <-blocked; !errors.Is(err, net.ErrClosed) {
-		t.Fatalf("interrupted read: err = %v, want a match for net.ErrClosed", err)
-	}
+		go func() {
+			defer close(gate.release)
+			// The client's masked Close: 2 header bytes, 4 mask bytes, 2 payload bytes.
+			_ = b.SetReadDeadline(time.Now().Add(time.Second))
+			if _, err := io.ReadFull(b, make([]byte, 8)); err != nil {
+				return
+			}
+			// net.Pipe returns once the reader has consumed the whole reply.
+			_, _ = b.Write([]byte{0x88, 0x02, 0x03, 0xe8})
+		}()
+
+		if err := c.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+		if err := <-blocked; !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("interrupted read: err = %v, want a match for net.ErrClosed", err)
+		}
+	})
 }
