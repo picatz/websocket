@@ -98,9 +98,10 @@
 // last request calls CloseWrite and reads the replies, and Close is for
 // giving up on a peer.
 //
-// When the peer closes, ReadMessage returns a *CloseError, which matches io.EOF
-// with errors.Is; CloseStatus extracts its code from any error. After either
-// side closes, operations return errors matching net.ErrClosed.
+// When the peer closes, ReadMessage returns a *CloseError; a normal close
+// matches io.EOF with errors.Is, and CloseStatus extracts the code from any
+// error. After either side closes, operations return errors matching
+// net.ErrClosed.
 //
 // # Handshake options
 //

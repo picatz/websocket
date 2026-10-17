@@ -58,7 +58,7 @@ func dialTransport(ctx context.Context, opts *dialOptions, u *url.URL, target st
 		return nil, nil, fmt.Errorf("%w: failed to dial: %w", ErrBadHandshake, err)
 	}
 	if conn == nil {
-		return nil, nil, fmt.Errorf("%w: dial function returned a nil connection", ErrBadHandshake)
+		return nil, nil, fmt.Errorf("%w: dial function returned a nil connection", ErrInvalidConfig)
 	}
 	return conn, proxyURL, nil
 }

@@ -111,8 +111,9 @@ func TestReadMessageReturnsPeerCloseError(t *testing.T) {
 			if !ok || *ce != tt.want || data != nil {
 				t.Fatalf("server=%v: ReadMessage = %q, %v; want %+v", server, data, err, tt.want)
 			}
-			if !errors.Is(err, io.EOF) {
-				t.Fatalf("CloseError does not match io.EOF")
+			orderly := tt.want.Code == StatusNormalClosure || tt.want.Code == StatusGoingAway || tt.want.Code == StatusNoStatusReceived
+			if errors.Is(err, io.EOF) != orderly {
+				t.Fatalf("errors.Is(err, io.EOF) = %v, want %v", !orderly, orderly)
 			}
 			if got := CloseStatus(err); got != tt.want.Code {
 				t.Fatalf("CloseStatus = %v, want %v", got, tt.want.Code)

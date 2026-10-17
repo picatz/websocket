@@ -122,9 +122,9 @@ update downstream dependencies or automatically migrate application policies.
 
 `ReadMessage` and `ReadMessageContext` used to return the bare `io.EOF` value
 when the peer sent a close frame. They now return a `*CloseError` carrying the
-peer's status code and reason. It matches `io.EOF` with `errors.Is`, so code
-using `errors.Is(err, io.EOF)` is unaffected, but a direct `err == io.EOF`
-comparison no longer matches a peer close. EOF on the transport before a
+peer's status code and reason. A normal close matches `io.EOF` with
+`errors.Is` (see [Normal and abnormal closes](#normal-and-abnormal-closes)),
+but a direct `err == io.EOF` comparison no longer matches a peer close. EOF on the transport before a
 message begins is still the bare `io.EOF`.
 
 ```go
@@ -132,7 +132,7 @@ message begins is still the bare `io.EOF`.
 if err == io.EOF { /* peer closed */ }
 
 // After
-if errors.Is(err, io.EOF) { /* peer closed, or transport EOF */ }
+if errors.Is(err, io.EOF) { /* peer closed normally, or transport EOF */ }
 if code := websocket.CloseStatus(err); code != -1 { /* peer sent code */ }
 ```
 
@@ -476,12 +476,39 @@ if errors.Is(err, websocket.ErrBadHandshake) { ... }
 
 | Before | After |
 | --- | --- |
-| `ErrProxy`, `ErrResponseHeaderTooLarge`, `ErrInvalidSecAccept`, `ErrFailedToGenerateKey`, `ErrHandshakeFailed` | `ErrBadHandshake` |
+| `ErrProxy`, `ErrResponseHeaderTooLarge`, `ErrInvalidSecAccept`, `ErrHandshakeFailed` | `ErrBadHandshake` |
 | `ErrInvalidMethod`, `ErrInvalidUpgradeHeader`, `ErrInvalidConnectionHeader`, `ErrMissingSecKey`, `ErrInvalidSecKey` (from `Upgrade`) | `ErrBadHandshake` (Upgrade has already replied 400 or 405) |
 | `ErrInvalidExtension`, `ErrInvalidSubprotocol` | `ErrBadHandshake` from `Dial` and `Upgrade`, `ErrInvalidConfig` from `NewConn` |
 | `ErrInvalidHandshakeHeader` | `ErrInvalidConfig` |
 | `ErrAlreadyClosed` | `net.ErrClosed`, which it already matched |
 | `ErrWriteFailed` | the transport's error, which it already wrapped, such as `os.ErrDeadlineExceeded`; any write error is terminal |
+
+`ErrFailedToGenerateKey` is gone without a replacement: since Go 1.24,
+`crypto/rand` never fails, so `Dial` cannot fail this way.
+
+## Normal and abnormal closes
+
+A `*CloseError` used to match `io.EOF` for every status. It now matches only a
+normal close: `StatusNormalClosure`, `StatusGoingAway`, or a close frame
+without a status. A peer that closes with `StatusInternalServerError`, a
+policy violation or an application code is no longer mistaken for the end of
+the stream by `errors.Is(err, io.EOF)`, which matches what `NetConn` already
+did.
+
+```go
+// Before: true for any close status
+if errors.Is(err, io.EOF) { /* peer closed */ }
+
+// After
+if errors.Is(err, io.EOF) { /* peer closed normally, or transport EOF */ }
+if code := websocket.CloseStatus(err); code != -1 { /* peer closed with code */ }
+```
+
+`Dial` also reports an invalid URL, and a `NetDialContext` that returns a nil
+connection without an error, with `ErrInvalidConfig` instead of
+`ErrBadHandshake`: both are the caller's mistake. A canceled or expired `Dial`
+context still matches `ErrBadHandshake`, and now also its
+`context.Cause`.
 
 ## Verification scope
 

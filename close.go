@@ -93,8 +93,9 @@ var ErrInvalidCloseStatus = errors.New("websocket: invalid close status")
 // ReadMessageContext and NextReader when the peer starts or completes the
 // closing handshake.
 // A close frame without a body reports StatusNoStatusReceived and an empty
-// reason. CloseError matches io.EOF with errors.Is, so code that checks
-// errors.Is(err, io.EOF) for an orderly close keeps working.
+// reason. A normal close (StatusNormalClosure, StatusGoingAway or no status)
+// matches io.EOF with errors.Is, so a read loop can treat it as the end of the
+// stream; any other status does not. CloseStatus reads the code of either.
 //
 // https://datatracker.ietf.org/doc/html/rfc6455#section-7.1.5
 type CloseError struct {
@@ -110,8 +111,20 @@ func (e *CloseError) Error() string {
 	return fmt.Sprintf("websocket: peer closed with status %d (%v): %q", int(e.Code), e.Code, e.Reason)
 }
 
-// Is reports whether target is io.EOF, which a peer close has always matched.
-func (e *CloseError) Is(target error) bool { return target == io.EOF }
+// Is reports whether target is io.EOF and the peer closed normally, with
+// StatusNormalClosure, StatusGoingAway or no status (StatusNoStatusReceived).
+// A close with any other status is not an end of file; use CloseStatus or
+// errors.As to read its code.
+func (e *CloseError) Is(target error) bool {
+	if target != io.EOF {
+		return false
+	}
+	switch e.Code {
+	case StatusNormalClosure, StatusGoingAway, StatusNoStatusReceived:
+		return true
+	}
+	return false
+}
 
 // CloseStatus returns the status code of the first CloseError in err's tree,
 // or -1 if there is none.
