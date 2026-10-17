@@ -74,6 +74,9 @@
 // Origin checks protect browsers from cross-site use; they are not
 // authentication.
 //
+// NetConn wraps a Conn as a net.Conn that carries a byte stream in messages of
+// one type, for tunnelling protocols such as gRPC or SSH over a WebSocket.
+//
 // # Proxies and custom transports
 //
 // Dial connects directly unless WithProxy selects an HTTP or HTTPS proxy, for

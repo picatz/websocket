@@ -213,10 +213,10 @@ Echo round trip, time per op (lower is better):
 
 | Message | picatz | coder | gorilla | gobwas |
 | ---: | ---: | ---: | ---: | ---: |
-| 16 B | 15.0 µs | 20.2 µs | 16.8 µs | 32.7 µs |
-| 1 KiB | 17.1 µs | 23.2 µs | 21.1 µs | 40.2 µs |
-| 16 KiB | 98 µs | 136 µs | 113 µs | 125 µs |
-| 256 KiB | 1125 µs | 1390 µs | 1445 µs | 1225 µs |
+| 16 B | 15.4 µs | 19.4 µs | 16.2 µs | 30.4 µs |
+| 1 KiB | 17.6 µs | 22.1 µs | 21.0 µs | 40.4 µs |
+| 16 KiB | 100 µs | 126 µs | 100 µs | 115 µs |
+| 256 KiB | 1165 µs | 1287 µs | 1451 µs | 1172 µs |
 
 Echo round trip, allocations and bytes per op, both endpoints:
 
@@ -225,25 +225,31 @@ Echo round trip, allocations and bytes per op, both endpoints:
 | 16 B | 2 / 32 B | 2 / 1.0 KiB | 5 / 1.1 KiB | 11 / 1.5 KiB |
 | 1 KiB | 2 / 2.0 KiB | 8 / 4.3 KiB | 11 / 4.3 KiB | 16 / 4.7 KiB |
 | 16 KiB | 6 / 56 KiB | 26 / 74 KiB | 31 / 74 KiB | 34 / 75 KiB |
-| 256 KiB | 14 / 0.99 MiB | 40 / 1.20 MiB | 45 / 1.20 MiB | 49 / 1.45 MiB |
+| 256 KiB | 15 / 0.99 MiB | 40 / 1.20 MiB | 45 / 1.20 MiB | 49 / 1.45 MiB |
 
 Parallel echo (1 KiB), handshake and idle memory:
 
 | Workload | picatz | coder | gorilla | gobwas |
 | --- | ---: | ---: | ---: | ---: |
-| `EchoParallel` time/op | 14.2 µs | 17.6 µs | 16.7 µs | 23.7 µs |
-| `Handshake` time/op | 323 µs | 453 µs | 336 µs | 257 µs |
-| `Handshake` allocs/op | 123 | 231 | 121 | 75 |
-| `IdleConn` bytes/conn | 20.8 KiB | 23.0 KiB | 14.8 KiB | 13.8 KiB |
+| `EchoParallel` time/op | 13.3 µs | 16.7 µs | 14.4 µs | 22.7 µs |
+| `Handshake` time/op | 298 µs | 413 µs | 296 µs | 251 µs |
+| `Handshake` allocs/op | 115 | 231 | 121 | 75 |
+| `IdleConn` bytes/conn | 14.6 KiB | 23.0 KiB | 14.5 KiB | 14.4 KiB |
 
-The baseline for `IdleConn` was 14.1 KiB per connection.
+The baseline for `IdleConn` was 14.0 KiB per connection.
 
 Without extensions, a message costs one allocation on each endpoint: the
 payload `ReadMessage` returns. Writes allocate nothing, including client
-masking. Messages larger than 4 KiB that have not fully arrived take a few more,
-because read storage grows with the bytes received rather than trusting the
-declared frame length. The remaining gap is idle memory: about 6 KiB more per
-connection than gorilla.
+masking; they borrow a pooled write buffer for each frame, which an occasional
+garbage collection empties. Messages larger than 4 KiB that have not fully
+arrived take a few more allocations, because read storage grows with the bytes
+received rather than trusting the declared frame length.
+
+An idle server connection holds no write buffer and keeps its goroutine within
+the runtime's initial stack, so it costs about what a bare hijacked net/http
+connection does. Most of what remains is net/http's own: the hijacked reader,
+which the connection reads from, and the writer net/http keeps while the
+handler runs. A `Dial`ed connection holds only its read buffer.
 
 [`coder/websocket`]: https://github.com/coder/websocket
 [`gorilla/websocket`]: https://github.com/gorilla/websocket

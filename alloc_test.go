@@ -3,8 +3,12 @@ package websocket
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -173,5 +177,58 @@ func TestWriteMaskedEveryChunkBoundary(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestIdleConnHoldsNoWriteBuffer(t *testing.T) {
+	// Every frame is flushed, so connections borrow a write buffer per frame
+	// rather than holding one while idle. Both ends must still exchange
+	// messages through the borrowed buffers.
+	server := make(chan *Conn, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := Upgrade(w, r)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		server <- c
+	}))
+	defer srv.Close()
+	client, _, err := Dial(context.Background(), "ws"+strings.TrimPrefix(srv.URL, "http"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	s := <-server
+	defer s.Close()
+	for _, c := range []*Conn{client, s} {
+		if c.rw.Writer != nil {
+			t.Fatalf("server=%t: connection holds a write buffer", c.isServer)
+		}
+	}
+	payload := bytes.Repeat([]byte("abc"), 5000) // Larger than one write buffer.
+	if err := client.WriteMessage(BinaryMessage, payload); err != nil {
+		t.Fatal(err)
+	}
+	if _, got, err := s.ReadMessage(); err != nil || !bytes.Equal(got, payload) {
+		t.Fatalf("server read %d bytes, err=%v", len(got), err)
+	}
+	if err := s.WriteMessage(TextMessage, []byte("ok")); err != nil {
+		t.Fatal(err)
+	}
+	if _, got, err := client.ReadMessage(); err != nil || string(got) != "ok" {
+		t.Fatalf("client read %q, err=%v", got, err)
+	}
+}
+
+func TestReleasedWriterDropsFailedFrame(t *testing.T) {
+	// A frame that fails mid-write leaves bytes in the borrowed buffer. They
+	// must not reach the next connection that borrows it.
+	w := writerPool.Get().(*bufio.Writer)
+	w.Reset(io.Discard)
+	w.WriteString("stale")
+	releaseWriter(w)
+	if w.Buffered() != 0 {
+		t.Fatalf("released writer keeps %d bytes", w.Buffered())
 	}
 }

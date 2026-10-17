@@ -358,7 +358,7 @@ func NewPerMessageDeflateExtension(options ...PerMessageDeflateOption) Extension
 // state, so goroutines that set them must coordinate.
 type Conn struct {
 	conn     net.Conn          // Underlying network connection
-	rw       *bufio.ReadWriter // Buffered reader and writer
+	rw       *bufio.ReadWriter // Buffered reader; the writer is nil unless a test sets one (see writeFrameBuffer)
 	isServer bool              // True if this Conn is on the server side
 	maxBytes int               // Maximum message size in bytes
 
@@ -422,9 +422,15 @@ func WithMaxBytes(maxBytes int) ConnOption {
 // built-in PMD together with another enabled extension: operations reject that
 // unsupported composition, and this constructor cannot undo a manual handshake.
 func NewConn(conn net.Conn, isServer bool, extensions []Extension, opts ...ConnOption) *Conn {
+	return newConn(conn, bufio.NewReader(conn), isServer, extensions, opts...)
+}
+
+// newConn is NewConn with a read buffer that may already hold bytes read past
+// the handshake. It must read from conn.
+func newConn(conn net.Conn, br *bufio.Reader, isServer bool, extensions []Extension, opts ...ConnOption) *Conn {
 	wsConn := &Conn{
 		conn:       conn,
-		rw:         bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn)),
+		rw:         bufio.NewReadWriter(br, nil),
 		isServer:   isServer,
 		extensions: extensions,
 	}
@@ -792,7 +798,7 @@ func (c *Conn) ReadMessage() (messageType Opcode, data []byte, err error) {
 			}
 
 		default:
-			return 0, nil, failWith(StatusProtocolError, fmt.Errorf("%w: %d", ErrInvalidOpcode, frame.Opcode))
+			return 0, nil, failWith(StatusProtocolError, invalidOpcode(frame.Opcode))
 		}
 	}
 }
@@ -946,7 +952,7 @@ func (c *Conn) readFrameHeader(frame *Frame) (uint64, error) {
 		if err == io.EOF {
 			return 0, io.EOF
 		}
-		return 0, fmt.Errorf("failed to read frame header: %w", err)
+		return 0, readError("frame header", err)
 	}
 
 	b0 := header[0]
@@ -981,7 +987,7 @@ func (c *Conn) readFrameHeader(frame *Frame) (uint64, error) {
 
 	// Control frames must have payload length <= 125
 	if frame.Opcode >= 0x8 && payloadLen > 125 {
-		return 0, failWith(StatusProtocolError, fmt.Errorf("%w: control frame payload too large: %d", ErrPayloadTooLarge, payloadLen))
+		return 0, failWith(StatusProtocolError, controlTooLarge(payloadLen))
 	}
 
 	// Built-in compression can consume RSV1 only on data message frames.
@@ -1008,11 +1014,8 @@ func (c *Conn) readFrameHeader(frame *Frame) (uint64, error) {
 	switch payloadLen {
 	case 126:
 		var ext [2]byte
-		if err := readSmall(c.rw.Reader, ext[:]); err != nil {
-			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-				return 0, io.ErrUnexpectedEOF
-			}
-			return 0, fmt.Errorf("failed to read extended payload length: %w", err)
+		if err := readField(c.rw.Reader, ext[:], "extended payload length"); err != nil {
+			return 0, err
 		}
 		extLen := binary.BigEndian.Uint16(ext[:])
 		if extLen < 126 {
@@ -1021,11 +1024,8 @@ func (c *Conn) readFrameHeader(frame *Frame) (uint64, error) {
 		payloadLen = uint64(extLen)
 	case 127:
 		var ext [8]byte
-		if err := readSmall(c.rw.Reader, ext[:]); err != nil {
-			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-				return 0, io.ErrUnexpectedEOF
-			}
-			return 0, fmt.Errorf("failed to read extended payload length: %w", err)
+		if err := readField(c.rw.Reader, ext[:], "extended payload length"); err != nil {
+			return 0, err
 		}
 		extLen := binary.BigEndian.Uint64(ext[:])
 		if extLen >= (1<<63) || extLen < 65536 {
@@ -1116,11 +1116,8 @@ func (c *Conn) readFrameBodyText(frame *Frame, payloadLen uint64, checkText bool
 	}
 	// Read masking key if necessary
 	if frame.Masked {
-		if err := readSmall(c.rw.Reader, frame.MaskKey[:]); err != nil {
-			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-				return 0, io.ErrUnexpectedEOF
-			}
-			return 0, fmt.Errorf("failed to read masking key: %w", err)
+		if err := readField(c.rw.Reader, frame.MaskKey[:], "masking key"); err != nil {
+			return 0, err
 		}
 	}
 
@@ -1137,7 +1134,7 @@ func (c *Conn) readFrameBodyText(frame *Frame, payloadLen uint64, checkText bool
 			if _, invalid := err.(*readFailure); invalid {
 				return 0, err
 			}
-			return 0, fmt.Errorf("failed to read payload data: %w", err)
+			return 0, readError("payload data", err)
 		}
 		if uint64(len(frame.Payload)) != payloadLen {
 			return 0, io.ErrUnexpectedEOF
@@ -1158,6 +1155,41 @@ func readSmall(br *bufio.Reader, p []byte) error {
 		return io.ErrUnexpectedEOF
 	}
 	return err
+}
+
+// readField reads a fixed-size frame field such as the masking key. A stream
+// that ends inside a frame is truncated, so io.EOF becomes
+// io.ErrUnexpectedEOF.
+func readField(br *bufio.Reader, p []byte, name string) error {
+	err := readSmall(br, p)
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return io.ErrUnexpectedEOF
+	}
+	return readError(name, err)
+}
+
+// The read path's error constructors are kept out of line so that their
+// formatting state is not part of the read functions' stack frames. A
+// connection's goroutine holds those frames for as long as it waits for the
+// next message, and they decide whether its stack outgrows the runtime's
+// initial size.
+
+//go:noinline
+func readError(name string, err error) error {
+	return fmt.Errorf("failed to read %s: %w", name, err)
+}
+
+//go:noinline
+func controlTooLarge(n uint64) error {
+	return fmt.Errorf("%w: control frame payload too large: %d", ErrPayloadTooLarge, n)
+}
+
+//go:noinline
+func invalidOpcode(op Opcode) error {
+	return fmt.Errorf("%w: %d", ErrInvalidOpcode, op)
 }
 
 // processIncomingFrame passes a complete frame through the enabled extensions
@@ -1359,6 +1391,22 @@ func (c *Conn) writeFrameRaw(frame *Frame) error {
 // writeFrameBuffer is writeFrameRaw for a payload the connection owns, which
 // may then be masked in place instead of copied.
 func (c *Conn) writeFrameBuffer(frame *Frame, owned bool) error {
+	// Every frame is flushed, so no frame leaves bytes behind and the write
+	// buffer is borrowed from a pool for one frame instead of being held by
+	// every idle connection.
+	w := c.rw.Writer
+	if w == nil {
+		w = writerPool.Get().(*bufio.Writer)
+		w.Reset(c.conn)
+		err := c.writeFrameTo(w, frame, owned)
+		releaseWriter(w)
+		return err
+	}
+	return c.writeFrameTo(w, frame, owned)
+}
+
+// writeFrameTo encodes frame into w and flushes it.
+func (c *Conn) writeFrameTo(w *bufio.Writer, frame *Frame, owned bool) error {
 	b0 := byte(frame.Opcode)
 	if frame.Final {
 		b0 |= 0x80
@@ -1378,9 +1426,8 @@ func (c *Conn) writeFrameBuffer(frame *Frame, owned bool) error {
 		b1 |= 0x80
 	}
 
-	// Encode the header straight into the write buffer, which every frame
-	// flushes, so a whole small frame reaches the transport in one write.
-	w := c.rw.Writer
+	// Encode the header straight into the write buffer, so a whole small
+	// frame reaches the transport in one write.
 	if w.Available() < maxFrameHeaderSize {
 		if err := w.Flush(); err != nil {
 			c.writeErr = err
@@ -1443,6 +1490,17 @@ func (c *Conn) writeFrameBuffer(frame *Frame, owned bool) error {
 	}
 
 	return nil
+}
+
+// writerPool holds the write buffers connections borrow for one frame at a
+// time.
+var writerPool = sync.Pool{New: func() any { return bufio.NewWriter(nil) }}
+
+// releaseWriter returns w to writerPool, discarding anything a failed write
+// left buffered and dropping its reference to the connection.
+func releaseWriter(w *bufio.Writer) {
+	w.Reset(nil)
+	writerPool.Put(w)
 }
 
 // maxFrameHeaderSize is the largest frame header: two fixed bytes, an eight
@@ -1758,10 +1816,9 @@ func Dial(ctx context.Context, urlStr string, options ...DialOption) (ws *Conn, 
 		return nil, resp, fmt.Errorf("%w: %w", ErrInvalidExtension, err)
 	}
 
-	ws = NewConn(conn, false, opts.extensions, WithMaxBytes(opts.maxBytes))
+	ws = newConn(conn, br, false, opts.extensions, WithMaxBytes(opts.maxBytes))
 	ws.subprotocol = subprotocol
 	ws.abortConn = rawConn
-	ws.rw.Reader = br
 	return ws, resp, nil
 }
 
@@ -1853,55 +1910,105 @@ func Upgrade(w http.ResponseWriter, r *http.Request, options ...UpgradeOption) (
 	opts := &upgradeOptions{maxBytes: DefaultMaxMessageSize}
 	opts.apply(options)
 
-	if err := validateHandshakeHeaders(opts.responseHeader, true); err != nil {
-		return nil, err
-	}
-
-	if !headerContains(r.Header, "Connection", "Upgrade") {
-		return nil, ErrInvalidConnectionHeader
-	}
-	if !headerContains(r.Header, "Upgrade", "websocket") {
-		return nil, ErrInvalidUpgradeHeader
-	}
-	if r.Method != http.MethodGet {
-		return nil, ErrInvalidMethod
-	}
-	if !r.ProtoAtLeast(1, 1) {
-		return nil, ErrBadHandshake
-	}
-	if r.Header.Get("Sec-WebSocket-Version") != "13" || len(r.Header.Values("Sec-WebSocket-Version")) != 1 {
-		return nil, ErrUnsupportedVersion
-	}
-	key := r.Header.Get("Sec-WebSocket-Key")
-	if key == "" {
-		return nil, ErrMissingSecKey
-	}
-	decodedKey, err := base64.StdEncoding.DecodeString(key)
-	if err != nil || len(decodedKey) != 16 || len(r.Header.Values("Sec-WebSocket-Key")) != 1 {
-		return nil, ErrInvalidSecKey
-	}
-	offered, err := parseSubprotocolOffers(r.Header)
+	// Each step is its own function so that only one step's locals are on
+	// the stack at a time. The handler goroutine keeps whatever stack the
+	// handshake grew to for the connection's lifetime.
+	acceptKey, subprotocol, err := checkUpgradeRequest(r, opts)
 	if err != nil {
 		return nil, err
 	}
+	responseHeader, err := negotiateUpgradeExtensions(r, opts, subprotocol)
+	if err != nil {
+		return nil, err
+	}
+
+	// Preserve direct Hijacker errors and use the standard controller to reach
+	// hijacking support through middleware that exposes Unwrap.
+	hj, ok := w.(http.Hijacker)
+	if !ok {
+		hj = http.NewResponseController(w)
+	}
+	conn, bufrw, err := hj.Hijack()
+	if err != nil {
+		if !ok && errors.Is(err, http.ErrNotSupported) {
+			return nil, ErrNotHijacker
+		}
+		return nil, fmt.Errorf("%w: %v", ErrHandshakeFailed, err)
+	}
+	if err := writeUpgradeResponse(bufrw.Writer, acceptKey, responseHeader); err != nil {
+		conn.Close()
+		return nil, err
+	}
+
+	// Keep the hijacked reader, which may already hold the client's first
+	// frames. The hijacked writer is released: frames are written through a
+	// shared, pooled buffer only while one is being written.
+	ws := newConn(conn, bufrw.Reader, true, opts.extensions, WithMaxBytes(opts.maxBytes))
+	ws.subprotocol = subprotocol
+	return ws, nil
+}
+
+// checkUpgradeRequest validates the client's opening handshake and the
+// caller's response fields. It returns the Sec-WebSocket-Accept value and the
+// selected subprotocol, if any.
+//
+// https://www.rfc-editor.org/rfc/rfc6455#section-4.2.1
+func checkUpgradeRequest(r *http.Request, opts *upgradeOptions) (string, string, error) {
+	if err := validateHandshakeHeaders(opts.responseHeader, true); err != nil {
+		return "", "", err
+	}
+
+	if !headerContains(r.Header, "Connection", "Upgrade") {
+		return "", "", ErrInvalidConnectionHeader
+	}
+	if !headerContains(r.Header, "Upgrade", "websocket") {
+		return "", "", ErrInvalidUpgradeHeader
+	}
+	if r.Method != http.MethodGet {
+		return "", "", ErrInvalidMethod
+	}
+	if !r.ProtoAtLeast(1, 1) {
+		return "", "", ErrBadHandshake
+	}
+	if r.Header.Get("Sec-WebSocket-Version") != "13" || len(r.Header.Values("Sec-WebSocket-Version")) != 1 {
+		return "", "", ErrUnsupportedVersion
+	}
+	key := r.Header.Get("Sec-WebSocket-Key")
+	if key == "" {
+		return "", "", ErrMissingSecKey
+	}
+	decodedKey, err := base64.StdEncoding.DecodeString(key)
+	if err != nil || len(decodedKey) != 16 || len(r.Header.Values("Sec-WebSocket-Key")) != 1 {
+		return "", "", ErrInvalidSecKey
+	}
+	offered, err := parseSubprotocolOffers(r.Header)
+	if err != nil {
+		return "", "", err
+	}
 	if opts.subprotocols != nil {
 		if err := validateSubprotocolOption(opts.subprotocols, opts.responseHeader); err != nil {
-			return nil, fmt.Errorf("%w: %w", ErrInvalidHandshakeHeader, err)
+			return "", "", fmt.Errorf("%w: %w", ErrInvalidHandshakeHeader, err)
 		}
 	}
 	subprotocol, err := validateSubprotocolSelection(opts.responseHeader, offered)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrInvalidHandshakeHeader, err)
+		return "", "", fmt.Errorf("%w: %w", ErrInvalidHandshakeHeader, err)
 	}
 	if subprotocol == "" {
 		subprotocol = selectSubprotocol(opts.subprotocols, offered)
 	}
 	if !upgradeOriginAllowed(r, opts.originCheck) {
-		return nil, ErrOriginNotAllowed
+		return "", "", ErrOriginNotAllowed
 	}
-	acceptKey := computeAcceptKey(key)
+	return computeAcceptKey(key), subprotocol, nil
 
-	// Handle extensions
+}
+
+// negotiateUpgradeExtensions negotiates the configured extensions with the
+// client's offer and returns the response's extra header fields.
+//
+// https://www.rfc-editor.org/rfc/rfc6455#section-9.1
+func negotiateUpgradeExtensions(r *http.Request, opts *upgradeOptions, subprotocol string) (http.Header, error) {
 	var responseHeader http.Header
 	if opts.responseHeader != nil {
 		responseHeader = opts.responseHeader.Clone()
@@ -1949,55 +2056,35 @@ func Upgrade(w http.ResponseWriter, r *http.Request, options ...UpgradeOption) (
 	if opts.subprotocols != nil && subprotocol != "" {
 		responseHeader.Set("Sec-WebSocket-Protocol", subprotocol)
 	}
+	return responseHeader, nil
+}
 
-	// Preserve direct Hijacker errors and use the standard controller to reach
-	// hijacking support through middleware that exposes Unwrap.
-	hj, ok := w.(http.Hijacker)
-	if !ok {
-		hj = http.NewResponseController(w)
-	}
-	conn, bufrw, err := hj.Hijack()
-	if err != nil {
-		if !ok && errors.Is(err, http.ErrNotSupported) {
-			return nil, ErrNotHijacker
-		}
-		return nil, fmt.Errorf("%w: %v", ErrHandshakeFailed, err)
-	}
-
-	// Build the response
-	var responseBuilder strings.Builder
-	responseBuilder.Grow(256)
-	responseBuilder.WriteString("HTTP/1.1 101 Switching Protocols\r\n")
-	responseBuilder.WriteString("Upgrade: websocket\r\n")
-	responseBuilder.WriteString("Connection: Upgrade\r\n")
-	responseBuilder.WriteString("Sec-WebSocket-Accept: ")
-	responseBuilder.WriteString(acceptKey)
-	responseBuilder.WriteString("\r\n")
-
+// writeUpgradeResponse writes and flushes the 101 Switching Protocols
+// response.
+func writeUpgradeResponse(w *bufio.Writer, acceptKey string, responseHeader http.Header) error {
+	w.WriteString("HTTP/1.1 101 Switching Protocols\r\n")
+	w.WriteString("Upgrade: websocket\r\n")
+	w.WriteString("Connection: Upgrade\r\n")
+	w.WriteString("Sec-WebSocket-Accept: ")
+	w.WriteString(acceptKey)
+	w.WriteString("\r\n")
 	for k, vs := range responseHeader {
 		for _, v := range vs {
-			responseBuilder.WriteString(k)
-			responseBuilder.WriteString(": ")
-			responseBuilder.WriteString(v)
-			responseBuilder.WriteString("\r\n")
+			w.WriteString(k)
+			w.WriteString(": ")
+			w.WriteString(v)
+			w.WriteString("\r\n")
 		}
 	}
-	responseBuilder.WriteString("\r\n")
-
-	// Send the response
-	if _, err = bufrw.WriteString(responseBuilder.String()); err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("%w: failed to write handshake response: %v", ErrHandshakeFailed, err)
+	// A bufio.Writer keeps its first error, so checking the last write
+	// covers them all.
+	if _, err := w.WriteString("\r\n"); err != nil {
+		return fmt.Errorf("%w: failed to write handshake response: %v", ErrHandshakeFailed, err)
 	}
-	if err = bufrw.Flush(); err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("%w: failed to flush handshake response: %v", ErrHandshakeFailed, err)
+	if err := w.Flush(); err != nil {
+		return fmt.Errorf("%w: failed to flush handshake response: %v", ErrHandshakeFailed, err)
 	}
-
-	ws := NewConn(conn, true, opts.extensions, WithMaxBytes(opts.maxBytes))
-	ws.subprotocol = subprotocol
-	ws.rw = bufrw
-	return ws, nil
+	return nil
 }
 
 // validateHandshakeHeaders checks caller fields before acquiring a transport.

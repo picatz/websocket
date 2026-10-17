@@ -222,11 +222,8 @@ func (r *deflateFrameReader) start(frame *Frame, n uint64) error {
 		return r.startBuffered(&r.frame, n)
 	}
 	if r.frame.Masked {
-		if err := readSmall(r.c.rw.Reader, r.frame.MaskKey[:]); err != nil {
-			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-				return io.ErrUnexpectedEOF
-			}
-			return fmt.Errorf("failed to read masking key: %w", err)
+		if err := readField(r.c.rw.Reader, r.frame.MaskKey[:], "masking key"); err != nil {
+			return err
 		}
 	}
 	return nil
