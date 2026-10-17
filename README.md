@@ -179,14 +179,19 @@ connection that closes first makes `Ping` return an error matching
 
 Each directory under [`examples`](examples) is a small program with tests:
 
-- [`echo`](examples/echo) echoes every message back.
+- [`echo`](examples/echo) echoes every message back, with an incoming size
+  limit and a graceful shutdown that closes each connection with
+  `StatusGoingAway`.
+- [`client`](examples/client) is a command-line client in the spirit of
+  `wscat`: standard input lines become messages and replies are printed.
 - [`keepalive`](examples/keepalive) pings clients on an interval and drops
   those that stop answering.
 - [`chat`](examples/chat) broadcasts messages to every connected client, with a
   bounded send queue per client.
 - [`pubsub`](examples/pubsub) delivers messages by topic over a small JSON
   protocol.
-- [`rpc`](examples/rpc) answers JSON requests sent as binary messages.
+- [`rpc`](examples/rpc) is a JSON-RPC 2.0 server that runs calls
+  concurrently, with a bound per connection.
 - [`browser`](examples/browser) serves a page running Go compiled to
   WebAssembly that talks to the server with the `browser` package. Start it
   with `go run ./examples/browser`.

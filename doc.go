@@ -105,10 +105,19 @@
 // compressors are pooled across connections while idle.
 //
 // The examples directory holds tested programs for common patterns:
-// [github.com/picatz/websocket/examples/keepalive],
-// [github.com/picatz/websocket/examples/chat],
-// [github.com/picatz/websocket/examples/pubsub] and, for js/wasm,
-// [github.com/picatz/websocket/examples/browser].
+//
+//   - [github.com/picatz/websocket/examples/echo]: a server with limits and a
+//     graceful shutdown.
+//   - [github.com/picatz/websocket/examples/client]: a command-line client.
+//   - [github.com/picatz/websocket/examples/keepalive]: dropping peers that
+//     stop answering Pings.
+//   - [github.com/picatz/websocket/examples/chat]: broadcasting with a bounded
+//     queue per client.
+//   - [github.com/picatz/websocket/examples/pubsub]: topics over a JSON
+//     protocol.
+//   - [github.com/picatz/websocket/examples/rpc]: JSON-RPC 2.0 with concurrent
+//     calls.
+//   - [github.com/picatz/websocket/examples/browser]: a Go WebAssembly page.
 //
 // [RFC 6455]: https://www.rfc-editor.org/rfc/rfc6455.html
 // [RFC 7692]: https://www.rfc-editor.org/rfc/rfc7692.html
