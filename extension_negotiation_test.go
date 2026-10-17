@@ -133,12 +133,12 @@ func TestDialExtensionSelection(t *testing.T) {
 		{name: "malformed second field", offers: []string{"example"}, selection: []string{"example", "other;"}},
 		{name: "bad quote", offers: []string{"example"}, selection: []string{`example; option="a,b"`}},
 		{name: "callback error", offers: []string{"example"}, selection: []string{"example"}, callback: callbackError},
-		{name: "builtin quoted selection", offers: []string{"permessage-deflate"}, selection: []string{`permessage-deflate; server_max_window_bits="15"`}, builtin: true, valid: true},
-		{name: "builtin declined", offers: []string{"permessage-deflate"}, builtin: true, valid: true},
-		{name: "builtin duplicate parameter", offers: []string{"permessage-deflate"}, selection: []string{"permessage-deflate; server_max_window_bits=10; server_max_window_bits=15"}, builtin: true},
-		{name: "builtin unknown parameter", offers: []string{"permessage-deflate"}, selection: []string{"permessage-deflate; unknown"}, builtin: true},
-		{name: "builtin invalid flag", offers: []string{"permessage-deflate"}, selection: []string{"permessage-deflate; client_no_context_takeover=1"}, builtin: true},
-		{name: "builtin missing window value", offers: []string{"permessage-deflate"}, selection: []string{"permessage-deflate; client_max_window_bits"}, builtin: true},
+		{name: "builtin quoted selection", offers: []string{"permessage-deflate; client_max_window_bits"}, selection: []string{`permessage-deflate; server_max_window_bits="15"`}, builtin: true, valid: true},
+		{name: "builtin declined", offers: []string{"permessage-deflate; client_max_window_bits"}, builtin: true, valid: true},
+		{name: "builtin duplicate parameter", offers: []string{"permessage-deflate; client_max_window_bits"}, selection: []string{"permessage-deflate; server_max_window_bits=10; server_max_window_bits=15"}, builtin: true},
+		{name: "builtin unknown parameter", offers: []string{"permessage-deflate; client_max_window_bits"}, selection: []string{"permessage-deflate; unknown"}, builtin: true},
+		{name: "builtin invalid flag", offers: []string{"permessage-deflate; client_max_window_bits"}, selection: []string{"permessage-deflate; client_no_context_takeover=1"}, builtin: true},
+		{name: "builtin missing window value", offers: []string{"permessage-deflate; client_max_window_bits"}, selection: []string{"permessage-deflate; client_max_window_bits"}, builtin: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			peerClosed := make(chan error, 1)

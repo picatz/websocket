@@ -9,12 +9,10 @@ import (
 	"fmt"
 	"io"
 	"math/rand/v2"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -27,15 +25,17 @@ func TestPMDUpgradeDirectionalWindows(t *testing.T) {
 		{"default", "permessage-deflate", "permessage-deflate", nil},
 		{"bare client", "permessage-deflate; client_max_window_bits", "permessage-deflate; client_max_window_bits=15", nil},
 		{"server 15", "permessage-deflate; server_max_window_bits=15", "permessage-deflate; server_max_window_bits=15", nil},
-		{"unsupported then bare", "permessage-deflate; server_max_window_bits=9; client_no_context_takeover, permessage-deflate", "permessage-deflate", nil},
-		{"unsupported then supported", "permessage-deflate; server_max_window_bits=14, permessage-deflate; server_max_window_bits=15", "permessage-deflate; server_max_window_bits=15", nil},
+		{"small server window first", "permessage-deflate; server_max_window_bits=9; client_no_context_takeover, permessage-deflate", "permessage-deflate; client_no_context_takeover; server_max_window_bits=9", nil},
+		{"preference order", "permessage-deflate; server_max_window_bits=14, permessage-deflate; server_max_window_bits=15", "permessage-deflate; server_max_window_bits=14", nil},
+		{"configured server bound", "permessage-deflate; server_max_window_bits=12", "permessage-deflate; server_max_window_bits=10", []PerMessageDeflateOption{WithServerMaxWindowBits(10)}},
+		{"unsolicited server bound", "permessage-deflate", "permessage-deflate; server_max_window_bits=10", []PerMessageDeflateOption{WithServerMaxWindowBits(10)}},
 		{"unoffered client bound", "permessage-deflate", "", []PerMessageDeflateOption{WithClientMaxWindowBits(9)}},
 		{"unoffered client 15 omitted", "permessage-deflate", "permessage-deflate", []PerMessageDeflateOption{WithClientMaxWindowBits(15)}},
 		{"unsolicited server 15", "permessage-deflate", "permessage-deflate; server_max_window_bits=15", []PerMessageDeflateOption{WithServerMaxWindowBits(15)}},
 		{"peer limit", "permessage-deflate; client_max_window_bits", "permessage-deflate; client_max_window_bits=9", []PerMessageDeflateOption{WithClientMaxWindowBits(9)}},
 		{"lower peer hint", "permessage-deflate; client_max_window_bits=8", "permessage-deflate; client_max_window_bits=8", []PerMessageDeflateOption{WithClientMaxWindowBits(9)}},
 		{"higher peer hint", "permessage-deflate; client_max_window_bits=14", "permessage-deflate; client_max_window_bits=9", []PerMessageDeflateOption{WithClientMaxWindowBits(9)}},
-		{"no union across offers", "permessage-deflate; client_max_window_bits=9; server_max_window_bits=9, permessage-deflate", "", []PerMessageDeflateOption{WithClientMaxWindowBits(9)}},
+		{"no union across offers", "permessage-deflate; server_max_window_bits=9, permessage-deflate; client_max_window_bits", "permessage-deflate; client_max_window_bits=9", []PerMessageDeflateOption{WithClientMaxWindowBits(9)}},
 		{"fallback permitting peer bound", "permessage-deflate, permessage-deflate; client_max_window_bits", "permessage-deflate; client_max_window_bits=9", []PerMessageDeflateOption{WithClientMaxWindowBits(9)}},
 		{"both flags unsolicited", "permessage-deflate", "permessage-deflate; client_no_context_takeover; server_no_context_takeover", []PerMessageDeflateOption{WithClientNoContextTakeover(), WithServerNoContextTakeover()}},
 	} {
@@ -48,11 +48,7 @@ func TestPMDUpgradeDirectionalWindows(t *testing.T) {
 			client := fmt.Sprintf("permessage-deflate; client_max_window_bits=%d", bits)
 			checkPMDUpgrade(t, client, client)
 			server := fmt.Sprintf("permessage-deflate; server_max_window_bits=%d", bits)
-			want := ""
-			if bits == 15 {
-				want = server
-			}
-			checkPMDUpgrade(t, server, want)
+			checkPMDUpgrade(t, server, server)
 		})
 	}
 }
@@ -90,11 +86,11 @@ func TestPMDDialDirectionalWindows(t *testing.T) {
 	}{
 		{"default", "permessage-deflate", nil, true},
 		{"declined", "", []PerMessageDeflateOption{WithServerMaxWindowBits(9), WithServerNoContextTakeover()}, true},
-		{"unsolicited client 15", "permessage-deflate; client_max_window_bits=15", nil, false},
-		{"unsolicited client 9", "permessage-deflate; client_max_window_bits=9", nil, false},
+		{"default bare offer allows client 15", "permessage-deflate; client_max_window_bits=15", nil, true},
+		{"default bare offer allows client 8", "permessage-deflate; client_max_window_bits=8", nil, true},
 		{"offered client omitted", "permessage-deflate", []PerMessageDeflateOption{WithClientMaxWindowBits(15)}, true},
 		{"offered client 15", "permessage-deflate; client_max_window_bits=15", []PerMessageDeflateOption{WithClientMaxWindowBits(15)}, true},
-		{"unsupported client 9", "permessage-deflate; client_max_window_bits=9", []PerMessageDeflateOption{WithClientMaxWindowBits(15)}, false},
+		{"smaller client 9", "permessage-deflate; client_max_window_bits=9", []PerMessageDeflateOption{WithClientMaxWindowBits(15)}, true},
 		{"bare response client", "permessage-deflate; client_max_window_bits", []PerMessageDeflateOption{WithClientMaxWindowBits(15)}, false},
 		{"missing server 15", "permessage-deflate", []PerMessageDeflateOption{WithServerMaxWindowBits(15)}, false},
 		{"missing server 9", "permessage-deflate", []PerMessageDeflateOption{WithServerMaxWindowBits(9)}, false},
@@ -156,39 +152,57 @@ func TestPMDDialDirectionalWindows(t *testing.T) {
 	}
 }
 
-func TestPMDLocalWindowRejectedBeforeTransport(t *testing.T) {
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var connects atomic.Int32
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		for {
-			c, err := l.Accept()
+// TestPMDSmallLocalWindowsRoundTrip negotiates every send window end to end,
+// in both roles, and checks each compressed message stays inside its window.
+func TestPMDSmallLocalWindowsRoundTrip(t *testing.T) {
+	message := bytes.Repeat([]byte("window bounded permessage-deflate "), 2000)
+	for bits := 8; bits <= 15; bits++ {
+		t.Run(fmt.Sprint(bits), func(t *testing.T) {
+			server := NewPerMessageDeflateExtension(WithServerMaxWindowBits(bits))
+			client := NewPerMessageDeflateExtension(WithClientMaxWindowBits(bits))
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				c, err := Upgrade(w, r, WithUpgradeExtensions(server))
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				defer c.Close()
+				for {
+					kind, data, err := c.ReadMessage()
+					if err != nil {
+						return
+					}
+					if err := c.WriteMessage(kind, data); err != nil {
+						t.Error(err)
+						return
+					}
+				}
+			}))
+			defer srv.Close()
+			c, resp, err := Dial(t.Context(), "ws"+srv.URL[4:], WithExtensions(client))
 			if err != nil {
-				return
+				t.Fatal(err)
 			}
-			connects.Add(1)
-			c.Close()
-		}
-	}()
-	defer func() { l.Close(); <-done }()
-	for bits := 8; bits < 15; bits++ {
-		pmd := NewPerMessageDeflateExtension(WithClientMaxWindowBits(bits))
-		c, resp, err := Dial(t.Context(), "ws://"+l.Addr().String(), WithExtensions(pmd))
-		if c != nil || resp != nil || !errors.Is(err, ErrInvalidExtension) || !errors.Is(err, ErrInvalidHandshakeHeader) || connects.Load() != 0 {
-			t.Fatalf("client window %d: %v, %v, %v; connects %d", bits, c, resp, err, connects.Load())
-		}
-		pmd = NewPerMessageDeflateExtension(WithServerMaxWindowBits(bits))
-		w := &countingHijacker{ResponseRecorder: httptest.NewRecorder()}
-		r := upgradeRequest()
-		r.Header.Set("Sec-WebSocket-Extensions", "permessage-deflate")
-		c, err = Upgrade(w, r, WithUpgradeExtensions(pmd))
-		if c != nil || !errors.Is(err, ErrInvalidExtension) || !errors.Is(err, ErrInvalidHandshakeHeader) || w.calls != 0 || w.Body.Len() != 0 {
-			t.Fatalf("server window %d: %v, %v; hijacks %d", bits, c, err, w.calls)
-		}
+			defer c.Close()
+			want := fmt.Sprintf("permessage-deflate; client_max_window_bits=%d; server_max_window_bits=%d", bits, bits)
+			if got := resp.Header.Get("Sec-WebSocket-Extensions"); got != want {
+				t.Fatalf("selected %q, want %q", got, want)
+			}
+			for range 3 {
+				if err := c.WriteMessage(BinaryMessage, message); err != nil {
+					t.Fatal(err)
+				}
+				_, got, err := c.ReadMessage()
+				if err != nil || !bytes.Equal(got, message) {
+					t.Fatalf("echo = %d bytes, %v", len(got), err)
+				}
+			}
+			for _, p := range []*perMessageDeflate{server.(*perMessageDeflate), client.(*perMessageDeflate)} {
+				if got := p.localWindowBits(); got != bits {
+					t.Fatalf("local window = %d, want %d", got, bits)
+				}
+			}
+		})
 	}
 }
 
@@ -211,7 +225,7 @@ func TestPMDOfferAndResponseState(t *testing.T) {
 	}
 	for _, bits := range []int{-1, 0, 7, 16, 100} {
 		p := NewPerMessageDeflateExtension(WithClientMaxWindowBits(bits), WithServerMaxWindowBits(bits))
-		if p.Offer() != "permessage-deflate" {
+		if p.Offer() != "permessage-deflate; client_max_window_bits" {
 			t.Fatalf("legacy invalid-option behavior changed for %d", bits)
 		}
 	}
@@ -232,7 +246,7 @@ func TestPMDClientSelectedWindowCapability(t *testing.T) {
 	for bits := 8; bits <= 15; bits++ {
 		p := NewPerMessageDeflateExtension(WithClientMaxWindowBits(15))
 		err := p.Negotiate(fmt.Sprintf("permessage-deflate; client_max_window_bits=%d", bits))
-		if (err == nil) != (bits == 15) || p.IsEnabled() != (bits == 15) {
+		if err != nil || !p.IsEnabled() || p.(*perMessageDeflate).localWindowBits() != bits {
 			t.Fatalf("selected local window %d: enabled %t, error %v", bits, p.IsEnabled(), err)
 		}
 	}
@@ -306,21 +320,21 @@ func TestPMDSmallerPeerWindows(t *testing.T) {
 	}
 }
 
-func TestPMDDirectConnLocalWindowGuard(t *testing.T) {
+func TestPMDDirectConnRoleSwitchHonorsWindow(t *testing.T) {
 	p := NewPerMessageDeflateExtension()
 	if err := p.Negotiate("permessage-deflate; server_max_window_bits=9"); err != nil {
 		t.Fatal(err)
 	}
 	// Direct Negotiate is the client response path. If subsequently used as a
-	// server, NewConn must bind that role and cannot emit a false 9-bit promise.
+	// server, NewConn binds that role and the 9-bit promise applies to sending.
 	raw := &memoryConn{Reader: bytes.NewReader(nil)}
 	c := NewConn(raw, true, []Extension{p})
 	defer c.conn.Close()
-	if err := p.ProcessOutgoingFrame(&Frame{Final: true, Opcode: BinaryMessage, Payload: []byte("data")}); !errors.Is(err, ErrInvalidExtension) {
-		t.Fatalf("direct transform error = %v", err)
+	if got := p.(*perMessageDeflate).localWindowBits(); got != 9 {
+		t.Fatalf("server send window = %d, want 9", got)
 	}
-	if err := c.WriteMessage(BinaryMessage, []byte("data")); err == nil || raw.written.Len() != 0 {
-		t.Fatalf("unsupported direct send = %v, wire %x", err, raw.written.Bytes())
+	if err := c.WriteMessage(BinaryMessage, []byte("data")); err != nil || raw.written.Len() == 0 {
+		t.Fatalf("direct send = %v, wire %x", err, raw.written.Bytes())
 	}
 }
 
@@ -344,7 +358,7 @@ func TestPMDDirectServerNegotiation(t *testing.T) {
 	}
 }
 
-func TestPMDDirectServerUnsupportedParameters(t *testing.T) {
+func TestPMDDirectServerWindowParameters(t *testing.T) {
 	for _, local := range []bool{false, true} {
 		option := WithClientMaxWindowBits(9)
 		if local {
@@ -355,11 +369,13 @@ func TestPMDDirectServerUnsupportedParameters(t *testing.T) {
 		c := NewConn(raw, true, []Extension{p})
 		err := p.Negotiate("permessage-deflate")
 		c.conn.Close()
-		if (err != nil) != local || p.IsEnabled() || raw.written.Len() != 0 {
+		// A server may always bound its own window (RFC 7692 section 7.1.2.1),
+		// but cannot bound the client's without an offered parameter.
+		if err != nil || p.IsEnabled() != local || raw.written.Len() != 0 {
 			t.Fatalf("direct server local=%t: %v, enabled %t, wire %x", local, err, p.IsEnabled(), raw.written.Bytes())
 		}
-		if local && !errors.Is(err, ErrInvalidExtension) {
-			t.Fatalf("unsupported local window cause = %v", err)
+		if local && p.Offer() != "permessage-deflate; server_max_window_bits=9" {
+			t.Fatalf("local window response = %q", p.Offer())
 		}
 	}
 }
@@ -369,31 +385,31 @@ func TestPMDIndependentZlibWindow(t *testing.T) {
 	if err != nil {
 		t.Skip("independent window oracle requires Python 3 with its standard-library zlib module")
 	}
-	type vector struct {
-		Name  string
-		Bits  int
-		Plain []byte
-		Wire  []byte
+	type message struct{ Plain, Wire []byte }
+	type stream struct {
+		Name     string
+		Bits     int
+		Takeover bool
+		Messages []message
 	}
-	var vectors []vector
+	var streams []stream
 	rng := rand.New(rand.NewPCG(1, 2))
 	block := make([]byte, 2048)
 	for i := range block {
 		block[i] = byte(rng.Uint32())
 	}
-	plain := bytes.Repeat(block, 3) // Historical false 9-bit claim fails here.
-	for _, server := range []bool{false, true} {
-		for _, explicit := range []bool{false, true} {
+	plain := bytes.Repeat(block, 3) // Distances of 2048 exceed windows below 12 bits.
+	text := bytes.Repeat([]byte("context takeover reuses this sentence. "), 40)
+	for bits := 8; bits <= 15; bits++ {
+		for _, server := range []bool{false, true} {
 			for flags := 0; flags < 4; flags++ {
-				var options []PerMessageDeflateOption
 				params := pmdParameters{clientNoContextTakeover: flags&1 != 0, serverNoContextTakeover: flags&2 != 0}
-				if explicit {
-					if server {
-						params.serverMaxWindowBits = 15
-					} else {
-						options = append(options, WithClientMaxWindowBits(15))
-						params.clientMaxWindowBits = 15
-					}
+				var options []PerMessageDeflateOption
+				if server {
+					params.serverMaxWindowBits = bits
+				} else {
+					options = append(options, WithClientMaxWindowBits(bits))
+					params.clientMaxWindowBits = bits
 				}
 				p := NewPerMessageDeflateExtension(options...).(*perMessageDeflate)
 				if server {
@@ -403,45 +419,54 @@ func TestPMDIndependentZlibWindow(t *testing.T) {
 				if err := p.Negotiate(params.String()); err != nil || !p.IsEnabled() {
 					t.Fatal(err)
 				}
-				for repeat := 0; repeat < 2; repeat++ {
-					f := &Frame{Final: true, Opcode: BinaryMessage, Payload: plain}
+				st := stream{Name: fmt.Sprintf("bits=%d server=%t flags=%d", bits, server, flags), Bits: bits, Takeover: !p.localNoContextTakeover()}
+				for _, m := range [][]byte{plain, text, text, plain, nil} {
+					f := &Frame{Final: true, Opcode: BinaryMessage, Payload: m}
 					if err := p.ProcessOutgoingFrame(f); err != nil || !f.Rsv1 {
 						t.Fatal(err)
 					}
-					vectors = append(vectors, vector{fmt.Sprintf("server=%t explicit=%t flags=%d message=%d", server, explicit, flags, repeat), 15, plain, f.Payload})
+					st.Messages = append(st.Messages, message{m, f.Payload})
 				}
+				streams = append(streams, st)
 			}
 		}
 	}
-	input, err := json.Marshal(vectors)
+	input, err := json.Marshal(streams)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Small output buffers force zlib to retain only its configured history;
 	// a single large output buffer can conceal an invalid distance/window.
+	// With context takeover one decompressor spans the stream's messages
+	// (RFC 7692 section 7.2.2); otherwise each message starts afresh.
 	const oracle = `
 import base64, json, sys, zlib
-def decode(wire, bits):
-    d = zlib.decompressobj(-bits)
-    pending = wire + bytes.fromhex('0000ffff010000ffff')
+def decode(d, wire):
+    pending = wire + bytes.fromhex('0000ffff')
     out = bytearray()
     while pending:
         out += d.decompress(pending, 257)
         pending = d.unconsumed_tail
-    out += d.flush()
-    assert d.eof and not d.unused_data
+    assert not d.eof and not d.unused_data
     return bytes(out)
-vectors = json.load(sys.stdin)
-for v in vectors:
-    assert decode(base64.b64decode(v['Wire']), v['Bits']) == base64.b64decode(v['Plain']), v['Name']
-# Check the oracle actually rejects the original false small-window promise.
+streams = json.load(sys.stdin)
+count = 0
+for s in streams:
+    d = zlib.decompressobj(-s['Bits'])
+    for m in s['Messages']:
+        if not s['Takeover']:
+            d = zlib.decompressobj(-s['Bits'])
+        assert decode(d, base64.b64decode(m['Wire'] or '')) == base64.b64decode(m['Plain'] or ''), s['Name']
+        count += 1
+# Check the oracle rejects a 15-bit stream decoded with a 9-bit window.
+wide = [s for s in streams if s['Bits'] == 15][0]
 try:
-    decode(base64.b64decode(vectors[0]['Wire']), 9)
+    decode(zlib.decompressobj(-9), base64.b64decode(wide['Messages'][0]['Wire']))
 except zlib.error:
     pass
 else:
     raise AssertionError('negative 9-bit control did not exercise a long distance')
-print('zlib %s: %d independent 15-bit send vectors pass; false 9-bit control rejected' % (zlib.ZLIB_RUNTIME_VERSION, len(vectors)))
+print('zlib %s: %d messages in %d streams pass; false 9-bit control rejected' % (zlib.ZLIB_RUNTIME_VERSION, count, len(streams)))
 `
 	cmd := exec.CommandContext(t.Context(), python, "-c", oracle)
 	cmd.Stdin = bytes.NewReader(input)

@@ -238,18 +238,25 @@ func TestReadMessageBuiltinReservedBits(t *testing.T) {
 	for _, b0 := range []byte{0xa2, 0x92, 0xe2, 0xf2, 0xc0, 0xc8, 0xc9, 0xca} {
 		requireHeaderRejection(t, []byte{b0, 125}, false, 0, []Extension{pmd}, ErrUnsupportedExtensions)
 	}
-	// Enabled PMD and a legacy custom transform have no composition contract,
-	// regardless of order. Reject before either transform or body processing.
+	// A custom frame extension composed with PMD owns RSV2 in either order,
+	// for uncompressed and compressed (RSV1) messages alike.
 	for _, first := range []bool{false, true} {
-		custom := &headerTransformExtension{enabled: true, process: func(f *Frame) error { f.Rsv2 = false; return nil }}
-		extensions := []Extension{pmd, custom}
-		if first {
-			extensions[0], extensions[1] = extensions[1], extensions[0]
-		}
-		c := frameConn([]byte{0xa2, 1, 'x'}, false, 1)
-		c.extensions = extensions
-		if _, data, err := c.ReadMessage(); !errors.Is(err, ErrUnsupportedExtensionComposition) || data != nil {
-			t.Fatalf("custom first %v: %q, %v", first, data, err)
+		for _, wire := range [][]byte{{0xa2, 1, 'x'}, {0xe2, 3, 0xaa, 0x00, 0x00}} {
+			// Earlier rejections closed pmd's receive state; use a fresh one.
+			pmd := NewPerMessageDeflateExtension()
+			if err := pmd.Negotiate("permessage-deflate"); err != nil {
+				t.Fatal(err)
+			}
+			custom := &headerTransformExtension{enabled: true, process: func(f *Frame) error { f.Rsv2 = false; return nil }}
+			extensions := []Extension{pmd, custom}
+			if first {
+				extensions[0], extensions[1] = extensions[1], extensions[0]
+			}
+			c := frameConn(wire, false, 3)
+			c.extensions = extensions
+			if _, data, err := c.ReadMessage(); err != nil || string(data) != "x" {
+				t.Fatalf("custom first %v, wire %x: %q, %v", first, wire, data, err)
+			}
 		}
 	}
 	// Uncompressed continuations still consume the aggregate message budget.

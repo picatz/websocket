@@ -1,6 +1,7 @@
 package websocket
 
 import (
+	"cmp"
 	"fmt"
 	"strconv"
 	"strings"
@@ -35,30 +36,6 @@ func (p pmdParameters) String() string {
 	return strings.Join(params, "; ")
 }
 
-func (p pmdParameters) validateLocalWindow(server bool) error {
-	bits, name := p.clientMaxWindowBits, "client_max_window_bits"
-	if server {
-		bits, name = p.serverMaxWindowBits, "server_max_window_bits"
-	}
-	// compress/flate's normal encoder has a fixed 32 KiB window. Compression
-	// level is a separate control and cannot enforce a smaller window.
-	if bits != 0 && bits != 15 {
-		return fmt.Errorf("%w: local compressor requires %s=15 (got %d)", ErrInvalidExtension, name, bits)
-	}
-	return nil
-}
-
-func validatePMDConfiguration(extensions []Extension, server bool) error {
-	for _, ext := range extensions {
-		if pmd, ok := ext.(*perMessageDeflate); ok {
-			if err := pmd.configured.validateLocalWindow(server); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
 func (pmd *perMessageDeflate) Name() string { return "permessage-deflate" }
 
 func (pmd *perMessageDeflate) Offer() string {
@@ -68,7 +45,7 @@ func (pmd *perMessageDeflate) Offer() string {
 	// Dial calls Offer before touching the transport. Keep exactly what was
 	// offered for later validation, rather than reconstructing it from the
 	// selected response or changing configuration during negotiation.
-	pmd.offered, pmd.offerSet = pmd.configured, true
+	pmd.offered, pmd.offerSet = pmd.clientOffer(), true
 	return pmd.offered.String()
 }
 
@@ -89,11 +66,9 @@ func (pmd *perMessageDeflate) Negotiate(response string) error {
 
 func (pmd *perMessageDeflate) negotiate(extensions []extensionOffer, server bool) error {
 	pmd.enabled, pmd.negotiated, pmd.server = false, pmdParameters{}, server
-	if err := pmd.configured.validateLocalWindow(server); err != nil {
-		return err
-	}
+	pmd.sendInit = false
 	if !pmd.offerSet {
-		pmd.offered, pmd.offerSet = pmd.configured, true
+		pmd.offered, pmd.offerSet = pmd.clientOffer(), true
 	}
 	var selected bool
 	for _, ext := range extensions {
@@ -114,9 +89,6 @@ func (pmd *perMessageDeflate) negotiate(extensions []extensionOffer, server bool
 				params, err = pmd.selectParameters(params)
 			} else {
 				err = validatePMDResponse(params, pmd.offered)
-				if err == nil {
-					err = params.validateLocalWindow(false)
-				}
 			}
 		}
 		if err != nil {
@@ -186,15 +158,75 @@ func validatePMDResponse(response, offer pmdParameters) error {
 	return nil
 }
 
-func (pmd *perMessageDeflate) selectParameters(offer pmdParameters) (pmdParameters, error) {
-	if err := offer.validateLocalWindow(true); err != nil {
-		return pmdParameters{}, err
+// clientOffer is the configuration a client offers. Without an explicit
+// client window it offers a bare client_max_window_bits, declaring support for
+// any window the server selects (RFC 7692 section 7.1.2.2).
+func (pmd *perMessageDeflate) clientOffer() pmdParameters {
+	p := pmd.configured
+	if p.clientMaxWindowBits == 0 {
+		p.clientMaxWindowBits = -1
 	}
+	if pmd.memoryLimit > 0 {
+		if bits, ok := pmd.budgetWindowBits(); ok {
+			p.serverMaxWindowBits = boundWindow(p.serverMaxWindowBits, bits)
+			if bits < 15 && (p.clientMaxWindowBits < 0 || bits < p.clientMaxWindowBits) {
+				p.clientMaxWindowBits = bits // A bare parameter allows any value.
+			}
+		} else {
+			p.serverNoContextTakeover = true
+			p.clientNoContextTakeover = true
+		}
+	}
+	return p
+}
+
+// budgetWindowBits is the largest window whose history fits in half the memory
+// limit, and false when not even the smallest 2^8-byte window fits.
+func (pmd *perMessageDeflate) budgetWindowBits() (int, bool) {
+	half := pmd.memoryLimit / 2
+	if half < 1<<8 {
+		return 0, false
+	}
+	bits := 15
+	for 1<<bits > half {
+		bits--
+	}
+	return bits, true
+}
+
+// boundWindow lowers a window parameter to bits. Zero (absent) means 15 and
+// stays absent when no bound is needed.
+func boundWindow(param, bits int) int {
+	if bits >= cmp.Or(param, 15) {
+		return param
+	}
+	return bits
+}
+
+func (pmd *perMessageDeflate) selectParameters(offer pmdParameters) (pmdParameters, error) {
 	p := pmd.configured
 	p.clientNoContextTakeover = p.clientNoContextTakeover || offer.clientNoContextTakeover
 	p.serverNoContextTakeover = p.serverNoContextTakeover || offer.serverNoContextTakeover
+	// An offered server window is a constraint the response must meet with
+	// the same or a smaller value. A configured window may be included even
+	// when the client did not offer one (RFC 7692 section 7.1.2.1).
 	if offer.serverMaxWindowBits != 0 {
-		p.serverMaxWindowBits = 15
+		p.serverMaxWindowBits = min(offer.serverMaxWindowBits, cmp.Or(p.serverMaxWindowBits, 15))
+	}
+	if pmd.memoryLimit > 0 {
+		if bits, ok := pmd.budgetWindowBits(); ok {
+			p.serverMaxWindowBits = boundWindow(p.serverMaxWindowBits, bits)
+			if offer.clientMaxWindowBits != 0 {
+				p.clientMaxWindowBits = boundWindow(p.clientMaxWindowBits, bits)
+			} else if bits < 15 && p.clientMaxWindowBits == 0 {
+				// The client's window cannot be bounded without its offer
+				// (section 7.1.2.2), but its context can always be refused.
+				p.clientNoContextTakeover = true
+			}
+		} else {
+			p.serverNoContextTakeover = true
+			p.clientNoContextTakeover = true
+		}
 	}
 	if offer.clientMaxWindowBits != 0 {
 		if p.clientMaxWindowBits == 0 {
@@ -212,6 +244,36 @@ func (pmd *perMessageDeflate) selectParameters(offer pmdParameters) (pmdParamete
 		p.clientMaxWindowBits = 0
 	}
 	return p, validatePMDResponse(p, offer)
+}
+
+// localWindowBits is the LZ77 window this endpoint compresses with: the
+// negotiated limit for its role, or 15 when none was agreed. A client also
+// honors the hint in its own offer (RFC 7692 section 7.2.1).
+func (pmd *perMessageDeflate) localWindowBits() int {
+	if pmd.server {
+		return cmp.Or(pmd.negotiated.serverMaxWindowBits, 15)
+	}
+	bits := 15
+	if b := pmd.negotiated.clientMaxWindowBits; b > 0 {
+		bits = b
+	}
+	if b := pmd.offered.clientMaxWindowBits; b > 0 {
+		bits = min(bits, b)
+	}
+	return bits
+}
+
+// peerWindowBits is the LZ77 window the peer compresses with: the negotiated
+// limit for the peer's role, or 15 when none was agreed.
+func (pmd *perMessageDeflate) peerWindowBits() int {
+	bits := pmd.negotiated.serverMaxWindowBits
+	if pmd.server {
+		bits = pmd.negotiated.clientMaxWindowBits
+	}
+	if bits <= 0 {
+		return 15
+	}
+	return bits
 }
 
 func (pmd *perMessageDeflate) localNoContextTakeover() bool {
