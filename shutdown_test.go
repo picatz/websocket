@@ -91,7 +91,7 @@ func TestShutdownWithReadLoop(t *testing.T) {
 			peer <- err
 			_, _ = io.Copy(io.Discard, b)
 		}()
-		c := websocket.NewConn(a, websocket.ConnConfig{})
+		c := mustNewConn(a, websocket.ConnConfig{})
 
 		reads := make(chan error, 1)
 		go func() {
