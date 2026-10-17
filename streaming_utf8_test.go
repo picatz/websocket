@@ -62,7 +62,7 @@ func TestReadMessageRejectsUnfinishedTextFrame(t *testing.T) {
 					c := &streamChoppedConn{chunks: streamParts(server, payload, 2+split, 2+len(prefix)), tailErr: streamWithheld}
 					ws := newTestConn(c, ConnConfig{Server: server})
 					_, p, err := ws.ReadMessage()
-					if err != ErrInvalidFrame || p != nil || c.tailReads != 0 || c.closes != 1 {
+					if err != errInvalidFrame || p != nil || c.tailReads != 0 || c.closes != 1 {
 						t.Fatalf("err=%v p=%x tailReads=%d closes=%d", err, p, c.tailReads, c.closes)
 					}
 					if code := binary.BigEndian.Uint16(failureClosePayload(t, c.written.Bytes(), server)); code != 1007 {
@@ -253,7 +253,7 @@ func TestPayloadReaderCrossFrameCarryAndErrors(t *testing.T) {
 			}
 			if bytes.Equal(p, []byte{0xf4, 0x90}) {
 				failure, ok := err.(*readFailure)
-				if !ok || failure.code != 1007 || failure.cause != ErrInvalidFrame {
+				if !ok || failure.code != 1007 || failure.cause != errInvalidFrame {
 					t.Fatalf("typed invalid err=%v", err)
 				}
 			} else if (tailErr == io.EOF && err != nil) || (tailErr != io.EOF && !errors.Is(err, tailErr)) {
@@ -279,7 +279,7 @@ func TestPayloadReaderRejectsBeforeWithheldSuffix(t *testing.T) {
 				rr := &payloadReader{text: true, r: bufio.NewReader(raw), remaining: int64(len(wire) + 100), key: key, masked: masked}
 				_, err := io.ReadAll(rr)
 				failure, ok := err.(*readFailure)
-				if !ok || failure.code != 1007 || failure.cause != ErrInvalidFrame || raw.tailReads != 0 {
+				if !ok || failure.code != 1007 || failure.cause != errInvalidFrame || raw.tailReads != 0 {
 					t.Fatalf("masked=%v prefix=%x split=%d err=%v tailreads=%d", masked, prefix, split, err, raw.tailReads)
 				}
 			}
@@ -407,7 +407,7 @@ func TestReadMessageInvalidRuneBridgeWithinUnfinishedContinuation(t *testing.T) 
 				}
 				return true
 			}
-			if _, _, err := c.ReadMessage(); err != ErrInvalidFrame || raw.tailReads != 0 || pings != 1 {
+			if _, _, err := c.ReadMessage(); err != errInvalidFrame || raw.tailReads != 0 || pings != 1 {
 				t.Fatalf("server=%v prefix=%x err=%v tail=%d pings=%d", server, prefix, err, raw.tailReads, pings)
 			}
 			if code := binary.BigEndian.Uint16(failureClosePayload(t, raw.written.Bytes(), server)); code != 1007 {
@@ -449,7 +449,7 @@ func TestReadMessageTextHugeDeclarationIsIncremental(t *testing.T) {
 			raw := &streamChoppedConn{chunks: [][]byte{h, p}, tailErr: io.EOF}
 			_, _, err := newTestConn(raw, ConnConfig{Server: server, MaxMessageSize: -1}).ReadMessage()
 			if len(prefix) > 0 && prefix[0] == 0xff {
-				if err != ErrInvalidFrame || raw.tailReads != 0 {
+				if err != errInvalidFrame || raw.tailReads != 0 {
 					t.Fatal(err, raw.tailReads)
 				}
 			} else if !errors.Is(err, io.ErrUnexpectedEOF) || raw.written.Len() != 0 {
@@ -480,7 +480,7 @@ func FuzzUTF8NetworkChunks(f *testing.F) {
 			if err != nil || op != TextMessage || !bytes.Equal(got, p) {
 				t.Fatalf("valid %x got=%x op=%v err=%v", p, got, op, err)
 			}
-		} else if err != ErrInvalidFrame || got != nil || op != 0 {
+		} else if err != errInvalidFrame || got != nil || op != 0 {
 			t.Fatalf("invalid %x got=%x op=%v err=%v", p, got, op, err)
 		}
 	})

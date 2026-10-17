@@ -78,7 +78,9 @@
 // Connections reject incoming messages larger than DefaultMaxMessageSize
 // (1 MiB) unless MaxMessageSize sets another limit, where a negative value
 // means none; the limit applies to each frame and to the reassembled,
-// decompressed message. Dial also bounds the HTTP response head to
+// decompressed message. ReadMessage then returns ErrMessageTooLarge, which,
+// like every protocol violation by the peer, matches ErrProtocol. Dial also
+// bounds the HTTP response head to
 // DefaultMaxResponseHeaderBytes.
 //
 // Upgrade accepts requests without an Origin header, as sent by non-browser

@@ -465,10 +465,10 @@ func TestWriteFailureValidationPrecedence(t *testing.T) {
 			want  error
 		}{
 			{func() error { return c.WriteMessage(MessageType(opPing), nil) }, errInvalidMessageType},
-			{func() error { return c.WriteMessage(TextMessage, []byte{255}) }, ErrInvalidFrame},
-			{func() error { return c.writeControlFrame(opBinary, nil) }, ErrInvalidOpcode},
-			{func() error { return c.writeControlFrame(opPing, make([]byte, 126)) }, ErrPayloadTooLarge},
-			{func() error { return c.writeControlFrame(opClose, []byte{1}) }, ErrInvalidFrame},
+			{func() error { return c.WriteMessage(TextMessage, []byte{255}) }, errInvalidUTF8},
+			{func() error { return c.writeControlFrame(opBinary, nil) }, errInvalidOpcode},
+			{func() error { return c.writeControlFrame(opPing, make([]byte, 126)) }, errInvalidFrame},
+			{func() error { return c.writeControlFrame(opClose, []byte{1}) }, errInvalidFrame},
 		}
 		for _, check := range checks {
 			if err := check.write(); !errors.Is(err, check.want) || errors.Is(err, cause) {

@@ -160,8 +160,8 @@ func TestUpgradeMaxMessageSize(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := conn.ReadMessage(); !errors.Is(err, ErrPayloadTooLarge) {
-		t.Fatalf("error = %v, want ErrPayloadTooLarge", err)
+	if _, _, err := conn.ReadMessage(); !errors.Is(err, ErrMessageTooLarge) {
+		t.Fatalf("error = %v, want ErrMessageTooLarge", err)
 	}
 }
 

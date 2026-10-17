@@ -71,8 +71,8 @@ func TestNextReaderTextValidation(t *testing.T) {
 				}
 				return
 			}
-			if !errors.Is(err, ErrInvalidFrame) {
-				t.Fatalf("ReadAll = %v, want ErrInvalidFrame", err)
+			if !errors.Is(err, errInvalidFrame) {
+				t.Fatalf("ReadAll = %v, want errInvalidFrame", err)
 			}
 			if got := failureClosePayload(t, raw.written.Bytes(), false); !bytes.Equal(got, []byte{0x03, 0xef}) {
 				t.Fatalf("close payload = %x, want 1007", got)
@@ -92,7 +92,7 @@ func TestNextReaderMessageLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := io.ReadAll(r)
-	if !errors.Is(err, ErrPayloadTooLarge) || string(got) != "aaaaaa" {
+	if !errors.Is(err, ErrMessageTooLarge) || string(got) != "aaaaaa" {
 		t.Fatalf("ReadAll = %q, %v", got, err)
 	}
 	if got := failureClosePayload(t, raw.written.Bytes(), false); !bytes.Equal(got, []byte{0x03, 0xf1}) {

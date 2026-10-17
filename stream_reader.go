@@ -106,7 +106,7 @@ func (c *Conn) nextReader() (opcode, *messageReader, error) {
 			c.reader = mr
 			return frame.Opcode, mr, nil
 		default:
-			return 0, nil, c.failRead(failWith(StatusProtocolError, ErrInvalidOpcode))
+			return 0, nil, c.failRead(failWith(StatusProtocolError, errInvalidOpcode))
 		}
 	}
 }
@@ -184,11 +184,11 @@ func (r *messageReader) readLocked(p []byte) (int, error) {
 	if limit := r.c.maxBytes; limit > 0 && r.src.phase == 0 && r.read+r.src.remaining > uint64(limit) {
 		// A frame just began. Its header proves whether the message fits
 		// before any of its payload is returned.
-		return 0, r.fail(failWith(StatusMessageTooBig, ErrPayloadTooLarge))
+		return 0, r.fail(failWith(StatusMessageTooBig, ErrMessageTooLarge))
 	}
 	n, err := r.src.Read(p)
 	if r.text && !r.utf8.check(p[:n]) {
-		return 0, r.fail(failWith(StatusInvalidFramePayloadData, ErrInvalidFrame))
+		return 0, r.fail(failWith(StatusInvalidFramePayloadData, errInvalidFrame))
 	}
 	r.read += uint64(n)
 	if err != nil {
@@ -210,7 +210,7 @@ func (r *messageReader) stop(err error) error {
 		return r.fail(err)
 	case r.text && r.utf8.pending != 0:
 		// https://datatracker.ietf.org/doc/html/rfc6455#section-8.1
-		return r.fail(failWith(StatusInvalidFramePayloadData, ErrInvalidFrame))
+		return r.fail(failWith(StatusInvalidFramePayloadData, errInvalidFrame))
 	}
 	return r.end(io.EOF)
 }

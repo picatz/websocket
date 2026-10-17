@@ -8,7 +8,7 @@ note does not assign a release version or announce a release.
 
 Omitting a high-level size option now selects `DefaultMaxMessageSize = 1 << 20`
 (1,048,576 bytes). Exactly that many valid application bytes fit; larger incoming
-messages fail with `ErrPayloadTooLarge` and terminate the connection. Inventory
+messages fail with `ErrMessageTooLarge` and terminate the connection. Inventory
 large snapshots, binary transfers and tunnel protocols, then set an explicit
 appropriate budget. Do not split messages just to avoid the cap: message
 boundaries belong to the application protocol.
@@ -427,6 +427,31 @@ Raw control frames are no longer part of the API. `ContinuationFrame`,
   ignores unsolicited Pongs (Section 5.5.3). A replacement Ping handler could
   stop those replies by mistake, and a Pong handler only ever saw heartbeats
   once `Ping` matched its own Pongs.
+
+## Protocol errors
+
+The nine sentinels for a peer's protocol violations are replaced by one,
+`ErrProtocol`; the violation is still named in the error's text.
+`ErrPayloadTooLarge` is renamed `ErrMessageTooLarge` and matches `ErrProtocol`
+too, so one check covers every message a connection refused:
+
+```go
+// Before
+if errors.Is(err, websocket.ErrInvalidFrame) || errors.Is(err, websocket.ErrPayloadTooLarge) { ... }
+// After
+if errors.Is(err, websocket.ErrProtocol) { ... }
+```
+
+| Before | After |
+| --- | --- |
+| `ErrInvalidFrame`, `ErrUnexpectedFrame`, `ErrUnexpectedContinuation`, `ErrControlFrameFragment`, `ErrUnmaskedFrame`, `ErrMaskedFrame`, `ErrUnsupportedExtensions`, `ErrInvalidOpcode`, `ErrInvalidCompressedPayload` | `ErrProtocol` |
+| `ErrPayloadTooLarge` | `ErrMessageTooLarge` (also matches `ErrProtocol`) |
+
+`WriteMessage`, `NextWriter` and `NetConn` writes still reject text that is not
+valid UTF-8 before sending anything, but with a plain error rather than
+`ErrInvalidFrame`: the mistake is the caller's, not the peer's, so it does not
+match `ErrProtocol`. A control frame from the peer with more than 125 bytes of
+payload is a protocol error, no longer `ErrPayloadTooLarge`.
 
 ## Verification scope
 

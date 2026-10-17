@@ -494,7 +494,7 @@ func TestDeadlineFailurePreservesCallerDeadlines(t *testing.T) {
 		deadlineSet(t, setter, time.Now().Add(-time.Second))
 	}
 	before := append([]deadlineCall(nil), raw.calls...)
-	if _, _, err := c.ReadMessage(); err != websocket.ErrInvalidOpcode {
+	if _, _, err := c.ReadMessage(); !errors.Is(err, websocket.ErrProtocol) {
 		t.Fatalf("protocol failure = %v", err)
 	}
 	if len(raw.calls) != len(before) {

@@ -21,6 +21,10 @@ import (
 // rejected handshake look the same to the program.
 var ErrDialFailed = errors.New("browser: websocket dial failed")
 
+// errInvalidUTF8 is returned by WriteMessage, before anything is sent, for
+// text that is not valid UTF-8.
+var errInvalidUTF8 = errors.New("browser: text message is not valid UTF-8")
+
 // errClosed is returned by operations on a closed or closing connection. Like
 // websocket.Conn's, it matches net.ErrClosed.
 var errClosed error = closedError{}
@@ -56,7 +60,7 @@ type Dialer struct {
 	// MaxMessageSize bounds each incoming message in bytes. Zero means
 	// websocket.DefaultMaxMessageSize; a negative value means no limit. A
 	// larger message closes the connection and ReadMessage returns an error
-	// matching websocket.ErrPayloadTooLarge. The close carries no status
+	// matching websocket.ErrMessageTooLarge. The close carries no status
 	// code: hosts only let programs send 1000 and 3000 through 4999, not 1009
 	// (Message Too Big). The host has already received the whole message by
 	// then, so the limit bounds what the program keeps, not what the host
@@ -222,7 +226,7 @@ func (c *Conn) onMessage(ev js.Value) {
 		return
 	}
 	if c.maxBytes > 0 && len(m.data) > c.maxBytes {
-		c.err = fmt.Errorf("%w: message of %d bytes exceeds limit of %d", websocket.ErrPayloadTooLarge, len(m.data), c.maxBytes)
+		c.err = fmt.Errorf("%w: message of %d bytes exceeds limit of %d", websocket.ErrMessageTooLarge, len(m.data), c.maxBytes)
 		c.signal()
 		c.mu.Unlock()
 		c.ws.Call("close")
@@ -298,7 +302,7 @@ func (c *Conn) signal() {
 // connection ended are returned first. Then ReadMessage returns a
 // *websocket.CloseError carrying the peer's code and reason if the peer closed
 // the connection, which matches io.EOF with errors.Is; an error matching net.ErrClosed after
-// Close; an error matching websocket.ErrPayloadTooLarge if a message exceeded
+// Close; an error matching websocket.ErrMessageTooLarge if a message exceeded
 // the limit; or one matching io.ErrUnexpectedEOF if the host reported a
 // failure or the connection closed without a closing handshake.
 func (c *Conn) ReadMessage() (messageType websocket.MessageType, data []byte, err error) {
@@ -378,7 +382,7 @@ func (c *Conn) WriteMessageContext(ctx context.Context, messageType websocket.Me
 	case websocket.TextMessage:
 		if !utf8.Valid(data) {
 			// The host would replace invalid sequences instead of failing.
-			return websocket.ErrInvalidFrame
+			return errInvalidUTF8
 		}
 		payload = string(data)
 	case websocket.BinaryMessage:

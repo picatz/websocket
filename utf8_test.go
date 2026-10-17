@@ -110,14 +110,14 @@ func TestReadMessageUTF8RejectsBeforeFIN(t *testing.T) {
 		} {
 			for split := 0; split <= len(invalid); split++ {
 				t.Run(fmt.Sprintf("server=%v/%x/split=%d", server, invalid, split), func(t *testing.T) {
-					// EOF would otherwise return io.ErrUnexpectedEOF, not ErrInvalidFrame.
+					// EOF would otherwise return io.ErrUnexpectedEOF, not errInvalidFrame.
 					wire := failureWire(server, 0x01, append([]byte("ok"), invalid[:split]...))
 					wire = append(wire, failureWire(server, 0x8a, nil)...)
 					wire = append(wire, failureWire(server, 0x00, invalid[split:])...)
 					raw := &failureMemoryConn{memoryConn: memoryConn{Reader: bytes.NewReader(wire)}}
 					c := newTestConn(raw, ConnConfig{Server: server})
 					op, p, err := c.ReadMessage()
-					if op != 0 || p != nil || err != ErrInvalidFrame {
+					if op != 0 || p != nil || err != errInvalidFrame {
 						t.Fatalf("read = %v %x %v", op, p, err)
 					}
 					if code := binary.BigEndian.Uint16(failureClosePayload(t, raw.written.Bytes(), server)); code != 1007 {
@@ -162,7 +162,7 @@ func TestReadMessageUTF8RejectsWhilePeerWaits(t *testing.T) {
 			if code := binary.BigEndian.Uint16(failureClosePayload(t, wire, server)); code != 1007 {
 				t.Fatalf("code %d", code)
 			}
-			if err := <-done; err != ErrInvalidFrame {
+			if err := <-done; err != errInvalidFrame {
 				t.Fatal(err)
 			}
 		})
@@ -179,7 +179,7 @@ func TestReadMessageUTF8IncompleteAndBinary(t *testing.T) {
 			_, _, err := frameConn(wire, false, 0).ReadMessage()
 			want := io.ErrUnexpectedEOF
 			if final {
-				want = ErrInvalidFrame
+				want = errInvalidFrame
 			}
 			if err != want {
 				t.Fatalf("%x final=%v: %v, want %v", p, final, err, want)
@@ -212,10 +212,10 @@ func TestReadMessageUTF8AfterExtensions(t *testing.T) {
 			}
 			return nil
 		}, []byte("¢"), nil},
-		{"decoded invalid before FIN", []byte{0x01, 1, 'x'}, func(f *wireFrame) error { f.Payload = []byte{0xed, 0xa0}; return nil }, nil, ErrInvalidFrame},
-		{"normalize opcode", []byte{0x02, 1, 0xff}, func(f *wireFrame) error { f.Opcode = opText; return nil }, nil, ErrInvalidFrame},
-		{"normalize final", []byte{0x01, 1, 0xc2}, func(f *wireFrame) error { f.Final = true; return nil }, nil, ErrInvalidFrame},
-		{"decoded limit first", []byte{0x01, 1, 'x'}, func(f *wireFrame) error { f.Payload = []byte{0xff, 0xff, 0xff}; return nil }, nil, ErrPayloadTooLarge},
+		{"decoded invalid before FIN", []byte{0x01, 1, 'x'}, func(f *wireFrame) error { f.Payload = []byte{0xed, 0xa0}; return nil }, nil, errInvalidFrame},
+		{"normalize opcode", []byte{0x02, 1, 0xff}, func(f *wireFrame) error { f.Opcode = opText; return nil }, nil, errInvalidFrame},
+		{"normalize final", []byte{0x01, 1, 0xc2}, func(f *wireFrame) error { f.Final = true; return nil }, nil, errInvalidFrame},
+		{"decoded limit first", []byte{0x01, 1, 'x'}, func(f *wireFrame) error { f.Payload = []byte{0xff, 0xff, 0xff}; return nil }, nil, ErrMessageTooLarge},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := frameConn(tc.wire, false, 2)
@@ -279,7 +279,7 @@ func FuzzUTF8Fragments(f *testing.F) {
 			if err != nil || op != TextMessage || !bytes.Equal(data, p) {
 				t.Fatalf("valid: %v %x %v", op, data, err)
 			}
-		} else if err != ErrInvalidFrame || data != nil || op != 0 {
+		} else if err != errInvalidFrame || data != nil || op != 0 {
 			t.Fatalf("invalid: %v %x %v", op, data, err)
 		}
 	})

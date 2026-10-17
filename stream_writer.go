@@ -24,8 +24,8 @@ var errWriterClosed = errors.New("websocket: message writer closed")
 // must not be used concurrently.
 //
 // For TextMessage, the payload is checked as UTF-8 across Write calls. An
-// invalid sequence, or a rune left incomplete at Close, fails the writer with
-// ErrInvalidFrame. Errors follow WriteMessage: once part of the message has
+// invalid sequence, or a rune left incomplete at Close, fails the writer as
+// WriteMessage fails invalid text. Errors follow WriteMessage: once part of the message has
 // reached the transport, a failure poisons later writes, and the connection
 // should be closed. After an error or Close, the writer returns an error and
 // no longer blocks other writers.
@@ -81,7 +81,7 @@ func (s *streamWriter) Write(p []byte) (int, error) {
 		return 0, s.finish(err)
 	}
 	if s.text && !s.utf8.check(p) {
-		return 0, s.finish(s.w.fail(ErrInvalidFrame))
+		return 0, s.finish(s.w.fail(errInvalidUTF8))
 	}
 	n, err := s.w.Write(p)
 	if err != nil {
@@ -101,7 +101,7 @@ func (s *streamWriter) Close() error {
 		return s.finish(err)
 	}
 	if s.utf8.pending != 0 {
-		return s.finish(s.w.fail(ErrInvalidFrame))
+		return s.finish(s.w.fail(errInvalidUTF8))
 	}
 	return s.finish(s.w.Close())
 }

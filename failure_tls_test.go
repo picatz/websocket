@@ -217,7 +217,7 @@ func TestFailureTLSNewConnAbortsWithoutCloseNotify(t *testing.T) {
 				t.Fatal(err)
 			}
 			// The peer performs no further TLS read, so tls.Conn.Close would block here.
-			if err := failureTLSWaitError(t, readDone, "failure abort"); err != ErrInvalidFrame {
+			if err := failureTLSWaitError(t, readDone, "failure abort"); err != errInvalidFrame {
 				t.Fatalf("error=%v", err)
 			}
 			if time.Since(start) > 750*time.Millisecond {
@@ -255,7 +255,7 @@ func TestFailureTLSConcurrentCloseCancelsNotification(t *testing.T) {
 	if err := failureTLSWaitError(t, closeDone, "concurrent Close"); err != ErrAlreadyClosed {
 		t.Fatal(err)
 	}
-	if err := failureTLSWaitError(t, readDone, "canceled read failure"); err != ErrInvalidFrame {
+	if err := failureTLSWaitError(t, readDone, "canceled read failure"); err != errInvalidFrame {
 		t.Fatal(err)
 	}
 	if time.Since(start) > 750*time.Millisecond {
@@ -287,7 +287,7 @@ func TestFailureTLSNormalCloseFirstStillAllowsAbort(t *testing.T) {
 	if _, err := peer.Write(failureTLSWire(false)); err != nil {
 		t.Fatal(err)
 	}
-	if err := failureTLSWaitError(t, readDone, "failure during graceful TLS Close"); err != ErrInvalidFrame {
+	if err := failureTLSWaitError(t, readDone, "failure during graceful TLS Close"); err != errInvalidFrame {
 		t.Fatal(err)
 	}
 	_ = failureTLSWaitError(t, closeDone, "interrupted graceful TLS Close")
@@ -337,7 +337,7 @@ func TestFailureTLSUpgradeRetainsAbortTransport(t *testing.T) {
 	if err := failureTLSWaitError(t, peerDone, "Upgrade error Close"); err != nil {
 		t.Fatal(err)
 	}
-	if err := failureTLSWaitError(t, readDone, "Upgrade failure abort"); err != ErrInvalidFrame {
+	if err := failureTLSWaitError(t, readDone, "Upgrade failure abort"); err != errInvalidFrame {
 		t.Fatal(err)
 	}
 	if time.Since(start) > 750*time.Millisecond || raw.deadlineCount() != setters {
@@ -388,7 +388,7 @@ func TestFailureTLSDialRetainsRawAbortTransport(t *testing.T) {
 	if !ok || c.abortConn != tlsConn.NetConn() {
 		t.Fatal("Dial did not preserve its raw TLS transport")
 	}
-	if _, _, err := c.ReadMessage(); err != ErrInvalidFrame {
+	if _, _, err := c.ReadMessage(); err != errInvalidFrame {
 		t.Fatal(err)
 	}
 	if err := failureTLSWaitError(t, peerDone, "Dial error Close"); err != nil {

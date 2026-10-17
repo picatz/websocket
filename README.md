@@ -586,19 +586,21 @@ See [RFC 6455] for framing and [RFC 7692] for compression semantics.
 
 ## Error Handling
 
-The package provides detailed error types to help you handle different error scenarios gracefully.
+Every error from `ReadMessage` ends the connection. Test what ended it with
+`errors.Is`:
 
 ```go
-if err != nil {
-	if code := websocket.CloseStatus(err); code != -1 {
-		// The peer closed; code and the reason are in *websocket.CloseError.
-	} else if errors.Is(err, io.EOF) {
-		// Transport ended before a message began
-	} else if errors.Is(err, websocket.ErrInvalidFrame) {
-		// Handle invalid frame
-	} else {
-		// Other errors
-	}
+_, _, err := conn.ReadMessage()
+switch {
+case websocket.CloseStatus(err) != -1:
+	// The peer closed; the code and reason are in *websocket.CloseError.
+case errors.Is(err, websocket.ErrProtocol):
+	// The peer broke the protocol, or sent a message larger than
+	// MaxMessageSize (errors.Is(err, websocket.ErrMessageTooLarge)).
+case errors.Is(err, net.ErrClosed):
+	// This side closed the connection.
+default:
+	// The transport failed or a deadline passed.
 }
 ```
 
