@@ -90,18 +90,30 @@
 // comma-joined peer header and must validate their own parameter and repetition
 // semantics. Multiple offers for the same extension remain valid alternatives.
 //
+// # Compression
+//
+// NewPerMessageDeflateExtension opts into permessage-deflate ([RFC 7692]).
+// Messages are compressed as one DEFLATE stream across any number of frames,
+// with context takeover in both directions unless a no_context_takeover
+// parameter is negotiated, and with any window from 8 to 15 bits. Options set
+// the level, a size threshold below which messages are sent uncompressed, and
+// WithCompressionMemoryLimit, which bounds the state a connection keeps between
+// messages by negotiating smaller windows or no context takeover. Compressors
+// and decompressors are pooled across connections while idle.
+//
+// Custom frame extensions compose with compression: a message is compressed and
+// then each frame passes through the custom extensions in registration order,
+// and on receive each frame passes through them before it is decompressed.
+// Built-in compression owns RSV1; changing it, or enabling a second built-in
+// instance, fails with ErrUnsupportedExtensionComposition.
+//
 // # Limitations
 //
-// The optional permessage-deflate extension is experimental. Compressed message
-// receive fragmentation, incoming context takeover, and consecutive finalized
-// DEFLATE streams are supported. Go's inflater may buffer up to 32 KiB of decoded
-// output before exposing it, delaying UTF-8/size rejection while input is withheld.
-// Decoded limits do not bound CPU time; use transport deadlines. Outgoing history
-// reuse is not optimized. Enabled PMD cannot be combined with enabled custom
-// extensions or another PMD instance (ErrUnsupportedExtensionComposition).
-// Direct built-in frame callbacks require complete messages; use Conn for wire
-// fragmentation. Do not run those callbacks concurrently with Conn I/O.
-// Full compression parameter compatibility remains experimental. Subprotocol offers are unique
+// Go's inflater may buffer up to 32 KiB of decoded permessage-deflate output
+// before exposing it, delaying UTF-8/size rejection while input is withheld.
+// Decoded limits do not bound CPU time; use transport deadlines. Direct built-in
+// frame callbacks require complete messages; use Conn for wire fragmentation.
+// Do not run those callbacks concurrently with Conn I/O. Subprotocol offers are unique
 // HTTP tokens; any selected protocol must be exactly one case-sensitive offered
 // token. Omitting selection is allowed. Applications choose and implement their
 // subprotocols. Custom headers
@@ -116,6 +128,7 @@
 //
 // See the executable examples for local client/server usage.
 //
-// [RFC 6455]: https://www.rfc-editor.org/rfc/rfc6455.html
 // [RFC 7692]: https://www.rfc-editor.org/rfc/rfc7692.html
+//
+// [RFC 6455]: https://www.rfc-editor.org/rfc/rfc6455.html
 package websocket
