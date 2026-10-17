@@ -17,6 +17,11 @@ import (
 	"github.com/picatz/websocket/browser"
 )
 
+// dialTimeout bounds a dial that should succeed. It is generous because the
+// first dial also pays for the JavaScript host's startup, which on a loaded
+// CI runner running other packages under -race can take seconds.
+const dialTimeout = 30 * time.Second
+
 // serverURL returns the test server URL for path. TestNode sets it; run
 // directly, without a server, the tests skip.
 func serverURL(t *testing.T, path string) string {
@@ -30,7 +35,7 @@ func serverURL(t *testing.T, path string) string {
 
 func dial(t *testing.T, path string, d *browser.Dialer) *browser.Conn {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), dialTimeout)
 	defer cancel()
 	conn, err := d.Dial(ctx, serverURL(t, path))
 	if err != nil {
@@ -138,7 +143,7 @@ func TestMaxMessageSize(t *testing.T) {
 }
 
 func TestDialFailure(t *testing.T) {
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), dialTimeout)
 	defer cancel()
 	if _, err := browser.Dial(ctx, serverURL(t, "/reject")); !errors.Is(err, browser.ErrDialFailed) || errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("rejected handshake: err = %v, want ErrDialFailed", err)
@@ -200,7 +205,7 @@ func TestCloseWithStatusReachesPeer(t *testing.T) {
 	}
 	// Wait for the handshake to finish; the server records what it received.
 	_, _, _ = conn.ReadMessage()
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), dialTimeout)
 	defer cancel()
 	check, err := browser.Dial(ctx, serverURL(t, "/lastclose"))
 	if err != nil {
