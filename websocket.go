@@ -351,6 +351,10 @@ type Conn struct {
 	abortConn net.Conn    // Raw transport for abnormal shutdown (never protocol I/O)
 	abortOnce sync.Once   // Independent of normal, potentially graceful TLS Close
 
+	// peerClosed reports, to goroutines other than the reader, that the
+	// peer's Close frame arrived. It is set before the connection is closed.
+	peerClosed atomic.Bool
+
 	// Optional handlers for control frames
 	handlerMu   sync.RWMutex
 	pingHandler func(data string) error // Handler for Ping frames
@@ -441,7 +445,8 @@ func (c *Conn) SetWriteDeadline(t time.Time) error {
 // return ErrAlreadyClosed, which matches it too. Custom transport Close
 // implementations can still block.
 //
-// Use CloseWithStatus to send another status code or a reason.
+// Use CloseWithStatus to send another status code or a reason, and Shutdown
+// to wait for the peer's reply before closing the transport.
 func (c *Conn) Close() error {
 	return c.CloseWithStatus(StatusNormalClosure, "")
 }
