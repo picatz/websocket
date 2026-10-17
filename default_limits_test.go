@@ -398,7 +398,7 @@ func TestHighLevelDefaultCloseInterruptsStalledPeer(t *testing.T) {
 	defer c.conn.Close()
 	<-ready
 	stalled := make(chan struct{})
-	c.rw.Reader = bufio.NewReader(&limitStallReader{Reader: c.rw.Reader, stalled: stalled})
+	c.br = bufio.NewReader(&limitStallReader{Reader: c.br, stalled: stalled})
 	result := make(chan error, 1)
 	go func() { _, _, err := c.ReadMessage(); result <- err }()
 	select {

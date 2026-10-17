@@ -361,10 +361,10 @@ func NewPerMessageDeflateExtension(options ...PerMessageDeflateOption) Extension
 // called concurrently with reads and writes. Deadlines are shared transport
 // state, so goroutines that set them must coordinate.
 type Conn struct {
-	conn     net.Conn          // Underlying network connection
-	rw       *bufio.ReadWriter // Buffered reader; the writer is nil unless a test sets one (see writeFrameBuffer)
-	isServer bool              // True if this Conn is on the server side
-	maxBytes int               // Maximum message size in bytes
+	conn     net.Conn      // Underlying network connection
+	br       *bufio.Reader // Buffered reader; writes borrow a pooled buffer per frame (see writeFrameBuffer)
+	isServer bool          // True if this Conn is on the server side
+	maxBytes int           // Maximum message size in bytes
 
 	subprotocol string // Negotiated Sec-WebSocket-Protocol; immutable after the handshake
 
@@ -434,7 +434,7 @@ func NewConn(conn net.Conn, isServer bool, extensions []Extension, opts ...ConnO
 func newConn(conn net.Conn, br *bufio.Reader, isServer bool, extensions []Extension, opts ...ConnOption) *Conn {
 	wsConn := &Conn{
 		conn:       conn,
-		rw:         bufio.NewReadWriter(br, nil),
+		br:         br,
 		isServer:   isServer,
 		extensions: extensions,
 	}
@@ -961,7 +961,7 @@ func (c *Conn) readFrameHeader(frame *Frame) (uint64, error) {
 	// Read the first two bytes of the frame header, which
 	// contains the FIN, RSV1, RSV2, RSV3, opcode, and mask bit.
 	var header [2]byte
-	if err := readSmall(c.rw.Reader, header[:]); err != nil {
+	if err := readSmall(c.br, header[:]); err != nil {
 		if err == io.EOF {
 			return 0, io.EOF
 		}
@@ -1027,7 +1027,7 @@ func (c *Conn) readFrameHeader(frame *Frame) (uint64, error) {
 	switch payloadLen {
 	case 126:
 		var ext [2]byte
-		if err := readField(c.rw.Reader, ext[:], "extended payload length"); err != nil {
+		if err := readField(c.br, ext[:], "extended payload length"); err != nil {
 			return 0, err
 		}
 		extLen := binary.BigEndian.Uint16(ext[:])
@@ -1037,7 +1037,7 @@ func (c *Conn) readFrameHeader(frame *Frame) (uint64, error) {
 		payloadLen = uint64(extLen)
 	case 127:
 		var ext [8]byte
-		if err := readField(c.rw.Reader, ext[:], "extended payload length"); err != nil {
+		if err := readField(c.br, ext[:], "extended payload length"); err != nil {
 			return 0, err
 		}
 		extLen := binary.BigEndian.Uint64(ext[:])
@@ -1131,7 +1131,7 @@ func (c *Conn) readFrameBodyText(frame *Frame, payloadLen uint64, checkText bool
 	}
 	// Read masking key if necessary
 	if frame.Masked {
-		if err := readField(c.rw.Reader, frame.MaskKey[:], "masking key"); err != nil {
+		if err := readField(c.br, frame.MaskKey[:], "masking key"); err != nil {
 			return nil, 0, err
 		}
 	}
@@ -1139,7 +1139,7 @@ func (c *Conn) readFrameBodyText(frame *Frame, payloadLen uint64, checkText bool
 	// Read payload data
 	buf = dst
 	if payloadLen > 0 {
-		r := payloadReader{r: c.rw.Reader, remaining: int64(payloadLen), key: frame.MaskKey, masked: frame.Masked, text: checkText}
+		r := payloadReader{r: c.br, remaining: int64(payloadLen), key: frame.MaskKey, masked: frame.Masked, text: checkText}
 		if checkText {
 			r.pending = byte(copy(r.carry[:], tail))
 		}
@@ -1417,18 +1417,14 @@ func (c *Conn) writeFrameBuffer(frame *Frame, owned bool) error {
 	// Every frame is flushed, so no frame leaves bytes behind and the write
 	// buffer is borrowed from a pool for one frame instead of being held by
 	// every idle connection.
-	w := c.rw.Writer
-	if w == nil {
-		w = writerPool.Get().(*bufio.Writer)
-		w.Reset(c.conn)
-		err := c.writeFrameTo(w, frame, owned)
-		releaseWriter(w)
-		return err
-	}
-	return c.writeFrameTo(w, frame, owned)
+	w := writerPool.Get().(*bufio.Writer)
+	w.Reset(c.conn)
+	err := c.writeFrameTo(w, frame, owned)
+	releaseWriter(w)
+	return err
 }
 
-// writeFrameTo encodes frame into w and flushes it.
+// writeFrameTo encodes frame into w, an empty write buffer, and flushes it.
 func (c *Conn) writeFrameTo(w *bufio.Writer, frame *Frame, owned bool) error {
 	b0 := byte(frame.Opcode)
 	if frame.Final {
@@ -1449,14 +1445,8 @@ func (c *Conn) writeFrameTo(w *bufio.Writer, frame *Frame, owned bool) error {
 		b1 |= 0x80
 	}
 
-	// Encode the header straight into the write buffer, so a whole small
-	// frame reaches the transport in one write.
-	if w.Available() < maxFrameHeaderSize {
-		if err := w.Flush(); err != nil {
-			c.writeErr = err
-			return fmt.Errorf("%w: failed to write frame header: %w", ErrWriteFailed, err)
-		}
-	}
+	// Encode the header straight into the empty write buffer, so a whole
+	// small frame reaches the transport in one write.
 	header := append(w.AvailableBuffer(), b0, b1)
 
 	// Extended payload length
@@ -1481,11 +1471,8 @@ func (c *Conn) writeFrameTo(w *bufio.Writer, frame *Frame, owned bool) error {
 		frame.MaskKey = [4]byte(key)
 	}
 
-	// Write header
-	if _, err := w.Write(header); err != nil {
-		c.writeErr = err
-		return fmt.Errorf("%w: failed to write frame header: %w", ErrWriteFailed, err)
-	}
+	// The header fits the empty buffer, so this only commits it.
+	_, _ = w.Write(header)
 
 	// Write payload
 	var err error
@@ -1525,10 +1512,6 @@ func releaseWriter(w *bufio.Writer) {
 	w.Reset(nil)
 	writerPool.Put(w)
 }
-
-// maxFrameHeaderSize is the largest frame header: two fixed bytes, an eight
-// byte extended length and a four byte masking key (RFC 6455 section 5.2).
-const maxFrameHeaderSize = 14
 
 // writeMasked writes p masked with key, copying it through w's buffer one
 // buffer at a time, so that masking needs no storage of its own.

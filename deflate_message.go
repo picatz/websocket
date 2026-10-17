@@ -222,7 +222,7 @@ func (r *deflateFrameReader) start(frame *Frame, n uint64) error {
 		return r.startBuffered(&r.frame, n)
 	}
 	if r.frame.Masked {
-		if err := readField(r.c.rw.Reader, r.frame.MaskKey[:], "masking key"); err != nil {
+		if err := readField(r.c.br, r.frame.MaskKey[:], "masking key"); err != nil {
 			return err
 		}
 	}
@@ -315,7 +315,7 @@ func (r *deflateFrameReader) Read(p []byte) (int, error) {
 	if uint64(len(p)) > r.remaining {
 		p = p[:int(r.remaining)]
 	}
-	n, err := r.c.rw.Read(p)
+	n, err := r.c.br.Read(p)
 	if n > 0 {
 		if r.frame.Masked {
 			for i := range p[:n] {
@@ -339,7 +339,7 @@ func (r *deflateFrameReader) ReadByte() (byte, error) {
 		r.buf, r.remaining = r.buf[1:], r.remaining-1
 		return b, nil
 	}
-	b, err := r.c.rw.ReadByte()
+	b, err := r.c.br.ReadByte()
 	if err == io.EOF {
 		return 0, io.ErrUnexpectedEOF
 	}

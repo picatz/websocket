@@ -1,7 +1,6 @@
 package websocket
 
 import (
-	"bufio"
 	"bytes"
 	"errors"
 	"io"
@@ -80,7 +79,7 @@ func (w *payloadObserver) Write(p []byte) (int, error) {
 func TestWriteMessagePreservesPayloadDuringWrite(t *testing.T) {
 	data := []byte("shared payload")
 	observer := &payloadObserver{source: data, want: bytes.Clone(data), t: t}
-	c := &Conn{rw: bufio.NewReadWriter(bufio.NewReader(bytes.NewReader(nil)), bufio.NewWriter(observer))}
+	c := NewConn(&benchmarkConn{reader: bytes.NewReader(nil), writer: observer}, false, nil)
 	if err := c.WriteMessage(BinaryMessage, data); err != nil {
 		t.Fatal(err)
 	}

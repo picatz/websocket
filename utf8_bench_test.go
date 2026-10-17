@@ -27,7 +27,7 @@ func BenchmarkReadTextMessage(b *testing.B) {
 					b.ReportAllocs()
 					for b.Loop() {
 						reader.Reset(wire)
-						c.rw.Reader.Reset(reader)
+						c.br.Reset(reader)
 						op, p, err := c.ReadMessage()
 						if err != nil || op != TextMessage || len(p) != len(payload) {
 							b.Fatal(op, len(p), err)

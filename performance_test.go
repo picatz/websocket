@@ -169,7 +169,7 @@ func BenchmarkReadMessage(b *testing.B) {
 					b.ReportAllocs()
 					for b.Loop() {
 						r.Reset(wire)
-						c.rw.Reader.Reset(r)
+						c.br.Reset(r)
 						kind, got, err = c.ReadMessage()
 						if err != nil || kind != BinaryMessage || len(got) != size {
 							b.Fatal(kind, len(got), err)
@@ -290,7 +290,7 @@ func TestBenchmarkWire(t *testing.T) {
 				if err != nil || kind != BinaryMessage || !bytes.Equal(got, payload) {
 					t.Fatalf("%d/%t/%d: %v, %v", size, masked, fragments, kind, err)
 				}
-				if c.rw.Reader.Buffered() != 0 || r.Len() != 0 {
+				if c.br.Buffered() != 0 || r.Len() != 0 {
 					t.Fatal("unconsumed wire data")
 				}
 			}
@@ -305,12 +305,12 @@ func BenchmarkReadFrame(b *testing.B) {
 			b.Run(fmt.Sprintf("bytes=%d/masked=%t", size, masked), func(b *testing.B) {
 				wire := benchmarkWire(benchmarkPayload(size), masked, 1)
 				r := bytes.NewReader(wire)
-				c := &Conn{rw: bufio.NewReadWriter(bufio.NewReader(r), bufio.NewWriter(io.Discard)), isServer: masked}
+				c := &Conn{br: bufio.NewReader(r), isServer: masked}
 				b.SetBytes(int64(size))
 				b.ReportAllocs()
 				for b.Loop() {
 					r.Reset(wire)
-					c.rw.Reader.Reset(r)
+					c.br.Reset(r)
 					frame, err := c.readFrame()
 					if err != nil || len(frame.Payload) != size {
 						b.Fatal(err)

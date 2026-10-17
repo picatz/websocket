@@ -40,7 +40,7 @@ func TestReadMessageAllocations(t *testing.T) {
 					}
 					got := testing.AllocsPerRun(100, func() {
 						r.Reset(wire)
-						c.rw.Reader.Reset(r)
+						c.br.Reset(r)
 						kind, p, err := c.ReadMessage()
 						if err != nil || kind != op || len(p) != size {
 							t.Fatal(kind, len(p), err)
@@ -81,7 +81,7 @@ func TestReadMessageFragmentedAllocations(t *testing.T) {
 				c := NewConn(&benchmarkConn{reader: r, writer: io.Discard}, true, nil)
 				got := testing.AllocsPerRun(20, func() {
 					r.Reset(wire)
-					c.rw.Reader.Reset(r)
+					c.br.Reset(r)
 					if kind, p, err := c.ReadMessage(); err != nil || kind != op || !bytes.Equal(p, payload) {
 						t.Fatal(kind, len(p), err)
 					}
@@ -195,10 +195,10 @@ func TestWriteMaskedEveryChunkBoundary(t *testing.T) {
 	}
 }
 
-func TestIdleConnHoldsNoWriteBuffer(t *testing.T) {
+func TestPooledWritesRoundTrip(t *testing.T) {
 	// Every frame is flushed, so connections borrow a write buffer per frame
-	// rather than holding one while idle. Both ends must still exchange
-	// messages through the borrowed buffers.
+	// rather than holding one while idle. Both ends of a real handshake must
+	// exchange messages larger than one buffer through the borrowed buffers.
 	server := make(chan *Conn, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c, err := Upgrade(w, r)
@@ -216,11 +216,6 @@ func TestIdleConnHoldsNoWriteBuffer(t *testing.T) {
 	defer client.Close()
 	s := <-server
 	defer s.Close()
-	for _, c := range []*Conn{client, s} {
-		if c.rw.Writer != nil {
-			t.Fatalf("server=%t: connection holds a write buffer", c.isServer)
-		}
-	}
 	payload := bytes.Repeat([]byte("abc"), 5000) // Larger than one write buffer.
 	if err := client.WriteMessage(BinaryMessage, payload); err != nil {
 		t.Fatal(err)
