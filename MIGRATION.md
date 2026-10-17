@@ -140,7 +140,27 @@ if code := websocket.CloseStatus(err); code != -1 { /* peer sent code */ }
 ```
 
 `Close` still sends `StatusNormalClosure`; use `CloseWithStatus` for another
-code or a reason. `github.com/picatz/openai` uses `errors.Is` and needs no change.
+code or a reason.
+
+## Typed status codes
+
+The `Status*` close-code constants used to be untyped integers. They are now
+typed `StatusCode` constants, so they no longer convert implicitly to other
+integer types. Convert explicitly where a raw number is needed:
+
+```go
+// Before
+binary.BigEndian.PutUint16(payload, websocket.StatusGoingAway)
+
+// After
+binary.BigEndian.PutUint16(payload, uint16(websocket.StatusGoingAway))
+// or, to send it:
+conn.CloseWithStatus(websocket.StatusGoingAway, "")
+```
+
+`StatusServiceRestart` (1012), `StatusTryAgainLater` (1013) and
+`StatusBadGateway` (1014) are new, from the IANA close code registry.
+`github.com/picatz/openai` does not use the constants and needs no change.
 
 ## HTTP error ownership
 
