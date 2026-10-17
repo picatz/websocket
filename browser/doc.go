@@ -25,10 +25,10 @@
 //   - The host does not report why a connection failed. Dial errors match
 //     ErrDialFailed and carry no HTTP status or response.
 //   - Custom request headers, TLS settings and proxies are controlled by the
-//     host, not the program. Subprotocols can be offered with WithSubprotocols.
+//     host, not the program. Dialer.Subprotocols offers subprotocols.
 //   - The host cannot pause delivery: messages are queued as they arrive
-//     until ReadMessage takes them. WithMaxMessageSize bounds each message, and
-//     reading promptly bounds the queue.
+//     until ReadMessage takes them. Dialer.MaxMessageSize bounds each
+//     message, and reading promptly bounds the queue.
 //   - WriteMessage returns once the host accepts the message for sending, not
 //     when it reaches the network. The host's send queue is unbounded, so a
 //     write first waits while more than 1 MiB is queued and unsent.

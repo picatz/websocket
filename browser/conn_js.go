@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"slices"
 	"sync"
 	"syscall/js"
 	"time"
@@ -41,30 +40,28 @@ const (
 	stateOpen       = 1
 )
 
-// DialOption configures Dial.
-type DialOption func(*dialOptions)
+// A Dialer contains options for connecting to a WebSocket server through the
+// host. Its zero value offers no subprotocol and applies
+// websocket.DefaultMaxMessageSize. A Dialer may be reused and is safe for
+// concurrent use; Dial does not modify it.
+//
+// The host controls request headers, TLS, proxies and extensions, so a Dialer
+// has none of websocket.Dialer's fields for them.
+type Dialer struct {
+	// Subprotocols are the application subprotocols to offer, in order of
+	// preference. The host rejects invalid or duplicate tokens, and Dial then
+	// fails. Conn.Subprotocol reports the server's selection.
+	Subprotocols []string
 
-type dialOptions struct {
-	subprotocols []string
-	maxBytes     int
-}
-
-// WithSubprotocols offers subprotocols in preference order. The host rejects
-// invalid or duplicate tokens, and Dial then fails. Conn.Subprotocol reports
-// the server's selection.
-func WithSubprotocols(protocols ...string) DialOption {
-	return func(o *dialOptions) { o.subprotocols = slices.Clone(protocols) }
-}
-
-// WithMaxMessageSize limits each incoming message to maxBytes; zero or negative
-// means unlimited. The default is websocket.DefaultMaxMessageSize. A larger
-// message closes the connection and ReadMessage returns an error matching
-// websocket.ErrPayloadTooLarge. The close carries no status code: hosts only
-// let programs send 1000 and 3000 through 4999, not 1009 (Message Too Big).
-// The host has already received the whole message by then, so the limit
-// bounds what the program keeps, not what the host buffers.
-func WithMaxMessageSize(maxBytes int) DialOption {
-	return func(o *dialOptions) { o.maxBytes = maxBytes }
+	// MaxMessageSize bounds each incoming message in bytes. Zero means
+	// websocket.DefaultMaxMessageSize; a negative value means no limit. A
+	// larger message closes the connection and ReadMessage returns an error
+	// matching websocket.ErrPayloadTooLarge. The close carries no status
+	// code: hosts only let programs send 1000 and 3000 through 4999, not 1009
+	// (Message Too Big). The host has already received the whole message by
+	// then, so the limit bounds what the program keeps, not what the host
+	// buffers.
+	MaxMessageSize int
 }
 
 // message is one received data message.
@@ -116,13 +113,19 @@ type listener struct {
 // host to finish the opening handshake, or for ctx to end, in which case the
 // connection attempt is abandoned. Canceling ctx after Dial returns has no
 // effect on the connection.
-func Dial(ctx context.Context, urlStr string, options ...DialOption) (conn *Conn, err error) {
-	opts := dialOptions{maxBytes: websocket.DefaultMaxMessageSize}
-	for _, opt := range options {
-		opt(&opts)
+func (d *Dialer) Dial(ctx context.Context, urlStr string) (conn *Conn, err error) {
+	if d == nil {
+		d = &Dialer{}
+	}
+	maxBytes := d.MaxMessageSize
+	switch {
+	case maxBytes == 0:
+		maxBytes = websocket.DefaultMaxMessageSize
+	case maxBytes < 0:
+		maxBytes = 0
 	}
 
-	ws, err := newWebSocket(urlStr, opts.subprotocols)
+	ws, err := newWebSocket(urlStr, d.Subprotocols)
 	if err != nil {
 		return nil, err
 	}
@@ -130,7 +133,7 @@ func Dial(ctx context.Context, urlStr string, options ...DialOption) (conn *Conn
 
 	c := &Conn{
 		ws:       ws,
-		maxBytes: opts.maxBytes,
+		maxBytes: maxBytes,
 		ready:    make(chan struct{}, 1),
 		done:     make(chan struct{}),
 	}
@@ -161,6 +164,11 @@ func Dial(ctx context.Context, urlStr string, options ...DialOption) (conn *Conn
 		return nil, fmt.Errorf("%w: %s: %w", ErrDialFailed, urlStr, err)
 	}
 	return nil, fmt.Errorf("%w: %s", ErrDialFailed, urlStr)
+}
+
+// Dial connects to urlStr with a zero Dialer.
+func Dial(ctx context.Context, urlStr string) (*Conn, error) {
+	return (&Dialer{}).Dial(ctx, urlStr)
 }
 
 // newWebSocket constructs the host object, turning the exception thrown for a
