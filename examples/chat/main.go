@@ -10,6 +10,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -108,10 +109,10 @@ func (h *hub) handler(w http.ResponseWriter, r *http.Request) {
 	wg.Go(func() {
 		defer conn.Close()
 		for msg := range c.send {
-			if err := conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
-				return
-			}
-			if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+			ctx, cancel := context.WithTimeout(r.Context(), writeWait)
+			err := conn.WriteMessageContext(ctx, websocket.TextMessage, msg)
+			cancel()
+			if err != nil {
 				return
 			}
 		}
