@@ -46,5 +46,8 @@
 // retired. Until then it builds only for GOOS=js; on other platforms it is
 // empty.
 //
+// [github.com/picatz/websocket/examples/browser] is a runnable page and
+// server built on this package.
+//
 // [WHATWG WebSockets standard]: https://websockets.spec.whatwg.org/
 package browser

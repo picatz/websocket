@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Go WebSocket in the browser</title>
+<style>
+  body { font: 16px/1.5 system-ui, sans-serif; max-width: 40rem; margin: 2rem auto; padding: 0 1rem; }
+  form { display: flex; gap: .5rem; }
+  input { flex: 1; font: inherit; padding: .25rem .5rem; }
+  pre { background: #f4f4f4; padding: 1rem; min-height: 8rem; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<h1>Go WebSocket in the browser</h1>
+<p>This page runs Go compiled to WebAssembly. It dials <code>/echo</code> with
+<code>github.com/picatz/websocket/browser</code> and shows every reply.</p>
+<form id="send">
+  <input id="message" autocomplete="off" placeholder="Type a message" disabled>
+  <button disabled>Send</button>
+</form>
+<pre id="log">Loading…</pre>
+<script src="wasm_exec.js"></script>
+<script>
+  const go = new Go();
+  WebAssembly.instantiateStreaming(fetch("main.wasm"), go.importObject)
+    .then((result) => go.run(result.instance))
+    .catch((err) => { document.getElementById("log").textContent = String(err); });
+</script>
+</body>
+</html>
