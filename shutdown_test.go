@@ -209,14 +209,15 @@ func TestShutdownInvalidStatusLeavesConnOpen(t *testing.T) {
 // Shutdown ends a connection with the closing handshake, so the peer reads
 // the status code even while it is still sending.
 func ExampleConn_Shutdown() {
+	status := make(chan websocket.StatusCode, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := websocket.Upgrade(w, r)
 		if err != nil {
 			return
 		}
 		defer conn.Close()
-		_, _, err = conn.ReadMessage()
-		fmt.Println("server:", websocket.CloseStatus(err))
+		_, _, err = conn.ReadMessage() // answers the client's Close frame
+		status <- websocket.CloseStatus(err)
 	}))
 	defer srv.Close()
 
@@ -229,6 +230,7 @@ func ExampleConn_Shutdown() {
 	if err := conn.Shutdown(ctx, websocket.StatusGoingAway, "server restarting"); err != nil {
 		log.Print(err) // the connection is closed either way
 	}
+	fmt.Println("server:", <-status)
 	fmt.Println("client: done")
 	// Output:
 	// server: StatusGoingAway
