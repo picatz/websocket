@@ -34,7 +34,7 @@ func TestReadMessageAllocations(t *testing.T) {
 					if size == 0 {
 						want = 0
 					} else if size > minPayloadAlloc {
-						// Storage doubles from minPayloadAlloc as bytes arrive,
+						// Storage quadruples from minPayloadAlloc as bytes arrive,
 						// unless the whole payload is already buffered.
 						want = -1
 					}
@@ -49,8 +49,8 @@ func TestReadMessageAllocations(t *testing.T) {
 					if want >= 0 && got != want {
 						t.Fatalf("allocations = %v, want %v", got, want)
 					}
-					if want < 0 && got > 6 {
-						t.Fatalf("allocations = %v, want at most 6", got)
+					if want < 0 && got > 3 {
+						t.Fatalf("allocations = %v, want at most 3", got)
 					}
 				})
 			}
@@ -63,14 +63,14 @@ func TestReadMessageFragmentedAllocations(t *testing.T) {
 		t.Skip("allocation counts are not meaningful with the race detector")
 	}
 	// Without extensions, fragments are read straight onto the end of the
-	// message. Storage doubles with what has arrived, so many small
+	// message. Storage quadruples with what has arrived, so many small
 	// fragments are not copied once per frame.
 	for _, tc := range []struct{ size, fragments, max int }{
 		{64, 4, 1},       // Everything is buffered: one allocation.
-		{65536, 4, 5},    // As many as one 64 KiB frame.
+		{65536, 4, 3},    // As many as one 64 KiB frame.
 		{1000, 1000, 1},  // One byte per frame, all buffered.
-		{8192, 8192, 4},  // More than the read buffer holds: doubling.
-		{1 << 20, 64, 9}, // As many as one 1 MiB frame.
+		{8192, 8192, 2},  // More than the read buffer holds: quadrupling.
+		{1 << 20, 64, 5}, // As many as one 1 MiB frame.
 	} {
 		for _, op := range []MessageType{BinaryMessage, TextMessage} {
 			t.Run(fmt.Sprintf("bytes=%d/fragments=%d/type=%s", tc.size, tc.fragments, op), func(t *testing.T) {
@@ -136,7 +136,7 @@ func TestPayloadReaderGrowsWithReceivedBytes(t *testing.T) {
 		if err != nil || !bytes.Equal(got, data) {
 			t.Fatalf("sent=%d: got %d bytes, err=%v", sent, len(got), err)
 		}
-		if limit := max(minPayloadAlloc, 2*sent); cap(got) > limit {
+		if limit := max(minPayloadAlloc, 4*sent); cap(got) > limit {
 			t.Fatalf("sent=%d: capacity %d exceeds %d", sent, cap(got), limit)
 		}
 	}

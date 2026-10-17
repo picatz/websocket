@@ -280,7 +280,9 @@ payload `ReadMessage` returns. Writes allocate nothing, including client
 masking; they borrow a pooled write buffer for each frame, which an occasional
 garbage collection empties. Messages larger than 4 KiB that have not fully
 arrived take a few more allocations, because read storage grows with the bytes
-received rather than trusting the declared frame length.
+received rather than trusting the declared frame length. It quadruples at each
+step: 16 KiB takes 2 allocations and 1 MiB takes 5, while a peer that declares
+a large frame and stalls pins at most four times what it sent.
 
 An idle server connection holds no write buffer and keeps its goroutine within
 the runtime's initial stack, so it costs about what a bare hijacked net/http
