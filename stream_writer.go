@@ -31,9 +31,9 @@ var errWriterClosed = errors.New("websocket: message writer closed")
 // no longer blocks other writers.
 //
 // https://datatracker.ietf.org/doc/html/rfc6455#section-5.4
-func (c *Conn) NextWriter(messageType Opcode) (io.WriteCloser, error) {
+func (c *Conn) NextWriter(messageType MessageType) (io.WriteCloser, error) {
 	if messageType != TextMessage && messageType != BinaryMessage {
-		return nil, ErrInvalidOpcode
+		return nil, errInvalidMessageType
 	}
 	if c.closed.Load() {
 		return nil, errClosed
@@ -57,7 +57,7 @@ func (c *Conn) NextWriter(messageType Opcode) (io.WriteCloser, error) {
 		c.releaseData()
 		return nil, c.failRead(err)
 	}
-	return &streamWriter{c: c, w: c.newMessageWriter(messageType, enabled), text: messageType == TextMessage}, nil
+	return &streamWriter{c: c, w: c.newMessageWriter(opcode(messageType), enabled), text: messageType == TextMessage}, nil
 }
 
 // streamWriter adapts a messageWriter to io.WriteCloser. It holds the data

@@ -196,7 +196,7 @@ func (c *Conn) CloseWrite(code StatusCode, reason string) error {
 	if err != nil {
 		return err
 	}
-	return c.WriteControlFrame(CloseMessage, payload)
+	return c.writeControlFrame(opClose, payload)
 }
 
 // Shutdown closes the connection with the closing handshake: it sends a Close
@@ -245,7 +245,7 @@ func (c *Conn) Shutdown(ctx context.Context, code StatusCode, reason string) err
 	defer stop()
 
 	c.shuttingDown.Store(true)
-	if err := c.WriteControlFrame(CloseMessage, payload); err != nil {
+	if err := c.writeControlFrame(opClose, payload); err != nil {
 		switch {
 		case ctx.Err() != nil, errors.Is(err, ErrWriteFailed), !errors.Is(err, net.ErrClosed):
 			c.cancelIO()
@@ -253,7 +253,7 @@ func (c *Conn) Shutdown(ctx context.Context, code StatusCode, reason string) err
 		case c.closed.Load():
 			return ErrAlreadyClosed
 		}
-		// An earlier WriteControlFrame already sent a Close frame, so the
+		// An earlier writeControlFrame already sent a Close frame, so the
 		// handshake is under way: wait for the peer's answer.
 	}
 

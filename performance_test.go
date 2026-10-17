@@ -114,7 +114,7 @@ func benchmarkWire(payload []byte, masked bool, fragments int) []byte {
 		}
 		part := payload[:n]
 		payload = payload[n:]
-		first := byte(ContinuationFrame)
+		first := byte(opContinuation)
 		if i == 0 {
 			first = byte(BinaryMessage)
 		}

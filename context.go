@@ -19,7 +19,7 @@ import (
 // deadlines set with SetDeadline or SetReadDeadline. To bound a single read
 // without risking the connection, use SetReadDeadline knowing that read
 // timeouts are terminal too, or leave the read running and select on its result.
-func (c *Conn) ReadMessageContext(ctx context.Context) (messageType Opcode, data []byte, err error) {
+func (c *Conn) ReadMessageContext(ctx context.Context) (messageType MessageType, data []byte, err error) {
 	if err := ctx.Err(); err != nil {
 		return 0, nil, context.Cause(ctx)
 	}
@@ -39,7 +39,7 @@ func (c *Conn) ReadMessageContext(ctx context.Context) (messageType Opcode, data
 // connection is aborted as described for ReadMessageContext, because a
 // partially written frame cannot be retried. The returned error matches both
 // the context's cause and the underlying failure.
-func (c *Conn) WriteMessageContext(ctx context.Context, messageType Opcode, data []byte) error {
+func (c *Conn) WriteMessageContext(ctx context.Context, messageType MessageType, data []byte) error {
 	if err := ctx.Err(); err != nil {
 		return context.Cause(ctx)
 	}

@@ -115,7 +115,7 @@ func TestReadFailureStatusAndTerminalState(t *testing.T) {
 					if _, p, e := c.ReadMessage(); !errors.Is(e, net.ErrClosed) || p != nil {
 						t.Fatalf("later read %x %v", p, e)
 					}
-					for _, write := range []func() error{func() error { return c.WriteMessage(TextMessage, []byte("late")) }, func() error { return c.WriteControlFrame(PingMessage, nil) }, func() error { return c.WriteControlFrame(CloseMessage, nil) }} {
+					for _, write := range []func() error{func() error { return c.WriteMessage(TextMessage, []byte("late")) }, func() error { return c.writeControlFrame(opPing, nil) }, func() error { return c.writeControlFrame(opClose, nil) }} {
 						if e := write(); !errors.Is(e, net.ErrClosed) {
 							t.Fatal(e)
 						}
@@ -224,22 +224,13 @@ func TestReadFailureCallbackProvenance(t *testing.T) {
 			t.Fatal("disabled extension prevented notification")
 		}
 	}
-	for _, opcode := range []byte{0x89, 0x8a} {
-		cause := fmt.Errorf("handler: %w", ErrInvalidFrame)
-		raw := &failureMemoryConn{memoryConn: memoryConn{Reader: bytes.NewReader([]byte{opcode, 0})}}
-		c := newTestConn(raw, ConnConfig{})
-		c.SetPingHandler(func(string) error { return cause })
-		c.SetPongHandler(func(string) error { return cause })
-		if _, _, err := c.ReadMessage(); err != cause || raw.written.Len() != 0 || raw.closes != 1 {
-			t.Fatalf("handler error=%v", err)
-		}
-	}
+
 }
 
 func TestReadFailureBuiltInDecodedLimitDiagnostic(t *testing.T) {
 	pmd := newPerMessageDeflate().(*perMessageDeflate)
 	pmd.enabled = true
-	f := &wireFrame{Final: true, Opcode: TextMessage, Payload: bytes.Repeat([]byte{'a'}, 2048)}
+	f := &wireFrame{Final: true, Opcode: opText, Payload: bytes.Repeat([]byte{'a'}, 2048)}
 	if err := pmd.ProcessOutgoingFrame(f); err != nil {
 		t.Fatal(err)
 	}
@@ -473,7 +464,7 @@ func TestReadFailureAfterExplicitCloseDoesNotSendAnother(t *testing.T) {
 	for _, server := range []bool{false, true} {
 		raw := &failureMemoryConn{memoryConn: memoryConn{Reader: bytes.NewReader(failureWire(server, 0x81, []byte{255}))}}
 		c := newTestConn(raw, ConnConfig{Server: server})
-		if err := c.WriteControlFrame(CloseMessage, []byte{3, 232}); err != nil {
+		if err := c.writeControlFrame(opClose, []byte{3, 232}); err != nil {
 			t.Fatal(err)
 		}
 		before := bytes.Clone(raw.written.Bytes())
@@ -580,7 +571,7 @@ func TestReadFailurePartialNotificationIsNeverRetried(t *testing.T) {
 			if err := c.Close(); err != ErrAlreadyClosed {
 				t.Fatal(err)
 			}
-			if err := c.WriteControlFrame(CloseMessage, nil); !errors.Is(err, net.ErrClosed) {
+			if err := c.writeControlFrame(opClose, nil); !errors.Is(err, net.ErrClosed) {
 				t.Fatal(err)
 			}
 			if raw.writes != 1 || raw.closes != 1 || !bytes.Equal(before, raw.written.Bytes()) {

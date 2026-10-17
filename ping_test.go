@@ -36,20 +36,9 @@ func TestPingRoundTrip(t *testing.T) {
 	readLoop(server) // the server's reads answer Pings automatically
 	readLoop(client) // the client's reads deliver the Pongs
 
-	// Ping returns once its Pong is matched, which happens before the read
-	// loop calls the pong handler, so wait for the handler separately.
-	pongs := make(chan struct{}, 3)
-	client.SetPongHandler(func(string) error { pongs <- struct{}{}; return nil })
 	for range 3 {
 		if err := client.Ping(t.Context()); err != nil {
 			t.Fatal(err)
-		}
-	}
-	for i := range 3 {
-		select {
-		case <-pongs:
-		case <-time.After(5 * time.Second):
-			t.Fatalf("pong handler saw %d pongs, want 3", i)
 		}
 	}
 }
@@ -73,10 +62,9 @@ func TestPingConcurrent(t *testing.T) {
 }
 
 func TestPingTimeoutLeavesConnectionOpen(t *testing.T) {
-	client, server := contextPipe(t)
-	// The server reads but never answers, so no Pong arrives.
-	server.SetPingHandler(func(string) error { return nil })
-	serverMessages, _ := readLoop(server)
+	// The scripted peer reads every frame but never answers, so no Pong
+	// arrives.
+	client, p := newScriptedPeer(t)
 	readLoop(client)
 
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Millisecond)
@@ -84,12 +72,17 @@ func TestPingTimeoutLeavesConnectionOpen(t *testing.T) {
 	if err := client.Ping(ctx); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("err = %v, want context.DeadlineExceeded", err)
 	}
-	// Waiting for a Pong is not terminal: data still flows both ways.
-	if err := client.WriteMessage(websocket.TextMessage, []byte("still open")); err != nil {
-		t.Fatal(err)
+	if f := p.next(t); f.opcode != wirePing {
+		t.Fatalf("first frame = %#x, want a Ping", f.opcode)
 	}
-	if got := contextAwait(t, serverMessages); string(got) != "still open" {
-		t.Fatalf("server got %q", got)
+	// Waiting for a Pong is not terminal: data still flows.
+	errc := make(chan error, 1)
+	go func() { errc <- client.WriteMessage(websocket.TextMessage, []byte("still open")) }()
+	if f := p.next(t); f.opcode != wireText || string(f.payload) != "still open" {
+		t.Fatalf("peer got %#x %q, want the text message", f.opcode, f.payload)
+	}
+	if err := <-errc; err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -106,15 +99,15 @@ func TestPingWithoutReaderWaitsForContext(t *testing.T) {
 }
 
 func TestPingReturnsWhenConnectionCloses(t *testing.T) {
-	client, server := contextPipe(t)
-	server.SetPingHandler(func(string) error {
-		go server.Close() // close instead of answering
-		return nil
-	})
-	readLoop(server)
+	// The scripted peer closes the connection instead of answering.
+	client, p := newScriptedPeer(t)
 	readLoop(client)
 	done := make(chan error, 1)
 	go func() { done <- client.Ping(t.Context()) }()
+	if f := p.next(t); f.opcode != wirePing {
+		t.Fatalf("first frame = %#x, want a Ping", f.opcode)
+	}
+	p.conn.Close()
 	if err := contextAwait(t, done); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("err = %v, want net.ErrClosed", err)
 	}

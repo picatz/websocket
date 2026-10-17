@@ -312,7 +312,7 @@ func TestPMDSmallerPeerWindows(t *testing.T) {
 			if bits == 8 {
 				payload, want = []byte{0xf2, 0x48, 0xcd, 0xc9, 0xc9, 0x07, 0x00}, []byte("Hello")
 			}
-			f := &wireFrame{Final: true, Opcode: TextMessage, Rsv1: true, Payload: bytes.Clone(payload)}
+			f := &wireFrame{Final: true, Opcode: opText, Rsv1: true, Payload: bytes.Clone(payload)}
 			if err := p.ProcessIncomingFrame(f); err != nil || f.Rsv1 || !bytes.Equal(f.Payload, want) {
 				t.Fatalf("peer window %d, server %t: %v, decoded %d bytes", bits, server, err, len(f.Payload))
 			}
@@ -421,7 +421,7 @@ func TestPMDIndependentZlibWindow(t *testing.T) {
 				}
 				st := stream{Name: fmt.Sprintf("bits=%d server=%t flags=%d", bits, server, flags), Bits: bits, Takeover: !p.localNoContextTakeover()}
 				for _, m := range [][]byte{plain, text, text, plain, nil} {
-					f := &wireFrame{Final: true, Opcode: BinaryMessage, Payload: m}
+					f := &wireFrame{Final: true, Opcode: opBinary, Payload: m}
 					if err := p.ProcessOutgoingFrame(f); err != nil || !f.Rsv1 {
 						t.Fatal(err)
 					}

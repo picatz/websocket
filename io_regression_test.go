@@ -78,7 +78,7 @@ func TestWriteErrorsPreserveClosedPipeCause(t *testing.T) {
 			conn := newTestConn(raw, ConnConfig{Server: true})
 			var err error
 			if control {
-				err = conn.WriteControlFrame(PingMessage, []byte("ping"))
+				err = conn.writeControlFrame(opPing, []byte("ping"))
 			} else {
 				err = conn.WriteMessage(BinaryMessage, nil)
 			}
@@ -125,7 +125,7 @@ type continuationErrorExtension struct {
 func (*continuationErrorExtension) IsEnabled() bool { return true }
 func (*continuationErrorExtension) Name() string    { return "continuation-error" }
 func (e *continuationErrorExtension) ProcessIncomingFrame(f *wireFrame) error {
-	if f.Opcode == ContinuationFrame {
+	if f.Opcode == opContinuation {
 		return e.err
 	}
 	return nil

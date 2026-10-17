@@ -28,7 +28,7 @@ func TestEcho(t *testing.T) {
 	conn := dial(t, srv)
 
 	for _, msg := range []struct {
-		typ  websocket.Opcode
+		typ  websocket.MessageType
 		data string
 	}{
 		{websocket.TextMessage, "hello"},

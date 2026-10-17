@@ -50,7 +50,6 @@ func TestClosedErrorsMatchNetErrClosed(t *testing.T) {
 		"read":              readErr(),
 		"write":             c.WriteMessage(websocket.TextMessage, []byte("x")),
 		"write with ctx":    c.WriteMessageContext(ctx, websocket.TextMessage, []byte("x")),
-		"control frame":     c.WriteControlFrame(websocket.PingMessage, nil),
 		"ping":              c.Ping(ctx),
 		"second Close":      c.Close(),
 		"CloseWithStatus":   c.CloseWithStatus(websocket.StatusGoingAway, ""),

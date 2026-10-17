@@ -82,8 +82,14 @@ func TestReadMessageUTF8Splits(t *testing.T) {
 				wire = append(wire, failureWire(server, 0x81, []byte("next"))...)
 				c := frameConn(wire, server, len(payload))
 				ping, pong := 0, 0
-				c.SetPingHandler(func(string) error { ping++; return nil })
-				c.SetPongHandler(func(string) error { pong++; return nil })
+				c.testHookControl = func(op opcode, _ []byte) bool {
+					if op == opPing {
+						ping++
+					} else {
+						pong++
+					}
+					return true
+				}
 				op, got, err := c.ReadMessage()
 				if err != nil || op != TextMessage || !bytes.Equal(got, payload) || ping != 1 || pong != 1 {
 					t.Fatalf("role %v splits %d/%d = %v %x %v; controls %d/%d", server, a, b, op, got, err, ping, pong)
@@ -199,7 +205,7 @@ func TestReadMessageUTF8AfterExtensions(t *testing.T) {
 		wantErr   error
 	}{
 		{"decode before validation", []byte{0x01, 1, 0xff, 0x80, 1, 0xff}, func(f *wireFrame) error {
-			if f.Opcode == TextMessage {
+			if f.Opcode == opText {
 				f.Payload = []byte{0xc2}
 			} else {
 				f.Payload = []byte{0xa2}
@@ -207,7 +213,7 @@ func TestReadMessageUTF8AfterExtensions(t *testing.T) {
 			return nil
 		}, []byte("¢"), nil},
 		{"decoded invalid before FIN", []byte{0x01, 1, 'x'}, func(f *wireFrame) error { f.Payload = []byte{0xed, 0xa0}; return nil }, nil, ErrInvalidFrame},
-		{"normalize opcode", []byte{0x02, 1, 0xff}, func(f *wireFrame) error { f.Opcode = TextMessage; return nil }, nil, ErrInvalidFrame},
+		{"normalize opcode", []byte{0x02, 1, 0xff}, func(f *wireFrame) error { f.Opcode = opText; return nil }, nil, ErrInvalidFrame},
 		{"normalize final", []byte{0x01, 1, 0xc2}, func(f *wireFrame) error { f.Final = true; return nil }, nil, ErrInvalidFrame},
 		{"decoded limit first", []byte{0x01, 1, 'x'}, func(f *wireFrame) error { f.Payload = []byte{0xff, 0xff, 0xff}; return nil }, nil, ErrPayloadTooLarge},
 	} {
@@ -241,7 +247,7 @@ func FuzzUTF8Fragments(f *testing.F) {
 				size = 1 + int(chunks[part%len(chunks)]%64)
 			}
 			end := min(len(p), start+size)
-			first := byte(ContinuationFrame)
+			first := byte(opContinuation)
 			if part == 0 {
 				first = byte(TextMessage)
 			}

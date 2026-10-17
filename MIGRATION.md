@@ -297,7 +297,7 @@ that follow RFC 7692 need no change; these are the observable differences:
 ## Closed-connection errors
 
 Operations on a closed connection report one condition the standard library's
-way. Reads, writes, `WriteControlFrame` and `Ping` after `Close`, after the
+way. Reads, writes and `Ping` after `Close`, after the
 peer's close, after an aborted context or after any terminal read error return
 an error matching `net.ErrClosed`, the same error a read that `Close`
 interrupts already returned from the transport. Repeated `Close` and
@@ -380,6 +380,35 @@ _ = conn.CloseWrite(websocket.StatusNormalClosure, "")
 
 After a Close frame, from either call, a Ping now fails with an error matching
 `net.ErrClosed` instead of going out; Pongs answering the peer's Pings still do.
+
+## Message types and control frames
+
+`MessageType` replaces `Opcode`. It has two values, `TextMessage` and
+`BinaryMessage`, which keep their names, so most code only changes where it
+spells the type:
+
+```go
+// Before
+var typ websocket.Opcode = websocket.TextMessage
+// After
+var typ websocket.MessageType = websocket.TextMessage
+```
+
+`ReadMessage`, `ReadMessageContext`, `NextReader`, `WriteMessage`,
+`WriteMessageContext`, `NextWriter` and `NetConn` take or return a
+`MessageType`. The writers return a plain error for any other value instead of
+`ErrInvalidOpcode`, and `MessageType.String` prints `MessageType(n)` for it.
+
+Raw control frames are no longer part of the API. `ContinuationFrame`,
+`CloseMessage`, `PingMessage`, `PongMessage`, `WriteControlFrame`,
+`SetPingHandler` and `SetPongHandler` are removed:
+
+- To send a Ping and wait for its Pong, call `Ping(ctx)`.
+- To send a Close frame, call `CloseWrite`, `CloseWithStatus` or `Shutdown`.
+- `ReadMessage` always answers a Ping with a Pong (RFC 6455 Section 5.5.2) and
+  ignores unsolicited Pongs (Section 5.5.3). A replacement Ping handler could
+  stop those replies by mistake, and a Pong handler only ever saw heartbeats
+  once `Ping` matched its own Pongs.
 
 ## Verification scope
 

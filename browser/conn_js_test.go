@@ -44,7 +44,7 @@ func TestEcho(t *testing.T) {
 	conn := dial(t, "/echo")
 	binary := []byte{0, 1, 2, 0xff}
 	for _, tc := range []struct {
-		opcode websocket.Opcode
+		opcode websocket.MessageType
 		data   []byte
 	}{
 		{websocket.TextMessage, []byte("hello, 世界")},
@@ -67,8 +67,8 @@ func TestWriteValidation(t *testing.T) {
 	if err := conn.WriteMessage(websocket.TextMessage, []byte{0xff}); !errors.Is(err, websocket.ErrInvalidFrame) {
 		t.Fatalf("invalid UTF-8 text: err = %v, want ErrInvalidFrame", err)
 	}
-	if err := conn.WriteMessage(websocket.PingMessage, nil); !errors.Is(err, websocket.ErrInvalidOpcode) {
-		t.Fatalf("ping: err = %v, want ErrInvalidOpcode", err)
+	if err := conn.WriteMessage(websocket.MessageType(9), nil); err == nil {
+		t.Fatal("WriteMessage accepted an invalid message type")
 	}
 }
 
@@ -207,10 +207,10 @@ func TestCloseWithStatusReachesPeer(t *testing.T) {
 // implement it with identical signatures, so code written against it works
 // with either.
 type conn interface {
-	ReadMessage() (websocket.Opcode, []byte, error)
-	ReadMessageContext(context.Context) (websocket.Opcode, []byte, error)
-	WriteMessage(websocket.Opcode, []byte) error
-	WriteMessageContext(context.Context, websocket.Opcode, []byte) error
+	ReadMessage() (websocket.MessageType, []byte, error)
+	ReadMessageContext(context.Context) (websocket.MessageType, []byte, error)
+	WriteMessage(websocket.MessageType, []byte) error
+	WriteMessageContext(context.Context, websocket.MessageType, []byte) error
 	Close() error
 	CloseWithStatus(websocket.StatusCode, string) error
 	Subprotocol() string

@@ -54,9 +54,9 @@ func TestNextWriterFragmentsLargeMessages(t *testing.T) {
 		}
 		var got []byte
 		for i, f := range frames {
-			wantOp := ContinuationFrame
+			wantOp := opContinuation
 			if i == 0 {
-				wantOp = BinaryMessage
+				wantOp = opBinary
 			}
 			if f.Opcode != wantOp || f.Final != (i == len(frames)-1) {
 				t.Fatalf("frame %d: opcode %v final %v", i, f.Opcode, f.Final)
@@ -79,7 +79,7 @@ func TestNextWriterEmptyMessage(t *testing.T) {
 	if err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if frames := streamFrames(t, raw, true); len(frames) != 1 || !frames[0].Final || frames[0].Opcode != TextMessage || len(frames[0].Payload) != 0 {
+	if frames := streamFrames(t, raw, true); len(frames) != 1 || !frames[0].Final || frames[0].Opcode != opText || len(frames[0].Payload) != 0 {
 		t.Fatalf("frames = %+v", frames)
 	}
 }
@@ -147,7 +147,7 @@ func TestNextWriterUseAfterClose(t *testing.T) {
 	if err := w.Close(); !errors.Is(err, errWriterClosed) {
 		t.Fatalf("second Close = %v", err)
 	}
-	if _, err := c.NextWriter(PingMessage); !errors.Is(err, ErrInvalidOpcode) {
+	if _, err := c.NextWriter(MessageType(opPing)); !errors.Is(err, errInvalidMessageType) {
 		t.Fatalf("NextWriter(Ping) = %v", err)
 	}
 }
@@ -171,7 +171,7 @@ func TestNextWriterSerializesDataAndInterleavesControl(t *testing.T) {
 		t.Fatalf("WriteMessage did not wait for the open writer: %v", err)
 	case <-time.After(50 * time.Millisecond):
 	}
-	if err := c.WriteControlFrame(PongMessage, []byte("p")); err != nil {
+	if err := c.writeControlFrame(opPong, []byte("p")); err != nil {
 		t.Fatalf("control frame blocked or failed: %v", err)
 	}
 	if err := w.Close(); err != nil {
@@ -185,7 +185,7 @@ func TestNextWriterSerializesDataAndInterleavesControl(t *testing.T) {
 	for _, f := range streamFrames(t, raw, true) {
 		got = append(got, f.Opcode.String())
 	}
-	want := []string{"BinaryMessage", "PongMessage", "ContinuationFrame", "TextMessage"}
+	want := []string{"binary", "pong", "continuation", "text"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("frame order = %v, want %v", got, want)
 	}
@@ -223,13 +223,13 @@ func TestNextWriterStopsAfterCloseFrame(t *testing.T) {
 	if _, err := w.Write(bytes.Repeat([]byte{'a'}, writeFragmentSize+1)); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.WriteControlFrame(CloseMessage, nil); err != nil {
+	if err := c.writeControlFrame(opClose, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := w.Close(); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("Close after close frame = %v", err)
 	}
-	if frames := streamFrames(t, raw, true); len(frames) != 2 || frames[1].Opcode != CloseMessage {
+	if frames := streamFrames(t, raw, true); len(frames) != 2 || frames[1].Opcode != opClose {
 		t.Fatalf("frames = %d", len(frames))
 	}
 }

@@ -209,8 +209,8 @@ func TestNetConnAddrs(t *testing.T) {
 	}
 }
 
-func TestNetConnPanicsOnControlType(t *testing.T) {
-	for _, typ := range []Opcode{ContinuationFrame, CloseMessage, PingMessage, PongMessage} {
+func TestNetConnPanicsOnInvalidType(t *testing.T) {
+	for _, typ := range []MessageType{0, 3, 8, 9, 10} {
 		func() {
 			defer func() {
 				if r := recover(); r == nil || !strings.Contains(r.(string), "NetConn") {

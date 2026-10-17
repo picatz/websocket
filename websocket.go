@@ -35,40 +35,61 @@ const DefaultMaxMessageSize = 1 << 20
 // header lines and their separators, and the final empty line.
 const DefaultMaxResponseHeaderBytes = 1 << 20
 
-// Opcode is a WebSocket frame opcode. ReadMessage returns, and WriteMessage
-// accepts, only TextMessage and BinaryMessage; the other values identify
-// fragments and control frames.
+// MessageType is the type of a WebSocket data message: TextMessage or
+// BinaryMessage. Its values are the frame opcodes that start each kind of
+// message.
 //
-// https://www.rfc-editor.org/rfc/rfc6455#section-5.2
-type Opcode int
+// https://www.rfc-editor.org/rfc/rfc6455#section-5.6
+type MessageType int
 
 const (
-	ContinuationFrame Opcode = 0x0 // Continuation frame opcode.
-	TextMessage       Opcode = 0x1 // Text message opcode.
-	BinaryMessage     Opcode = 0x2 // Binary message opcode.
-	CloseMessage      Opcode = 0x8 // Close message opcode.
-	PingMessage       Opcode = 0x9 // Ping message opcode.
-	PongMessage       Opcode = 0xA // Pong message opcode.
+	TextMessage   MessageType = 1 // UTF-8 text (RFC 6455 Section 5.6)
+	BinaryMessage MessageType = 2 // arbitrary bytes
 )
 
-// String returns the name of a defined opcode, such as "TextMessage", or
-// "Opcode(n)" for any other value.
-func (o Opcode) String() string {
-	switch o {
-	case ContinuationFrame:
-		return "ContinuationFrame"
+// String returns "TextMessage" or "BinaryMessage", or "MessageType(n)" for
+// any other value.
+func (t MessageType) String() string {
+	switch t {
 	case TextMessage:
 		return "TextMessage"
 	case BinaryMessage:
 		return "BinaryMessage"
-	case CloseMessage:
-		return "CloseMessage"
-	case PingMessage:
-		return "PingMessage"
-	case PongMessage:
-		return "PongMessage"
 	default:
-		return "Opcode(" + strconv.Itoa(int(o)) + ")"
+		return "MessageType(" + strconv.Itoa(int(t)) + ")"
+	}
+}
+
+// opcode is a WebSocket frame opcode.
+//
+// https://www.rfc-editor.org/rfc/rfc6455#section-5.2
+type opcode int
+
+const (
+	opContinuation opcode = 0x0
+	opText         opcode = 0x1
+	opBinary       opcode = 0x2
+	opClose        opcode = 0x8
+	opPing         opcode = 0x9
+	opPong         opcode = 0xA
+)
+
+func (o opcode) String() string {
+	switch o {
+	case opContinuation:
+		return "continuation"
+	case opText:
+		return "text"
+	case opBinary:
+		return "binary"
+	case opClose:
+		return "close"
+	case opPing:
+		return "ping"
+	case opPong:
+		return "pong"
+	default:
+		return "opcode(" + strconv.Itoa(int(o)) + ")"
 	}
 }
 
@@ -77,7 +98,7 @@ func (o Opcode) String() string {
 // https://www.rfc-editor.org/rfc/rfc6455#section-5.2
 type wireFrame struct {
 	Final   bool    // FIN: this is the last frame of a message
-	Opcode  Opcode  // frame type; ContinuationFrame for later fragments
+	Opcode  opcode  // frame type; opContinuation for later fragments
 	Payload []byte  // application data, unmasked
 	Masked  bool    // whether the frame is masked on the wire (client to server)
 	MaskKey [4]byte // masking key used when Masked is true
@@ -148,10 +169,10 @@ func (pmd *perMessageDeflate) ProcessOutgoingFrame(frame *wireFrame) error {
 	if !pmd.enabled {
 		return nil
 	}
-	if frame.Opcode == ContinuationFrame || ((frame.Opcode == TextMessage || frame.Opcode == BinaryMessage) && !frame.Final) {
+	if frame.Opcode == opContinuation || ((frame.Opcode == opText || frame.Opcode == opBinary) && !frame.Final) {
 		return errFragmentedCompression
 	}
-	if frame.Opcode != TextMessage && frame.Opcode != BinaryMessage {
+	if frame.Opcode != opText && frame.Opcode != opBinary {
 		return nil
 	}
 	s := pmd.sender()
@@ -362,10 +383,10 @@ type Conn struct {
 	// to the Close frame arrives first.
 	localClosed atomic.Bool
 
-	// Optional handlers for control frames
-	handlerMu   sync.RWMutex
-	pingHandler func(data string) error // Handler for Ping frames
-	pongHandler func(data string) error // Handler for Pong frames
+	// testHookControl, when set by in-package tests, sees each Ping and Pong
+	// before ReadMessage handles it, and skips that handling (the Pong reply
+	// or Ping match) by returning true.
+	testHookControl func(op opcode, payload []byte) (handled bool)
 
 	// Extensions
 	extensions []frameExtension
@@ -498,7 +519,7 @@ func (c *Conn) closeWithPayload(payload []byte) error {
 			}
 			c.closeSent = true
 			if err := c.conn.SetWriteDeadline(time.Now().Add(time.Second)); err == nil {
-				_ = c.writeFrameExtensions(&wireFrame{Final: true, Opcode: CloseMessage, Payload: payload, Masked: !c.isServer}, enabled)
+				_ = c.writeFrameExtensions(&wireFrame{Final: true, Opcode: opClose, Payload: payload, Masked: !c.isServer}, enabled)
 			}
 		}
 		c.releaseSendCompression()
@@ -563,7 +584,7 @@ func (c *Conn) failRead(err error) error {
 	})
 	var payload [2]byte
 	binary.BigEndian.PutUint16(payload[:], uint16(code))
-	_ = c.writeFrameRaw(&wireFrame{Final: true, Opcode: CloseMessage, Payload: payload[:], Masked: !c.isServer})
+	_ = c.writeFrameRaw(&wireFrame{Final: true, Opcode: opClose, Payload: payload[:], Masked: !c.isServer})
 	c.releaseSendCompression()
 	c.abort()
 	if !timer.Stop() {
@@ -582,38 +603,6 @@ func (c *Conn) failureCloseSafe() bool {
 		}
 	}
 	return true
-}
-
-// SetPingHandler replaces how ReadMessage answers a Ping. The default handler
-// replies with a Pong carrying the same application data, as RFC 6455 Section
-// 5.5.2 requires; a replacement must send that Pong itself, for example with
-// WriteControlFrame(PongMessage, []byte(appData)). A nil handler restores the
-// default.
-//
-// The handler runs on the goroutine calling ReadMessage, before ReadMessage
-// returns, and must not call ReadMessage. An error it returns is returned by
-// ReadMessage and ends the connection. SetPingHandler may be called
-// concurrently with reads.
-//
-// https://www.rfc-editor.org/rfc/rfc6455#section-5.5.2
-func (c *Conn) SetPingHandler(handler func(appData string) error) {
-	c.handlerMu.Lock()
-	defer c.handlerMu.Unlock()
-	c.pingHandler = handler
-}
-
-// SetPongHandler sets a function that ReadMessage calls with the application
-// data of each Pong it receives. Conn.Ping matches its Pong before the handler
-// runs, so a handler is not needed to use Ping. A nil handler, the default,
-// ignores Pongs.
-//
-// The handler runs on the goroutine calling ReadMessage and must not call
-// ReadMessage. An error it returns is returned by ReadMessage and ends the
-// connection. SetPongHandler may be called concurrently with reads.
-func (c *Conn) SetPongHandler(handler func(appData string) error) {
-	c.handlerMu.Lock()
-	defer c.handlerMu.Unlock()
-	c.pongHandler = handler
 }
 
 // ReadMessage reads the next complete WebSocket message. EOF before a message
@@ -637,13 +626,13 @@ func (c *Conn) SetPongHandler(handler func(appData string) error) {
 // only the peer's *CloseError or an error. A read interrupted by Close or
 // CloseWithStatus returns an error matching net.ErrClosed, even if the peer's
 // answer to the Close frame arrived first.
-func (c *Conn) ReadMessage() (messageType Opcode, data []byte, err error) {
+func (c *Conn) ReadMessage() (messageType MessageType, data []byte, err error) {
 	for {
-		messageType, data, err = c.readMessage()
+		op, data, err := c.readMessage()
 		if err != nil || !c.shuttingDown.Load() {
 			// The peer may have answered our Close frame before the
 			// transport closed; readError reports that as net.ErrClosed.
-			return messageType, data, c.readError(err)
+			return MessageType(op), data, c.readError(err)
 		}
 		// Shutdown has started: drop the message and keep reading until the
 		// peer's Close frame or an error.
@@ -651,7 +640,7 @@ func (c *Conn) ReadMessage() (messageType Opcode, data []byte, err error) {
 }
 
 // readMessage reads one complete message for ReadMessage.
-func (c *Conn) readMessage() (messageType Opcode, data []byte, err error) {
+func (c *Conn) readMessage() (messageType opcode, data []byte, err error) {
 	if c.closed.Load() {
 		return 0, nil, errClosed
 	}
@@ -669,7 +658,7 @@ func (c *Conn) readMessage() (messageType Opcode, data []byte, err error) {
 
 // readMessageLocked is ReadMessage after readMu is held and any NextReader
 // message has been discarded.
-func (c *Conn) readMessageLocked() (messageType Opcode, data []byte, err error) {
+func (c *Conn) readMessageLocked() (messageType opcode, data []byte, err error) {
 	pmd, compositionErr := messageCompression(c.extensions)
 	if compositionErr != nil {
 		return 0, nil, c.failRead(compositionErr)
@@ -690,7 +679,7 @@ func (c *Conn) readMessageLocked() (messageType Opcode, data []byte, err error) 
 		if err == nil {
 			err = c.validateMessageHeader(&frame, payloadLen, messageTypeSet, len(message))
 		}
-		if err == nil && pmd != nil && frame.Rsv1 && (frame.Opcode == TextMessage || frame.Opcode == BinaryMessage) {
+		if err == nil && pmd != nil && frame.Rsv1 && (frame.Opcode == opText || frame.Opcode == opBinary) {
 			data, peerClosed, err = c.readCompressedMessage(pmd, &frame, payloadLen)
 			if peerClosed {
 				return 0, nil, c.peerClose
@@ -705,12 +694,12 @@ func (c *Conn) readMessageLocked() (messageType Opcode, data []byte, err error) 
 		if err == nil {
 			// Extensions may transform payload, opcode, or FIN. Even registered
 			// disabled extensions keep the complete-frame, post-decode path.
-			checkedText = len(c.extensions) == 0 && (frame.Opcode == TextMessage ||
-				(frame.Opcode == ContinuationFrame && messageType == TextMessage))
+			checkedText = len(c.extensions) == 0 && (frame.Opcode == opText ||
+				(frame.Opcode == opContinuation && messageType == opText))
 			// Without extensions, validateMessageHeader has already checked the
 			// message state and size, so a data frame's payload can be read
 			// straight onto the end of the message.
-			inPlace = len(c.extensions) == 0 && frame.Opcode < CloseMessage
+			inPlace = len(c.extensions) == 0 && frame.Opcode < opClose
 			var dst []byte
 			if inPlace {
 				dst = message
@@ -729,7 +718,7 @@ func (c *Conn) readMessageLocked() (messageType Opcode, data []byte, err error) 
 		}
 
 		switch frame.Opcode {
-		case TextMessage, BinaryMessage:
+		case opText, opBinary:
 			if messageTypeSet {
 				return 0, nil, failWith(StatusProtocolError, ErrUnexpectedFrame)
 			}
@@ -742,7 +731,7 @@ func (c *Conn) readMessageLocked() (messageType Opcode, data []byte, err error) 
 				}
 				message = append(message, frame.Payload...)
 			}
-			if messageType == TextMessage {
+			if messageType == opText {
 				valid := true
 				if checkedText {
 					validated = len(message) - pending
@@ -759,7 +748,7 @@ func (c *Conn) readMessageLocked() (messageType Opcode, data []byte, err error) 
 				return messageType, message, nil
 			}
 
-		case ContinuationFrame:
+		case opContinuation:
 			if !messageTypeSet {
 				return 0, nil, failWith(StatusProtocolError, ErrUnexpectedContinuation)
 			}
@@ -769,7 +758,7 @@ func (c *Conn) readMessageLocked() (messageType Opcode, data []byte, err error) 
 				}
 				message = append(message, frame.Payload...)
 			}
-			if messageType == TextMessage {
+			if messageType == opText {
 				valid := true
 				if checkedText {
 					validated = len(message) - pending
@@ -786,7 +775,7 @@ func (c *Conn) readMessageLocked() (messageType Opcode, data []byte, err error) 
 				return messageType, message, nil
 			}
 
-		case CloseMessage, PingMessage, PongMessage:
+		case opClose, opPing, opPong:
 			peerClosed, err = c.handleControl(&frame)
 			if err != nil {
 				return 0, nil, err
@@ -815,7 +804,7 @@ func (c *Conn) readCompressedMessage(pmd *perMessageDeflate, frame *wireFrame, p
 	if err := source.start(frame, payloadLen); err != nil {
 		return nil, peerClosed, err
 	}
-	data, err = pmd.decodeMessage(&deflateMessageInput{source: source, peerClosed: &peerClosed}, c.maxBytes, frame.Opcode == TextMessage)
+	data, err = pmd.decodeMessage(&deflateMessageInput{source: source, peerClosed: &peerClosed}, c.maxBytes, frame.Opcode == opText)
 	return data, peerClosed, err
 }
 
@@ -848,9 +837,9 @@ func validUTF8Prefix(p []byte) (int, bool) {
 // writes fail with the original cause without calling outgoing extensions again,
 // unless argument validation or a closed connection takes precedence. Argument
 // validation and extension rejection before transport I/O do not poison writes.
-func (c *Conn) WriteMessage(messageType Opcode, data []byte) error {
+func (c *Conn) WriteMessage(messageType MessageType, data []byte) error {
 	if messageType != TextMessage && messageType != BinaryMessage {
-		return ErrInvalidOpcode
+		return errInvalidMessageType
 	}
 	if messageType == TextMessage && !utf8.Valid(data) {
 		return ErrInvalidFrame
@@ -878,7 +867,7 @@ func (c *Conn) WriteMessage(messageType Opcode, data []byte) error {
 	}
 	for _, ext := range enabled {
 		if _, ok := ext.(*perMessageDeflate); ok {
-			w := c.newMessageWriter(messageType, enabled)
+			w := c.newMessageWriter(opcode(messageType), enabled)
 			if _, err := w.Write(data); err != nil {
 				return err
 			}
@@ -887,15 +876,16 @@ func (c *Conn) WriteMessage(messageType Opcode, data []byte) error {
 	}
 	frame := &wireFrame{
 		Final:   true,
-		Opcode:  messageType,
+		Opcode:  opcode(messageType),
 		Payload: data,
 		Masked:  !c.isServer,
 	}
 	return c.writeFrameExtensions(frame, enabled)
 }
 
-// WriteControlFrame writes a control frame to the connection. A successful Close
-// frame starts the closing handshake, as CloseWrite does: subsequent data,
+// writeControlFrame writes a control frame to the connection for Ping,
+// CloseWrite, Shutdown and the automatic Pong reply. A successful Close frame
+// starts the closing handshake: subsequent data,
 // Ping and Close frames return an error matching net.ErrClosed, while reads
 // and Pongs remain available until the peer closes or Close is called. Call
 // Close to release the transport if the peer does not respond; this method
@@ -908,11 +898,11 @@ func (c *Conn) WriteMessage(messageType Opcode, data []byte) error {
 // outgoing extensions again, unless argument validation or the closing state
 // takes precedence. Argument validation and extension rejection before transport
 // I/O do not poison writes.
-func (c *Conn) WriteControlFrame(opcode Opcode, data []byte) error {
-	if opcode != CloseMessage && opcode != PingMessage && opcode != PongMessage {
+func (c *Conn) writeControlFrame(opcode opcode, data []byte) error {
+	if opcode != opClose && opcode != opPing && opcode != opPong {
 		return ErrInvalidOpcode
 	}
-	if opcode == CloseMessage {
+	if opcode == opClose {
 		if err := validateClosePayload(data); err != nil {
 			return err
 		}
@@ -927,7 +917,7 @@ func (c *Conn) WriteControlFrame(opcode Opcode, data []byte) error {
 	defer c.writeMu.Unlock()
 	// After a Close frame only Pongs, which answer the peer's Pings while
 	// the connection drains, may follow it.
-	if c.closed.Load() || (opcode != PongMessage && c.closeSent) {
+	if c.closed.Load() || (opcode != opPong && c.closeSent) {
 		return errClosed
 	}
 
@@ -940,7 +930,7 @@ func (c *Conn) WriteControlFrame(opcode Opcode, data []byte) error {
 	if err := c.writeFrame(frame); err != nil {
 		return err
 	}
-	if opcode == CloseMessage {
+	if opcode == opClose {
 		c.closeSent = true
 	}
 	return nil
@@ -965,7 +955,7 @@ func (c *Conn) readFrameHeader(frame *wireFrame) (uint64, error) {
 
 	*frame = wireFrame{
 		Final:  (b0 & 0x80) != 0,
-		Opcode: Opcode(b0 & 0x0F),
+		Opcode: opcode(b0 & 0x0F),
 		Masked: (b1 & 0x80) != 0,
 		Rsv1:   (b0 & 0x40) != 0,
 		Rsv2:   (b0 & 0x20) != 0,
@@ -974,7 +964,7 @@ func (c *Conn) readFrameHeader(frame *wireFrame) (uint64, error) {
 	payloadLen := uint64(b1 & 0x7F)
 
 	switch frame.Opcode {
-	case ContinuationFrame, TextMessage, BinaryMessage, CloseMessage, PingMessage, PongMessage:
+	case opContinuation, opText, opBinary, opClose, opPing, opPong:
 	default:
 		return 0, failWith(StatusProtocolError, ErrInvalidOpcode)
 	}
@@ -1005,7 +995,7 @@ func (c *Conn) readFrameHeader(frame *wireFrame) (uint64, error) {
 				continue
 			}
 			if _, ok := ext.(*perMessageDeflate); !ok ||
-				(!frame.Rsv2 && !frame.Rsv3 && (frame.Opcode == TextMessage || frame.Opcode == BinaryMessage)) {
+				(!frame.Rsv2 && !frame.Rsv3 && (frame.Opcode == opText || frame.Opcode == opBinary)) {
 				consumable = true
 				break
 			}
@@ -1040,7 +1030,7 @@ func (c *Conn) readFrameHeader(frame *wireFrame) (uint64, error) {
 	}
 	// Validate lengths before converting to int or allocating payload storage.
 	if payloadLen > uint64(^uint(0)>>1) ||
-		(c.maxBytes > 0 && frame.Opcode < CloseMessage && payloadLen > uint64(c.maxBytes)) {
+		(c.maxBytes > 0 && frame.Opcode < opClose && payloadLen > uint64(c.maxBytes)) {
 		return 0, failWith(StatusMessageTooBig, ErrPayloadTooLarge)
 	}
 
@@ -1058,15 +1048,15 @@ func (c *Conn) validateMessageHeader(frame *wireFrame, payloadLen uint64, starte
 		}
 	}
 	switch frame.Opcode {
-	case TextMessage, BinaryMessage:
+	case opText, opBinary:
 		if started {
 			return failWith(StatusProtocolError, ErrUnexpectedFrame)
 		}
-	case ContinuationFrame:
+	case opContinuation:
 		if !started {
 			return failWith(StatusProtocolError, ErrUnexpectedContinuation)
 		}
-	case CloseMessage:
+	case opClose:
 		if payloadLen == 1 {
 			return failWith(StatusProtocolError, ErrInvalidFrame)
 		}
@@ -1074,7 +1064,7 @@ func (c *Conn) validateMessageHeader(frame *wireFrame, payloadLen uint64, starte
 	// Compressed data may shrink after decoding. Continuations are not
 	// transformed by the built-in extension. Controls have their own limit
 	// and neither consume nor reset a fragmented message's remaining budget.
-	if c.maxBytes > 0 && frame.Opcode < CloseMessage && !frame.Rsv1 &&
+	if c.maxBytes > 0 && frame.Opcode < opClose && !frame.Rsv1 &&
 		payloadLen > uint64(c.maxBytes-messageBytes) {
 		return failWith(StatusMessageTooBig, ErrPayloadTooLarge)
 	}
@@ -1206,7 +1196,7 @@ func controlTooLarge(n uint64) error {
 }
 
 //go:noinline
-func invalidOpcode(op Opcode) error {
+func invalidOpcode(op opcode) error {
 	return fmt.Errorf("%w: %d", ErrInvalidOpcode, op)
 }
 

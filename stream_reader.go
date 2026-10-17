@@ -14,7 +14,7 @@ var errReaderSuperseded = errors.New("websocket: message reader superseded by a 
 // reader for its payload, so a large message can be consumed without holding
 // it in memory. The reader returns io.EOF at the end of the message. Control
 // frames that arrive before or inside the message are handled as in
-// ReadMessage, including the automatic Pong and the ping and pong handlers.
+// ReadMessage, including the automatic Pong.
 //
 // Uncompressed messages are streamed frame by frame: text is checked as UTF-8
 // as it arrives, and the connection's size limit bounds the whole message, so
@@ -30,16 +30,15 @@ var errReaderSuperseded = errors.New("websocket: message reader superseded by a 
 // a message, makes the connection terminal. Once Shutdown has started,
 // NextReader discards data messages like ReadMessage, and a reader whose
 // message Shutdown discarded returns Shutdown's outcome: the peer's
-// *CloseError, or an error. The reader must not be used concurrently, and must
-// not be read from a ping or pong handler.
-func (c *Conn) NextReader() (messageType Opcode, r io.Reader, err error) {
+// *CloseError, or an error. The reader must not be used concurrently.
+func (c *Conn) NextReader() (messageType MessageType, r io.Reader, err error) {
 	for {
-		messageType, mr, err := c.nextReader()
+		op, mr, err := c.nextReader()
 		if err != nil {
 			return 0, nil, c.readError(err)
 		}
 		if !c.shuttingDown.Load() {
-			return messageType, mr, nil
+			return MessageType(op), mr, nil
 		}
 		// Shutdown has started: drop the message and keep reading until the
 		// peer's Close frame or an error, as ReadMessage does.
@@ -50,7 +49,7 @@ func (c *Conn) NextReader() (messageType Opcode, r io.Reader, err error) {
 }
 
 // nextReader starts reading one data message for NextReader.
-func (c *Conn) nextReader() (Opcode, *messageReader, error) {
+func (c *Conn) nextReader() (opcode, *messageReader, error) {
 	if c.closed.Load() {
 		return 0, nil, errClosed
 	}
@@ -76,7 +75,7 @@ func (c *Conn) nextReader() (Opcode, *messageReader, error) {
 			return 0, nil, c.failRead(err)
 		}
 		switch frame.Opcode {
-		case CloseMessage, PingMessage, PongMessage:
+		case opClose, opPing, opPong:
 			if err := c.readFramePayload(&frame, n); err != nil {
 				return 0, nil, c.failRead(err)
 			}
@@ -87,8 +86,8 @@ func (c *Conn) nextReader() (Opcode, *messageReader, error) {
 			if err != nil {
 				return 0, nil, c.failRead(err)
 			}
-		case TextMessage, BinaryMessage:
-			mr := &messageReader{c: c, text: frame.Opcode == TextMessage}
+		case opText, opBinary:
+			mr := &messageReader{c: c, text: frame.Opcode == opText}
 			if pmd != nil && frame.Rsv1 {
 				data, peerClosed, err := c.readCompressedMessage(pmd, &frame, n)
 				if peerClosed {

@@ -108,9 +108,9 @@ func TestWriteFailureWritePoisonPreventsWireReuse(t *testing.T) {
 					}
 					for _, write := range []func() error{
 						func() error { return c.WriteMessage(BinaryMessage, []byte("retry")) },
-						func() error { return c.WriteControlFrame(PingMessage, nil) },
-						func() error { return c.WriteControlFrame(PongMessage, nil) },
-						func() error { return c.WriteControlFrame(CloseMessage, nil) },
+						func() error { return c.writeControlFrame(opPing, nil) },
+						func() error { return c.writeControlFrame(opPong, nil) },
+						func() error { return c.writeControlFrame(opClose, nil) },
 					} {
 						retryErr := write()
 						requireWriteCause(t, retryErr, cause)
@@ -155,13 +155,13 @@ func TestWriteFailureWritePreflightRemainsUsable(t *testing.T) {
 		ext := &failedWriteExtension{}
 		c := newTestConn(raw, ConnConfig{Server: server}, []frameExtension{ext}...)
 		for _, write := range []func() error{
-			func() error { return c.WriteMessage(PingMessage, nil) },
+			func() error { return c.WriteMessage(MessageType(opPing), nil) },
 			func() error { return c.WriteMessage(TextMessage, []byte{255}) },
-			func() error { return c.WriteControlFrame(BinaryMessage, nil) },
-			func() error { return c.WriteControlFrame(PingMessage, make([]byte, 126)) },
-			func() error { return c.WriteControlFrame(CloseMessage, []byte{1}) },
-			func() error { return c.WriteControlFrame(CloseMessage, []byte{3, 237}) },
-			func() error { return c.WriteControlFrame(CloseMessage, []byte{3, 232, 255}) },
+			func() error { return c.writeControlFrame(opBinary, nil) },
+			func() error { return c.writeControlFrame(opPing, make([]byte, 126)) },
+			func() error { return c.writeControlFrame(opClose, []byte{1}) },
+			func() error { return c.writeControlFrame(opClose, []byte{3, 237}) },
+			func() error { return c.writeControlFrame(opClose, []byte{3, 232, 255}) },
 		} {
 			if err := write(); err == nil || errors.Is(err, ErrWriteFailed) {
 				t.Fatal(err)
@@ -355,11 +355,11 @@ func TestWriteFailureShortTransportWriteBecomesSticky(t *testing.T) {
 }
 func TestWriteFailureFailedControlWritesKeepReadLifetime(t *testing.T) {
 	for _, server := range []bool{false, true} {
-		for _, opcode := range []Opcode{PingMessage, PongMessage, CloseMessage} {
+		for _, opcode := range []opcode{opPing, opPong, opClose} {
 			cause := &failedWriteError{"control transport failure"}
 			raw := &failedWriteRecorder{reader: bytes.NewReader(failureWire(server, 0x82, []byte("inbound"))), prefix: 1, cause: cause}
 			c := newTestConn(raw, ConnConfig{Server: server})
-			requireWriteCause(t, c.WriteControlFrame(opcode, nil), cause)
+			requireWriteCause(t, c.writeControlFrame(opcode, nil), cause)
 			if c.closeSent || c.closed.Load() || c.writeErr == nil || raw.closes != 0 {
 				t.Fatalf("failed %v changed lifetime", opcode)
 			}
@@ -464,11 +464,11 @@ func TestWriteFailureValidationPrecedence(t *testing.T) {
 			write func() error
 			want  error
 		}{
-			{func() error { return c.WriteMessage(PingMessage, nil) }, ErrInvalidOpcode},
+			{func() error { return c.WriteMessage(MessageType(opPing), nil) }, errInvalidMessageType},
 			{func() error { return c.WriteMessage(TextMessage, []byte{255}) }, ErrInvalidFrame},
-			{func() error { return c.WriteControlFrame(BinaryMessage, nil) }, ErrInvalidOpcode},
-			{func() error { return c.WriteControlFrame(PingMessage, make([]byte, 126)) }, ErrPayloadTooLarge},
-			{func() error { return c.WriteControlFrame(CloseMessage, []byte{1}) }, ErrInvalidFrame},
+			{func() error { return c.writeControlFrame(opBinary, nil) }, ErrInvalidOpcode},
+			{func() error { return c.writeControlFrame(opPing, make([]byte, 126)) }, ErrPayloadTooLarge},
+			{func() error { return c.writeControlFrame(opClose, []byte{1}) }, ErrInvalidFrame},
 		}
 		for _, check := range checks {
 			if err := check.write(); !errors.Is(err, check.want) || errors.Is(err, cause) {
@@ -477,9 +477,9 @@ func TestWriteFailureValidationPrecedence(t *testing.T) {
 		}
 		for _, write := range []func() error{
 			func() error { return c.WriteMessage(BinaryMessage, nil) },
-			func() error { return c.WriteControlFrame(PingMessage, nil) },
-			func() error { return c.WriteControlFrame(PongMessage, nil) },
-			func() error { return c.WriteControlFrame(CloseMessage, nil) },
+			func() error { return c.writeControlFrame(opPing, nil) },
+			func() error { return c.writeControlFrame(opPong, nil) },
+			func() error { return c.writeControlFrame(opClose, nil) },
 		} {
 			err := write()
 			if closed {
@@ -501,24 +501,24 @@ func TestWriteFailureAfterSuccessfulClose(t *testing.T) {
 	raw := &failedWriteRecorder{reader: bytes.NewReader(failureWire(true, 0x82, []byte("inbound"))), failAt: 2, cause: cause}
 	ext := &failedWriteExtension{}
 	c := newTestConn(raw, ConnConfig{Server: true}, []frameExtension{ext}...)
-	if err := c.WriteControlFrame(CloseMessage, nil); err != nil {
+	if err := c.writeControlFrame(opClose, nil); err != nil {
 		t.Fatal(err)
 	}
-	requireWriteCause(t, c.WriteControlFrame(PongMessage, nil), cause)
+	requireWriteCause(t, c.writeControlFrame(opPong, nil), cause)
 	if !c.closeSent || c.closed.Load() {
 		t.Fatal("successful close state lost")
 	}
 	if err := c.WriteMessage(BinaryMessage, nil); !errors.Is(err, net.ErrClosed) {
 		t.Fatal(err)
 	}
-	if err := c.WriteControlFrame(CloseMessage, nil); !errors.Is(err, net.ErrClosed) {
+	if err := c.writeControlFrame(opClose, nil); !errors.Is(err, net.ErrClosed) {
 		t.Fatal(err)
 	}
 	// Only Pongs may follow a Close frame, so a Ping fails before the stream.
-	if err := c.WriteControlFrame(PingMessage, nil); !errors.Is(err, net.ErrClosed) {
+	if err := c.writeControlFrame(opPing, nil); !errors.Is(err, net.ErrClosed) {
 		t.Fatal(err)
 	}
-	requireWriteCause(t, c.WriteControlFrame(PongMessage, nil), cause)
+	requireWriteCause(t, c.writeControlFrame(opPong, nil), cause)
 	if raw.calls != 2 || ext.outgoing != 2 || ext.enabled != 2 {
 		t.Fatal("retry reached callback or wire")
 	}

@@ -182,7 +182,7 @@ func deadlineTerminal(t *testing.T, c *websocket.Conn) {
 }
 
 type deadlineMessage struct {
-	opcode websocket.Opcode
+	opcode websocket.MessageType
 	data   []byte
 	err    error
 }

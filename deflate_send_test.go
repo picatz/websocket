@@ -110,9 +110,9 @@ func TestPMDFragmentedSend(t *testing.T) {
 		t.Fatalf("got %d frames, want at least 4", len(frames))
 	}
 	for i, f := range frames {
-		wantOpcode := ContinuationFrame
+		wantOpcode := opContinuation
 		if i == 0 {
-			wantOpcode = BinaryMessage
+			wantOpcode = opBinary
 		}
 		if f.Opcode != wantOpcode || f.Rsv1 != (i == 0) || f.Final != (i == len(frames)-1) {
 			t.Fatalf("frame %d: opcode %v rsv1 %t fin %t", i, f.Opcode, f.Rsv1, f.Final)
@@ -423,7 +423,7 @@ func (e *xorExtension) Negotiate(header string) error {
 	return nil
 }
 func (e *xorExtension) ProcessOutgoingFrame(f *wireFrame) error {
-	if f.Opcode >= CloseMessage {
+	if f.Opcode >= opClose {
 		return nil
 	}
 	e.out++
@@ -438,7 +438,7 @@ func (e *xorExtension) ProcessOutgoingFrame(f *wireFrame) error {
 	return nil
 }
 func (e *xorExtension) ProcessIncomingFrame(f *wireFrame) error {
-	if f.Opcode >= CloseMessage {
+	if f.Opcode >= opClose {
 		return nil
 	}
 	if !f.Rsv2 {

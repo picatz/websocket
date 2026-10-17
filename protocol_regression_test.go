@@ -175,7 +175,7 @@ func TestClosePayloadValidation(t *testing.T) {
 				t.Fatalf("error = %v, want ErrInvalidFrame", err)
 			}
 			c = frameConn(nil, true, 0)
-			err = c.WriteControlFrame(CloseMessage, tt.payload)
+			err = c.writeControlFrame(opClose, tt.payload)
 			if tt.valid != (err == nil) {
 				t.Fatalf("write error = %v, valid = %v", err, tt.valid)
 			}
@@ -185,20 +185,20 @@ func TestClosePayloadValidation(t *testing.T) {
 
 func TestWriteRejectsInvalidOpcodesAndPayload(t *testing.T) {
 	c := frameConn(nil, true, 0)
-	for _, opcode := range []Opcode{ContinuationFrame, 3, CloseMessage, PingMessage, PongMessage, 16} {
-		if !errors.Is(c.WriteMessage(opcode, nil), ErrInvalidOpcode) {
-			t.Fatalf("WriteMessage accepted %v", opcode)
+	for _, typ := range []MessageType{0, 3, 8, 9, 10, 16} {
+		if !errors.Is(c.WriteMessage(typ, nil), errInvalidMessageType) {
+			t.Fatalf("WriteMessage accepted %v", typ)
 		}
 	}
-	for _, opcode := range []Opcode{ContinuationFrame, TextMessage, BinaryMessage, 3, 16} {
-		if !errors.Is(c.WriteControlFrame(opcode, nil), ErrInvalidOpcode) {
-			t.Fatalf("WriteControlFrame accepted %v", opcode)
+	for _, opcode := range []opcode{opContinuation, opText, opBinary, 3, 16} {
+		if !errors.Is(c.writeControlFrame(opcode, nil), ErrInvalidOpcode) {
+			t.Fatalf("writeControlFrame accepted %v", opcode)
 		}
 	}
 	if !errors.Is(c.WriteMessage(TextMessage, []byte{0xff}), ErrInvalidFrame) {
 		t.Fatal("accepted invalid UTF-8")
 	}
-	if !errors.Is(c.WriteControlFrame(PingMessage, make([]byte, 126)), ErrPayloadTooLarge) {
+	if !errors.Is(c.writeControlFrame(opPing, make([]byte, 126)), ErrPayloadTooLarge) {
 		t.Fatal("accepted oversized ping")
 	}
 }
@@ -224,7 +224,7 @@ func TestPerMessageDeflateBoundsDecodedSize(t *testing.T) {
 			if err := pmd.Negotiate("permessage-deflate; client_no_context_takeover; server_no_context_takeover"); err != nil {
 				t.Fatal(err)
 			}
-			frame := &wireFrame{Final: true, Opcode: BinaryMessage, Payload: bytes.Repeat([]byte{'a'}, 129)}
+			frame := &wireFrame{Final: true, Opcode: opBinary, Payload: bytes.Repeat([]byte{'a'}, 129)}
 			if err := pmd.ProcessOutgoingFrame(frame); err != nil {
 				t.Fatal(err)
 			}

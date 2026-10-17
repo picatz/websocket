@@ -470,42 +470,6 @@ func ExampleConn_Shutdown_server() {
 	// server: <nil>
 }
 
-// A Ping handler runs inside ReadMessage before it returns the next message.
-// A replacement handler must answer with a Pong itself. Most programs keep
-// the default, which already does.
-func ExampleConn_SetPingHandler() {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := websocket.Upgrade(w, r)
-		if err != nil {
-			return
-		}
-		defer conn.Close()
-		_ = conn.WriteControlFrame(websocket.PingMessage, []byte("heartbeat 1"))
-		_ = conn.WriteMessage(websocket.TextMessage, []byte("hello"))
-		_, _, _ = conn.ReadMessage()
-	}))
-	defer srv.Close()
-
-	conn, _, err := websocket.Dial(context.Background(), wsURL(srv))
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer conn.Close()
-	conn.SetPingHandler(func(appData string) error {
-		fmt.Println("ping:", appData)
-		return conn.WriteControlFrame(websocket.PongMessage, []byte(appData))
-	})
-
-	_, data, err := conn.ReadMessage()
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Println("message:", string(data))
-	// Output:
-	// ping: heartbeat 1
-	// message: hello
-}
-
 // ConnectionState reports the TLS state of a wss connection, on the client
 // and on a server upgraded from HTTPS, for example to read the peer's
 // certificates.
