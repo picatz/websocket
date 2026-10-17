@@ -3,6 +3,7 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/picatz/websocket.svg)](https://pkg.go.dev/github.com/picatz/websocket)
 [![Test](https://github.com/picatz/websocket/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/picatz/websocket/actions/workflows/test.yml)
 [![Autobahn](https://github.com/picatz/websocket/actions/workflows/conformance.yml/badge.svg?branch=main)](#conformance)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 A [WebSocket] client and server for Go 1.26 and later, built only on the
 standard library. It implements [RFC 6455] and the permessage-deflate
@@ -26,11 +27,6 @@ compression extension of [RFC 7692], and passes every graded case of the
   `NetConn` to carry any stream protocol over a WebSocket.
 - **Beyond the core.** [`wsjson`](wsjson) for JSON messages and
   [`browser`](browser) for Go compiled to WebAssembly.
-
-> [!NOTE]
-> This package is young. Autobahn is a test baseline, not a certification,
-> and [`github.com/coder/websocket`](https://pkg.go.dev/github.com/coder/websocket)
-> has a longer production track record.
 
 [WebSocket]: https://en.wikipedia.org/wiki/WebSocket
 [RFC 6455]: https://www.rfc-editor.org/rfc/rfc6455.html
@@ -131,6 +127,8 @@ guide. Each topic below links to its section:
   bounding calls, and keepalives with `Ping`.
 - [Closing](https://pkg.go.dev/github.com/picatz/websocket#hdr-Closing): when
   to use `Close`, `CloseWrite` or `Shutdown`.
+- [Handshake options](https://pkg.go.dev/github.com/picatz/websocket#hdr-Handshake_options):
+  subprotocol negotiation and extra handshake headers.
 - [Limits and security](https://pkg.go.dev/github.com/picatz/websocket#hdr-Limits_and_security):
   message limits, the Origin policy, and the HTTP errors `Upgrade` writes.
 - [Proxies and custom transports](https://pkg.go.dev/github.com/picatz/websocket#hdr-Proxies_and_custom_transports):
@@ -145,8 +143,6 @@ Two subpackages build on the core:
 - [`browser`](https://pkg.go.dev/github.com/picatz/websocket/browser) is the
   client for programs compiled with `GOOS=js GOARCH=wasm`. It drives the
   host's own `WebSocket` object with the same message API.
-
-[MIGRATION.md](MIGRATION.md) lists the API changes made on the way to v0.1.0.
 
 ## Conformance
 
@@ -198,3 +194,7 @@ go test . -run '^$' -fuzz '^FuzzReadMessage$' -fuzztime=30s
 [`api/v0.txt`](api/v0.txt), so any change to it shows up as a reviewed diff.
 After an intended change, run `go test -run '^TestAPI$' -update-api .` and
 commit the result.
+
+## License
+
+Licensed under the [Apache License, Version 2.0](LICENSE).
