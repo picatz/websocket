@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/picatz/websocket"
@@ -264,22 +265,24 @@ func TestCloseAfterCloseWriteSendsOneCloseFrame(t *testing.T) {
 }
 
 func TestCloseWriteDrainBoundedByContext(t *testing.T) {
-	c, p := newScriptedPeer(t)
-	errc := make(chan error, 1)
-	go func() { errc <- c.CloseWrite(websocket.StatusNormalClosure, "") }()
-	p.next(t)
-	if err := <-errc; err != nil {
-		t.Fatalf("CloseWrite: %v", err)
-	}
-	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
-	defer cancel()
-	if _, _, err := c.ReadMessageContext(ctx); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("ReadMessageContext on a silent peer: err = %v, want DeadlineExceeded", err)
-	}
-	// The connection is aborted, so the peer sees its side of the pipe end.
-	if rest := p.rest(t); len(rest) != 0 {
-		t.Fatalf("frames after Close = %+v, want none", rest)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		c, p := newScriptedPeer(t)
+		errc := make(chan error, 1)
+		go func() { errc <- c.CloseWrite(websocket.StatusNormalClosure, "") }()
+		p.next(t)
+		if err := <-errc; err != nil {
+			t.Fatalf("CloseWrite: %v", err)
+		}
+		ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+		defer cancel()
+		if _, _, err := c.ReadMessageContext(ctx); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("ReadMessageContext on a silent peer: err = %v, want DeadlineExceeded", err)
+		}
+		// The connection is aborted, so the peer sees its side of the pipe end.
+		if rest := p.rest(t); len(rest) != 0 {
+			t.Fatalf("frames after Close = %+v, want none", rest)
+		}
+	})
 }
 
 // TestCloseWriteConcurrentWrites checks that a Close frame racing with data

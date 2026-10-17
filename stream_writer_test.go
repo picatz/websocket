@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"testing"
+	"testing/synctest"
 	"time"
 	"unicode/utf8"
 )
@@ -193,26 +194,28 @@ func TestNextWriterSerializesDataAndInterleavesControl(t *testing.T) {
 
 // An abandoned writer must not block writes once the connection is closed.
 func TestNextWriterAbandonedDoesNotBlockAfterClose(t *testing.T) {
-	c := newTestConn(&memoryConn{Reader: bytes.NewReader(nil)}, ConnConfig{Server: true})
-	w, err := c.NextWriter(BinaryMessage)
-	if err != nil {
-		t.Fatal(err)
-	}
-	queued := make(chan error, 1)
-	go func() { queued <- c.WriteMessage(BinaryMessage, []byte("x")) }()
-	time.Sleep(20 * time.Millisecond)
-	_ = c.Close()
-	select {
-	case err := <-queued:
-		if !errors.Is(err, net.ErrClosed) {
-			t.Fatalf("queued WriteMessage = %v", err)
+	synctest.Test(t, func(t *testing.T) {
+		c := newTestConn(&memoryConn{Reader: bytes.NewReader(nil)}, ConnConfig{Server: true})
+		w, err := c.NextWriter(BinaryMessage)
+		if err != nil {
+			t.Fatal(err)
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("WriteMessage stayed blocked behind an abandoned writer")
-	}
-	if _, err := w.Write([]byte("late")); !errors.Is(err, net.ErrClosed) {
-		t.Fatalf("Write after Conn.Close = %v", err)
-	}
+		queued := make(chan error, 1)
+		go func() { queued <- c.WriteMessage(BinaryMessage, []byte("x")) }()
+		synctest.Wait() // the write waits for the abandoned writer
+		_ = c.Close()
+		select {
+		case err := <-queued:
+			if !errors.Is(err, net.ErrClosed) {
+				t.Fatalf("queued WriteMessage = %v", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("WriteMessage stayed blocked behind an abandoned writer")
+		}
+		if _, err := w.Write([]byte("late")); !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("Write after Conn.Close = %v", err)
+		}
+	})
 }
 
 // A close frame sent between fragments ends the message: no data may follow.
