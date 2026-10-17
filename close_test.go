@@ -21,7 +21,7 @@ func TestCloseWithStatusWire(t *testing.T) {
 		{StatusNormalClosure, ""},
 		{StatusGoingAway, "shutting down"},
 		{StatusPolicyViolation, reason},
-		{1012, ""}, // IANA: service restart
+		{StatusServiceRestart, ""}, // IANA registry
 		{3000, "registered"},
 		{4999, strings.Repeat("x", maxCloseReason)},
 	}
@@ -192,6 +192,9 @@ func TestStatusCodeString(t *testing.T) {
 		StatusNormalClosure:    "StatusNormalClosure",
 		StatusNoStatusReceived: "StatusNoStatusReceived",
 		StatusTLSHandshake:     "StatusTLSHandshake",
+		StatusServiceRestart:   "StatusServiceRestart",
+		StatusTryAgainLater:    "StatusTryAgainLater",
+		StatusBadGateway:       "StatusBadGateway",
 		4000:                   "StatusCode(4000)",
 		-1:                     "StatusCode(-1)",
 	} {

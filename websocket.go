@@ -470,25 +470,6 @@ func (c *Conn) SetWriteDeadline(t time.Time) error {
 	return c.conn.SetWriteDeadline(t)
 }
 
-// WebSocket status codes. StatusNoStatusReceived, StatusAbnormalClosure, and
-// StatusTLSHandshake are local-only indicators and must not appear on the wire.
-//
-// https://datatracker.ietf.org/doc/html/rfc6455#section-7.4.1
-const (
-	StatusNormalClosure           = 1000
-	StatusGoingAway               = 1001
-	StatusProtocolError           = 1002
-	StatusUnsupportedData         = 1003
-	StatusNoStatusReceived        = 1005
-	StatusAbnormalClosure         = 1006
-	StatusInvalidFramePayloadData = 1007
-	StatusPolicyViolation         = 1008
-	StatusMessageTooBig           = 1009
-	StatusMandatoryExtension      = 1010
-	StatusInternalServerError     = 1011
-	StatusTLSHandshake            = 1015
-)
-
 // Close closes the transport, making a best-effort StatusNormalClosure notification
 // with a one-second write deadline when no other writer is active, replacing
 // any write deadline set by the caller. It does not wait for the peer's closing
@@ -552,13 +533,13 @@ func (c *Conn) closeWithPayload(payload []byte) error {
 // Arbitrary callback errors must never acquire status through errors.Is alone.
 type readFailure struct {
 	cause error
-	code  uint16
+	code  StatusCode
 }
 
 func (e *readFailure) Error() string { return e.cause.Error() }
 func (e *readFailure) Unwrap() error { return e.cause }
 
-func failWith(code uint16, cause error) error { return &readFailure{cause: cause, code: code} }
+func failWith(code StatusCode, cause error) error { return &readFailure{cause: cause, code: code} }
 
 func (c *Conn) abort() {
 	c.closeCompression()
@@ -568,7 +549,7 @@ func (c *Conn) abort() {
 // failRead publishes terminal state before attempting notification. The original
 // error always wins over cleanup errors, including timeout and partial writes.
 func (c *Conn) failRead(err error) error {
-	var code uint16
+	var code StatusCode
 	if failure, ok := err.(*readFailure); ok {
 		code, err = failure.code, failure.cause
 	}
@@ -599,7 +580,7 @@ func (c *Conn) failRead(err error) error {
 		close(done)
 	})
 	var payload [2]byte
-	binary.BigEndian.PutUint16(payload[:], code)
+	binary.BigEndian.PutUint16(payload[:], uint16(code))
 	_ = c.writeFrameRaw(&Frame{Final: true, Opcode: CloseMessage, Payload: payload[:], Masked: !c.isServer})
 	c.releaseSendCompression()
 	c.abort()

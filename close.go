@@ -9,11 +9,35 @@ import (
 	"unicode/utf8"
 )
 
-// StatusCode is a WebSocket close status code. The Status constants are
-// untyped, so they can be used as a StatusCode or as any integer type.
+// StatusCode is a WebSocket close status code.
 //
 // https://datatracker.ietf.org/doc/html/rfc6455#section-7.4
 type StatusCode int
+
+// Close status codes from RFC 6455 and the IANA WebSocket Close Code Number
+// Registry. StatusNoStatusReceived, StatusAbnormalClosure and
+// StatusTLSHandshake are local-only indicators and must not appear on the wire;
+// CloseWithStatus rejects them.
+//
+// https://datatracker.ietf.org/doc/html/rfc6455#section-7.4.1
+// https://www.iana.org/assignments/websocket/websocket.xhtml#close-code-number
+const (
+	StatusNormalClosure           StatusCode = 1000
+	StatusGoingAway               StatusCode = 1001
+	StatusProtocolError           StatusCode = 1002
+	StatusUnsupportedData         StatusCode = 1003
+	StatusNoStatusReceived        StatusCode = 1005
+	StatusAbnormalClosure         StatusCode = 1006
+	StatusInvalidFramePayloadData StatusCode = 1007
+	StatusPolicyViolation         StatusCode = 1008
+	StatusMessageTooBig           StatusCode = 1009
+	StatusMandatoryExtension      StatusCode = 1010
+	StatusInternalServerError     StatusCode = 1011
+	StatusServiceRestart          StatusCode = 1012 // IANA registry
+	StatusTryAgainLater           StatusCode = 1013 // IANA registry
+	StatusBadGateway              StatusCode = 1014 // IANA registry
+	StatusTLSHandshake            StatusCode = 1015
+)
 
 // String returns the RFC 6455 name of a registered code, or its number.
 func (s StatusCode) String() string {
@@ -40,6 +64,12 @@ func (s StatusCode) String() string {
 		return "StatusMandatoryExtension"
 	case StatusInternalServerError:
 		return "StatusInternalServerError"
+	case StatusServiceRestart:
+		return "StatusServiceRestart"
+	case StatusTryAgainLater:
+		return "StatusTryAgainLater"
+	case StatusBadGateway:
+		return "StatusBadGateway"
 	case StatusTLSHandshake:
 		return "StatusTLSHandshake"
 	default:
