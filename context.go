@@ -57,6 +57,7 @@ func (c *Conn) WriteMessageContext(ctx context.Context, messageType Opcode, data
 func (c *Conn) cancelIO() {
 	c.closeMu.Lock()
 	c.closed.Store(true)
+	c.markDoneLocked()
 	c.failed = true
 	c.closeMu.Unlock()
 	c.abort()
