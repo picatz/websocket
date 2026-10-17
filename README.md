@@ -191,6 +191,29 @@ Each directory under [`examples`](examples) is a small program with tests:
   protocol.
 - [`rpc`](examples/rpc) answers JSON requests sent as binary messages.
 
+### Browser and WebAssembly clients
+
+Programs compiled with `GOOS=js GOARCH=wasm` cannot open TCP connections, so
+`Dial` is not available to them. The [`browser`](browser) subpackage drives the
+host's own `WebSocket` object instead. Its methods are a subset of
+`*websocket.Conn`'s with identical signatures, and a peer close is a
+`*websocket.CloseError`. The intended direction is for `websocket.Dial` itself
+to work under `GOOS=js`:
+
+```go
+conn, err := browser.Dial(ctx, "wss://example.com/socket", browser.WithSubprotocols("chat"))
+if err != nil {
+	return err
+}
+defer conn.Close()
+```
+
+The browser handles the handshake, framing, Ping/Pong and compression, so
+headers, TLS, proxies and control frames are out of the program's hands, and
+dial failures carry no detail. See the package documentation for the full list.
+Its tests run in Node.js 22 or later against a native Go server as part of
+`go test ./...`, and are skipped when Node is not installed.
+
 ## Limits and connection lifetime
 
 `Dial` and `Upgrade` default to `DefaultMaxMessageSize`, 1 MiB (1,048,576 bytes).
