@@ -116,9 +116,12 @@ type Frame struct {
 	Rsv3    bool    // RSV3, available to other extensions
 }
 
-// Extension interface for WebSocket extensions.
+// Extension is a WebSocket extension negotiated during the opening handshake
+// and applied to each frame. NewPerMessageDeflateExtension returns the
+// built-in compression extension. Each connection needs its own instance;
+// pass a new one to every Dial or Upgrade.
 //
-// https://tools.ietf.org/html/rfc6455#section-9
+// https://www.rfc-editor.org/rfc/rfc6455#section-9
 type Extension interface {
 	// Name returns the extension name.
 	Name() string
@@ -335,9 +338,10 @@ const DefaultCompressionMemoryLimit = 64 << 10
 // another extension changed fails with [ErrUnsupportedExtensionComposition],
 // as does enabling more than one permessage-deflate instance.
 //
-// Direct callbacks require complete messages; do not mix them concurrently
-// with Conn I/O. Create a separate instance for each connection. Configuration and negotiation
-// must finish before I/O; concurrent reconfiguration is not supported.
+// Each connection needs its own instance; pass a new one to every Dial or
+// Upgrade. Direct callbacks require complete messages; do not mix them
+// concurrently with Conn I/O. Configuration and negotiation must finish
+// before I/O; concurrent reconfiguration is not supported.
 //
 // https://www.rfc-editor.org/rfc/rfc7692
 func NewPerMessageDeflateExtension(options ...PerMessageDeflateOption) Extension {

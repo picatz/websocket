@@ -19,6 +19,8 @@
 // use [github.com/picatz/websocket/browser], which drives the host's
 // WebSocket object with the same message API, and
 // [github.com/picatz/websocket/wsjson] reads and writes JSON messages.
+// NetConn wraps a Conn as a net.Conn that carries a byte stream in messages
+// of one type, for tunnelling protocols such as gRPC or SSH over a WebSocket.
 //
 // # Reading, writing and concurrency
 //
@@ -74,9 +76,6 @@
 // Origin checks protect browsers from cross-site use; they are not
 // authentication.
 //
-// NetConn wraps a Conn as a net.Conn that carries a byte stream in messages of
-// one type, for tunnelling protocols such as gRPC or SSH over a WebSocket.
-//
 // # Proxies and custom transports
 //
 // Dial connects directly unless WithProxy selects an HTTP or HTTPS proxy, for
@@ -91,14 +90,16 @@
 // NewPerMessageDeflateExtension opts into permessage-deflate on either side.
 // Messages are compressed as one DEFLATE stream across any number of frames,
 // with context takeover unless the peers negotiate otherwise and with any
-// window from 8 to 15 bits. By default a connection keeps about 64 KiB of
+// window from 8 to 15 bits. Each connection needs its own instance; pass a
+// new one to every Dial or Upgrade. By default a connection keeps about 64 KiB of
 // compression state between messages (DefaultCompressionMemoryLimit);
 // compressors are pooled across connections while idle.
 //
 // The examples directory holds tested programs for common patterns:
 // [github.com/picatz/websocket/examples/keepalive],
-// [github.com/picatz/websocket/examples/chat] and
-// [github.com/picatz/websocket/examples/pubsub].
+// [github.com/picatz/websocket/examples/chat],
+// [github.com/picatz/websocket/examples/pubsub] and, for js/wasm,
+// [github.com/picatz/websocket/examples/browser].
 //
 // [RFC 6455]: https://www.rfc-editor.org/rfc/rfc6455.html
 // [RFC 7692]: https://www.rfc-editor.org/rfc/rfc7692.html
