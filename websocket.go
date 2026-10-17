@@ -1596,21 +1596,27 @@ func dial(ctx context.Context, urlStr string, opts *dialOptions) (ws *Conn, resp
 	// as TLS. Join the callback before returning so it cannot close a live
 	// connection after a successful handshake has been handed to the caller.
 	rawConn := conn
-	canceled := make(chan struct{})
-	stopCancel := context.AfterFunc(ctx, func() {
-		rawConn.Close()
-		close(canceled)
-	})
+	// Deferred first so that it runs last, after the callback is joined.
 	defer func() {
-		if !stopCancel() {
-			<-canceled
-		}
 		if ctx.Err() != nil {
 			rawConn.Close()
 			ws = nil
 			err = fmt.Errorf("%w: %w", ErrBadHandshake, context.Cause(ctx))
 		}
 	}()
+	if ctx.Done() != nil {
+		// A context that can never be canceled needs no callback.
+		canceled := make(chan struct{})
+		stopCancel := context.AfterFunc(ctx, func() {
+			rawConn.Close()
+			close(canceled)
+		})
+		defer func() {
+			if !stopCancel() {
+				<-canceled
+			}
+		}()
+	}
 
 	// Tunnel through the proxy before any end-to-end TLS. The cancellation
 	// callback above closes the raw transport, interrupting this exchange too.
@@ -1641,38 +1647,33 @@ func dial(ctx context.Context, urlStr string, opts *dialOptions) (ws *Conn, resp
 
 	key := generateKey()
 
-	// Build the request
-	var reqBuilder strings.Builder
-	reqBuilder.Grow(512)
-	reqBuilder.WriteString("GET " + u.RequestURI() + " HTTP/1.1\r\n")
-	reqBuilder.WriteString("Host: " + u.Host + "\r\n")
-	reqBuilder.WriteString("Upgrade: websocket\r\n")
-	reqBuilder.WriteString("Connection: Upgrade\r\n")
-	reqBuilder.WriteString("Sec-WebSocket-Key: " + key + "\r\n")
-	reqBuilder.WriteString("Sec-WebSocket-Version: 13\r\n")
-
-	// Offers were validated before connecting, including extension-produced
-	// values.
+	// Build the request. Offers were validated before connecting, including
+	// extension-produced values.
+	req := make([]byte, 0, 512)
+	req = append(req, "GET "...)
+	req = append(req, u.RequestURI()...)
+	req = append(req, " HTTP/1.1\r\nHost: "...)
+	req = append(req, u.Host...)
+	req = append(req, "\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: "...)
+	req = append(req, key[:]...)
+	req = append(req, "\r\nSec-WebSocket-Version: 13\r\n"...)
 	if extOffer != "" {
-		reqBuilder.WriteString("Sec-WebSocket-Extensions: " + extOffer + "\r\n")
+		req = append(req, "Sec-WebSocket-Extensions: "...)
+		req = append(req, extOffer...)
+		req = append(req, "\r\n"...)
 	}
-
-	// Custom headers
-	if opts.header != nil {
-		for k, vs := range opts.header {
-			for _, v := range vs {
-				reqBuilder.WriteString(k)
-				reqBuilder.WriteString(": ")
-				reqBuilder.WriteString(v)
-				reqBuilder.WriteString("\r\n")
-			}
+	for k, vs := range opts.header {
+		for _, v := range vs {
+			req = append(req, k...)
+			req = append(req, ": "...)
+			req = append(req, v...)
+			req = append(req, "\r\n"...)
 		}
 	}
-	reqBuilder.WriteString("\r\n")
-	reqStr := reqBuilder.String()
+	req = append(req, "\r\n"...)
 
 	// Send the request
-	if _, err = conn.Write([]byte(reqStr)); err != nil {
+	if _, err = conn.Write(req); err != nil {
 		conn.Close()
 		return nil, nil, fmt.Errorf("%w: failed to send handshake request: %w", ErrBadHandshake, err)
 	}
@@ -1696,13 +1697,12 @@ func dial(ctx context.Context, urlStr string, opts *dialOptions) (ws *Conn, resp
 		conn.Close()
 		return nil, resp, errInvalidUpgradeHeader
 	}
-	accept := resp.Header.Get("Sec-WebSocket-Accept")
-	if accept == "" || len(resp.Header.Values("Sec-WebSocket-Accept")) != 1 {
+	accept := resp.Header["Sec-Websocket-Accept"]
+	if len(accept) != 1 {
 		conn.Close()
 		return nil, resp, errInvalidSecAccept
 	}
-	expectedAccept := computeAcceptKey(key)
-	if accept != expectedAccept {
+	if expected := acceptKey(key[:]); accept[0] != string(expected[:]) {
 		conn.Close()
 		return nil, resp, errInvalidSecAccept
 	}
@@ -1761,7 +1761,7 @@ func upgrade(w http.ResponseWriter, r *http.Request, opts *upgradeOptions) (*Con
 	if err != nil {
 		return nil, err
 	}
-	responseHeader, err := negotiateUpgradeExtensions(r, opts, subprotocol)
+	extensions, err := negotiateUpgradeExtensions(r, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -1779,7 +1779,7 @@ func upgrade(w http.ResponseWriter, r *http.Request, opts *upgradeOptions) (*Con
 		}
 		return nil, fmt.Errorf("%w: %w", errHandshakeFailed, err)
 	}
-	if err := writeUpgradeResponse(bufrw.Writer, acceptKey, responseHeader); err != nil {
+	if err := writeUpgradeResponse(bufrw.Writer, acceptKey, opts, extensions, subprotocol); err != nil {
 		conn.Close()
 		return nil, err
 	}
@@ -1814,15 +1814,17 @@ func checkUpgradeRequest(r *http.Request, opts *upgradeOptions) (string, string,
 	if !r.ProtoAtLeast(1, 1) {
 		return "", "", ErrBadHandshake
 	}
-	if r.Header.Get("Sec-WebSocket-Version") != "13" || len(r.Header.Values("Sec-WebSocket-Version")) != 1 {
+	// Header keys are indexed in canonical form directly: Get and Values
+	// canonicalize their argument, which allocates for "WebSocket".
+	if version := r.Header["Sec-Websocket-Version"]; len(version) != 1 || version[0] != "13" {
 		return "", "", ErrUnsupportedVersion
 	}
-	key := r.Header.Get("Sec-WebSocket-Key")
-	if key == "" {
+	keys := r.Header["Sec-Websocket-Key"]
+	if len(keys) == 0 || keys[0] == "" {
 		return "", "", errMissingSecKey
 	}
-	decodedKey, err := base64.StdEncoding.DecodeString(key)
-	if err != nil || len(decodedKey) != 16 || len(r.Header.Values("Sec-WebSocket-Key")) != 1 {
+	key := keys[0]
+	if len(keys) != 1 || !validChallengeKey(key) {
 		return "", "", errInvalidSecKey
 	}
 	offered, err := parseSubprotocolOffers(r.Header)
@@ -1849,27 +1851,21 @@ func checkUpgradeRequest(r *http.Request, opts *upgradeOptions) (string, string,
 }
 
 // negotiateUpgradeExtensions negotiates the configured extensions with the
-// client's offer and returns the response's extra header fields.
+// client's offer and returns the response's Sec-WebSocket-Extensions value,
+// or "" when none was accepted.
 //
 // https://www.rfc-editor.org/rfc/rfc6455#section-9.1
-func negotiateUpgradeExtensions(r *http.Request, opts *upgradeOptions, subprotocol string) (http.Header, error) {
-	var responseHeader http.Header
-	if opts.responseHeader != nil {
-		responseHeader = opts.responseHeader.Clone()
-	} else {
-		responseHeader = make(http.Header)
-	}
-
+func negotiateUpgradeExtensions(r *http.Request, opts *upgradeOptions) (string, error) {
 	extValues := extensionValues(r.Header)
 	offeredExtensions, err := parseExtensions(extValues)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	extHeader := strings.Join(extValues, ", ")
 	var acceptedExtensions []frameExtension
 	for _, ext := range opts.extensions {
 		if ext == nil {
-			return nil, fmt.Errorf("%w: nil extension", errInvalidExtension)
+			return "", fmt.Errorf("%w: nil extension", errInvalidExtension)
 		}
 		var err error
 		if pmd, ok := ext.(*perMessageDeflate); ok {
@@ -1878,41 +1874,48 @@ func negotiateUpgradeExtensions(r *http.Request, opts *upgradeOptions, subprotoc
 			err = ext.Negotiate(extHeader)
 		}
 		if err != nil {
-			return nil, fmt.Errorf("%w: extension %s: %w", errInvalidExtension, ext.Name(), err)
+			return "", fmt.Errorf("%w: extension %s: %w", errInvalidExtension, ext.Name(), err)
 		}
 		if ext.IsEnabled() {
 			acceptedExtensions = append(acceptedExtensions, ext)
 		}
 	}
 	if _, err := messageCompression(opts.extensions); err != nil {
-		return nil, fmt.Errorf("%w: %w", errInvalidExtension, err)
+		return "", fmt.Errorf("%w: %w", errInvalidExtension, err)
 	}
 	selection, selectedExtensions, err := extensionOffers(acceptedExtensions)
 	if err == nil {
 		err = validateExtensionSelection(selectedExtensions, offeredExtensions)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", errInvalidHandshakeHeader, err)
+		return "", fmt.Errorf("%w: %w", errInvalidHandshakeHeader, err)
 	}
-	if selection != "" {
-		responseHeader.Set("Sec-WebSocket-Extensions", selection)
-	}
-	if opts.subprotocols != nil && subprotocol != "" {
-		responseHeader.Set("Sec-WebSocket-Protocol", subprotocol)
-	}
-	return responseHeader, nil
+	return selection, nil
 }
 
 // writeUpgradeResponse writes and flushes the 101 Switching Protocols
-// response.
-func writeUpgradeResponse(w *bufio.Writer, acceptKey string, responseHeader http.Header) error {
+// response: the caller's header fields, the negotiated extensions and, when
+// the Upgrader chose it from its Subprotocols, the subprotocol. Neither of
+// those two can also be in the caller's fields, as checkUpgradeRequest
+// rejects both before the handshake.
+func writeUpgradeResponse(w *bufio.Writer, acceptKey string, opts *upgradeOptions, extensions, subprotocol string) error {
 	w.WriteString("HTTP/1.1 101 Switching Protocols\r\n")
 	w.WriteString("Upgrade: websocket\r\n")
 	w.WriteString("Connection: Upgrade\r\n")
 	w.WriteString("Sec-WebSocket-Accept: ")
 	w.WriteString(acceptKey)
 	w.WriteString("\r\n")
-	for k, vs := range responseHeader {
+	if extensions != "" {
+		w.WriteString("Sec-WebSocket-Extensions: ")
+		w.WriteString(extensions)
+		w.WriteString("\r\n")
+	}
+	if opts.subprotocols != nil && subprotocol != "" {
+		w.WriteString("Sec-WebSocket-Protocol: ")
+		w.WriteString(subprotocol)
+		w.WriteString("\r\n")
+	}
+	for k, vs := range opts.responseHeader {
 		for _, v := range vs {
 			w.WriteString(k)
 			w.WriteString(": ")
@@ -1995,9 +1998,9 @@ func isHTTPToken(value string) bool {
 // nonempty token is required when the header is present.
 func parseSubprotocolOffers(header http.Header) (map[string]struct{}, error) {
 	values := subprotocolValues(header)
-	offered := make(map[string]struct{})
+	var offered map[string]struct{}
 	for _, value := range values {
-		for _, item := range strings.Split(value, ",") {
+		for item := range strings.SplitSeq(value, ",") {
 			token := strings.Trim(item, " \t")
 			if token == "" {
 				continue
@@ -2007,6 +2010,9 @@ func parseSubprotocolOffers(header http.Header) (map[string]struct{}, error) {
 			}
 			if _, duplicate := offered[token]; duplicate {
 				return nil, errInvalidSubprotocol
+			}
+			if offered == nil {
+				offered = make(map[string]struct{}, 1)
 			}
 			offered[token] = struct{}{}
 		}
@@ -2040,18 +2046,49 @@ func validateSubprotocolSelection(header http.Header, offered map[string]struct{
 
 // computeAcceptKey computes the Sec-WebSocket-Accept value.
 func computeAcceptKey(challengeKey string) string {
-	h := sha1.New()
-	h.Write([]byte(challengeKey))
-	h.Write([]byte("258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
-	return base64.StdEncoding.EncodeToString(h.Sum(nil))
+	accept := acceptKey([]byte(challengeKey))
+	return string(accept[:])
 }
 
-// generateKey generates a random base64-encoded string for the
-// Sec-WebSocket-Key header.
-func generateKey() string {
-	var key [16]byte
-	rand.Read(key[:]) // never fails; see crypto/rand.Read
-	return base64.StdEncoding.EncodeToString(key[:])
+// acceptGUID is the GUID RFC 6455 section 1.3 appends to the client's key.
+const acceptGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+// acceptKey returns the Sec-WebSocket-Accept value for a 24-byte challenge
+// key without allocating; longer keys, which a server rejects first, cost
+// one allocation.
+//
+// https://www.rfc-editor.org/rfc/rfc6455#section-1.3
+func acceptKey(challengeKey []byte) [28]byte {
+	var buf [24 + len(acceptGUID)]byte
+	sum := sha1.Sum(append(append(buf[:0], challengeKey...), acceptGUID...))
+	var accept [28]byte
+	base64.StdEncoding.Encode(accept[:], sum[:])
+	return accept
+}
+
+// validChallengeKey reports whether key is a Sec-WebSocket-Key value: the
+// base64 encoding of 16 bytes, which is always 24 characters long.
+//
+// https://www.rfc-editor.org/rfc/rfc6455#section-4.2.1
+func validChallengeKey(key string) bool {
+	if len(key) != 24 {
+		return false
+	}
+	var nonce [18]byte
+	n, err := base64.StdEncoding.Decode(nonce[:], []byte(key))
+	return err == nil && n == 16
+}
+
+// generateKey generates a Sec-WebSocket-Key value: a random 16-byte nonce,
+// base64-encoded.
+//
+// https://www.rfc-editor.org/rfc/rfc6455#section-4.1
+func generateKey() [24]byte {
+	var nonce [16]byte
+	rand.Read(nonce[:]) // never fails; see crypto/rand.Read
+	var key [24]byte
+	base64.StdEncoding.Encode(key[:], nonce[:])
+	return key
 }
 
 // headerContains checks if a header contains a specific value,
@@ -2059,7 +2096,7 @@ func generateKey() string {
 // and handling of multiple values separated by commas.
 func headerContains(h http.Header, name string, value string) bool {
 	for _, s := range h[name] {
-		for _, v := range strings.Split(s, ",") {
+		for v := range strings.SplitSeq(s, ",") {
 			if strings.EqualFold(strings.TrimSpace(v), value) {
 				return true
 			}
