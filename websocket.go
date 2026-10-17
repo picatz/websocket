@@ -1596,21 +1596,27 @@ func dial(ctx context.Context, urlStr string, opts *dialOptions) (ws *Conn, resp
 	// as TLS. Join the callback before returning so it cannot close a live
 	// connection after a successful handshake has been handed to the caller.
 	rawConn := conn
-	canceled := make(chan struct{})
-	stopCancel := context.AfterFunc(ctx, func() {
-		rawConn.Close()
-		close(canceled)
-	})
+	// Deferred first so that it runs last, after the callback is joined.
 	defer func() {
-		if !stopCancel() {
-			<-canceled
-		}
 		if ctx.Err() != nil {
 			rawConn.Close()
 			ws = nil
 			err = fmt.Errorf("%w: %w", ErrBadHandshake, context.Cause(ctx))
 		}
 	}()
+	if ctx.Done() != nil {
+		// A context that can never be canceled needs no callback.
+		canceled := make(chan struct{})
+		stopCancel := context.AfterFunc(ctx, func() {
+			rawConn.Close()
+			close(canceled)
+		})
+		defer func() {
+			if !stopCancel() {
+				<-canceled
+			}
+		}()
+	}
 
 	// Tunnel through the proxy before any end-to-end TLS. The cancellation
 	// callback above closes the raw transport, interrupting this exchange too.
