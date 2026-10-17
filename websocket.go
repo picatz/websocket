@@ -358,6 +358,10 @@ type Conn struct {
 	// shuttingDown makes ReadMessage discard data messages once Shutdown
 	// has started.
 	shuttingDown atomic.Bool
+	// localClosed records that Close or CloseWithStatus was called, so a
+	// read it interrupts reports net.ErrClosed even when the peer's reply
+	// to the Close frame arrives first.
+	localClosed atomic.Bool
 
 	// Optional handlers for control frames
 	handlerMu   sync.RWMutex
@@ -626,10 +630,16 @@ func (c *Conn) SetPongHandler(handler func(appData string) error) {
 // caller deadlines. Custom extensions may require dropping without notification.
 // Arbitrary callbacks and custom transport Close implementations can still block.
 // Once Shutdown has started, ReadMessage discards data messages and returns
-// only the peer's *CloseError or an error.
+// only the peer's *CloseError or an error. A read interrupted by Close or
+// CloseWithStatus returns an error matching net.ErrClosed, even if the peer's
+// answer to the Close frame arrived first.
 func (c *Conn) ReadMessage() (messageType Opcode, data []byte, err error) {
 	for {
 		messageType, data, err = c.readMessage()
+		if _, ok := err.(*CloseError); ok && c.localClosed.Load() {
+			// The peer answered our Close frame before the transport closed.
+			return 0, nil, errClosed
+		}
 		if err != nil || !c.shuttingDown.Load() {
 			return messageType, data, err
 		}
