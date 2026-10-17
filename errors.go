@@ -2,17 +2,18 @@ package websocket
 
 import (
 	"errors"
-	"io"
 	"net"
 )
 
 // Errors returned by Dial and Upgrade and by the options they validate. They
 // are often wrapped with detail, so test for them with errors.Is.
 var (
-	// ErrBadHandshake reports that Dial's opening handshake failed: the
-	// request could not be sent, the response could not be read, or the
-	// server answered with something other than a valid 101 response. Dial
-	// returns the server's response alongside it when one was read.
+	// ErrBadHandshake reports an opening handshake that failed because of the
+	// other side. From Dial, the request could not be sent, the response could
+	// not be read, or the server answered with something other than a valid
+	// 101 response; Dial returns the server's response alongside it when one
+	// was read. From Upgrade, the client's request was malformed, and Upgrade
+	// has already replied with a 4xx status.
 	ErrBadHandshake = errors.New("websocket: bad handshake")
 	// ErrResponseHeaderTooLarge reports a handshake response head longer than
 	// the WithMaxResponseHeaderBytes limit. It is returned together with
@@ -30,14 +31,14 @@ var (
 	ErrFailedToGenerateKey = errors.New("websocket: failed to generate key")
 
 	// ErrOriginNotAllowed reports a request whose Origin the Upgrade origin
-	// policy rejected. The response writer is untouched; HTTP 403 is the
-	// conventional reply.
+	// policy rejected. Upgrade has already replied 403 Forbidden.
 	ErrOriginNotAllowed = errors.New("websocket: origin not allowed")
 	// ErrInvalidMethod reports an upgrade request whose method is not GET.
+	// Upgrade has already replied 405 Method Not Allowed with Allow: GET.
 	ErrInvalidMethod = errors.New("websocket: invalid request method")
 	// ErrUnsupportedVersion reports an upgrade request whose
-	// Sec-WebSocket-Version is not 13. RFC 6455 Section 4.2.2 has the server
-	// reply 426 with a Sec-WebSocket-Version: 13 header.
+	// Sec-WebSocket-Version is not 13. Upgrade has already replied 426
+	// Upgrade Required with Sec-WebSocket-Version: 13 (RFC 6455 Section 4.4).
 	ErrUnsupportedVersion = errors.New("websocket: unsupported WebSocket version")
 	// ErrInvalidUpgradeHeader reports a handshake whose Upgrade field does not
 	// name websocket.
@@ -52,16 +53,18 @@ var (
 	// base64.
 	ErrInvalidSecKey = errors.New("websocket: invalid Sec-WebSocket-Key header")
 	// ErrNotHijacker reports a response writer that cannot hand over its
-	// connection, such as an HTTP/2 stream.
+	// connection, such as an HTTP/2 stream. Upgrade has already replied 500
+	// Internal Server Error.
 	ErrNotHijacker = errors.New("websocket: response does not implement http.Hijacker")
 	// ErrHandshakeFailed reports that Upgrade failed after it began taking
-	// over the connection, while hijacking or writing the 101 response. The
-	// response writer can no longer be used to send an HTTP error.
+	// over the connection, while hijacking or writing the 101 response. It
+	// writes no HTTP response, because the connection may no longer belong to
+	// the server.
 	ErrHandshakeFailed = errors.New("websocket: handshake failed")
 
 	// ErrInvalidHandshakeHeader reports a custom header given to WithHeader or
 	// WithResponseHeader that is malformed or that the handshake manages
-	// itself.
+	// itself. Upgrade replies 500 Internal Server Error for it.
 	ErrInvalidHandshakeHeader = errors.New("websocket: invalid custom handshake header")
 	// ErrInvalidExtension reports a malformed or unoffered
 	// Sec-WebSocket-Extensions negotiation, or an extension that rejected it.
@@ -122,8 +125,7 @@ var (
 
 // errClosed is returned by operations on a connection that has been closed or
 // aborted, or whose closing handshake has begun. It matches net.ErrClosed,
-// the standard library's "use of closed connection" error, and io.ErrClosedPipe,
-// which earlier versions returned.
+// the standard library's "use of closed connection" error.
 var errClosed error = &closedError{"websocket: use of closed connection"}
 
 // closedError is the type of errClosed and ErrAlreadyClosed.
@@ -131,7 +133,5 @@ type closedError struct{ msg string }
 
 func (e *closedError) Error() string { return e.msg }
 
-// Is reports whether target is net.ErrClosed or io.ErrClosedPipe.
-func (e *closedError) Is(target error) bool {
-	return target == net.ErrClosed || target == io.ErrClosedPipe
-}
+// Is reports whether target is net.ErrClosed.
+func (e *closedError) Is(target error) bool { return target == net.ErrClosed }

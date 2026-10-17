@@ -211,9 +211,10 @@ if errors.Is(err, net.ErrClosed) {
 }
 ```
 
-These errors still match `io.ErrClosedPipe` with `errors.Is`, so checks written
-that way keep working. Code that compared with `err == io.ErrClosedPipe` must
-switch to `errors.Is`.
+They no longer match `io.ErrClosedPipe`. Replace checks for
+`io.ErrClosedPipe`, whether `errors.Is` or `==`, with
+`errors.Is(err, net.ErrClosed)`. An `io.ErrClosedPipe` returned by a custom
+transport is still wrapped unchanged, as is any transport error.
 
 An error an outgoing extension returns from `ProcessOutgoingFrame` is now
 wrapped with `%w`, like incoming extension errors, so `errors.Is` and

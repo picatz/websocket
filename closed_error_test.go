@@ -3,7 +3,6 @@ package websocket_test
 import (
 	"context"
 	"errors"
-	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -16,8 +15,7 @@ import (
 
 // TestClosedErrorsMatchNetErrClosed checks that every way of using a closed
 // Conn reports the standard library's net.ErrClosed, so callers need one
-// check, while io.ErrClosedPipe and ErrAlreadyClosed keep matching for code
-// written against earlier versions.
+// check.
 func TestClosedErrorsMatchNetErrClosed(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c, err := websocket.Upgrade(w, r)
@@ -59,9 +57,6 @@ func TestClosedErrorsMatchNetErrClosed(t *testing.T) {
 	} {
 		if !errors.Is(err, net.ErrClosed) {
 			t.Errorf("%s: err = %v, want a match for net.ErrClosed", name, err)
-		}
-		if name != "interrupted read" && !errors.Is(err, io.ErrClosedPipe) {
-			t.Errorf("%s: err = %v, want a match for io.ErrClosedPipe", name, err)
 		}
 	}
 	if err := c.Close(); !errors.Is(err, websocket.ErrAlreadyClosed) {

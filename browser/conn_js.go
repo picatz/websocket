@@ -23,17 +23,15 @@ import (
 var ErrDialFailed = errors.New("browser: websocket dial failed")
 
 // errClosed is returned by operations on a closed or closing connection. Like
-// websocket.Conn's, it matches net.ErrClosed and io.ErrClosedPipe.
+// websocket.Conn's, it matches net.ErrClosed.
 var errClosed error = closedError{}
 
 type closedError struct{}
 
 func (closedError) Error() string { return "browser: use of closed connection" }
 
-// Is reports whether target is net.ErrClosed or io.ErrClosedPipe.
-func (closedError) Is(target error) bool {
-	return target == net.ErrClosed || target == io.ErrClosedPipe
-}
+// Is reports whether target is net.ErrClosed.
+func (closedError) Is(target error) bool { return target == net.ErrClosed }
 
 // readyState values of the host WebSocket object.
 //
