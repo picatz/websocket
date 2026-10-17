@@ -142,7 +142,7 @@ func ExampleCloseStatus() {
 	}
 	fmt.Println(websocket.CloseStatus(errors.New("not a close")))
 	// Output:
-	// StatusServiceRestart true
+	// StatusServiceRestart false
 	// deploying
 	// StatusCode(-1)
 }

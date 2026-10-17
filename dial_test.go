@@ -370,7 +370,7 @@ func TestDialWithNetDialContext(t *testing.T) {
 	_, _, err = (&websocket.Dialer{NetDialContext: func(context.Context, string, string) (net.Conn, error) {
 		return nil, nil
 	}}).Dial(t.Context(), target.wsURL())
-	if !errors.Is(err, websocket.ErrBadHandshake) {
+	if !errors.Is(err, websocket.ErrInvalidConfig) {
 		t.Fatalf("err = %v", err)
 	}
 }

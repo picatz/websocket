@@ -253,7 +253,7 @@ func (c *Conn) onClose(ev js.Value) {
 // closeEventError converts a close event into ReadMessage's terminal error.
 // After a local Close it matches net.ErrClosed. A clean close from the peer is a
 // *websocket.CloseError carrying the peer's code and reason, which matches
-// io.EOF like websocket.Conn's. A close without a closing handshake, which the
+// io.EOF for a normal close like websocket.Conn's. A close without a closing handshake, which the
 // host reports as code 1006 (Abnormal Closure), matches io.ErrUnexpectedEOF.
 //
 // https://websockets.spec.whatwg.org/#the-closeevent-interface
@@ -301,7 +301,8 @@ func (c *Conn) signal() {
 // ReadMessage returns the next data message. Messages that arrived before the
 // connection ended are returned first. Then ReadMessage returns a
 // *websocket.CloseError carrying the peer's code and reason if the peer closed
-// the connection, which matches io.EOF with errors.Is; an error matching net.ErrClosed after
+// the connection, which matches io.EOF for a normal close; an error matching
+// net.ErrClosed after
 // Close; an error matching websocket.ErrMessageTooLarge if a message exceeded
 // the limit; or one matching io.ErrUnexpectedEOF if the host reported a
 // failure or the connection closed without a closing handshake.
@@ -369,7 +370,7 @@ func (c *Conn) WriteMessage(messageType websocket.MessageType, data []byte) erro
 // The host queues outgoing messages without limit, so for backpressure the
 // write first waits while more than 1 MiB is already queued and unsent. Then
 // it hands the message to the host and returns; it does not wait for the
-// network. If ctx ends while waiting, it returns an error wrapping
+// network. If ctx is done before then, it returns an error wrapping
 // context.Cause(ctx). Nothing has been sent at that point, so unlike
 // websocket.Conn.WriteMessageContext the connection stays open. Writes are
 // serialized, so concurrent writers keep their order and share the wait.
@@ -413,6 +414,9 @@ func (c *Conn) waitForBuffer(ctx context.Context) error {
 		c.mu.Unlock()
 		if ended || c.ws.Get("readyState").Int() != stateOpen {
 			return errClosed
+		}
+		if ctx.Err() != nil {
+			return fmt.Errorf("browser: write: %w", context.Cause(ctx))
 		}
 		if c.ws.Get("bufferedAmount").Int() <= writeHighWaterMark {
 			return nil

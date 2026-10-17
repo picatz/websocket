@@ -11,9 +11,7 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"os"
 	"syscall/js"
 	"time"
@@ -132,8 +130,8 @@ func runArgs(url string, messages []string) error {
 
 // describeClose turns a read error into a line for the page.
 func describeClose(err error) string {
-	if errors.Is(err, io.EOF) {
-		return fmt.Sprintf("closed by server (status %d)", websocket.CloseStatus(err))
+	if code := websocket.CloseStatus(err); code != -1 {
+		return fmt.Sprintf("closed by server (status %d)", code)
 	}
 	return "read: " + err.Error()
 }

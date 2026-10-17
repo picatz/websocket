@@ -168,8 +168,8 @@ func TestUpgradeMaxMessageSize(t *testing.T) {
 func TestDialRejectsInvalidURL(t *testing.T) {
 	for _, url := range []string{"http://example.test", "ws:///no-host", "ws://user@example.test", "ws://example.test/#fragment"} {
 		t.Run(url, func(t *testing.T) {
-			if _, _, err := Dial(t.Context(), url); !errors.Is(err, ErrBadHandshake) {
-				t.Fatalf("error = %v, want ErrBadHandshake", err)
+			if _, _, err := Dial(t.Context(), url); !errors.Is(err, ErrInvalidConfig) {
+				t.Fatalf("error = %v, want ErrInvalidConfig", err)
 			}
 		})
 	}

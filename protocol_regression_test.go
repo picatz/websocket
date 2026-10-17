@@ -168,8 +168,8 @@ func TestClosePayloadValidation(t *testing.T) {
 			c := frameConn(append([]byte{0x88, byte(len(tt.payload))}, tt.payload...), false, 0)
 			_, _, err := c.ReadMessage()
 			if tt.valid {
-				if !errors.Is(err, io.EOF) {
-					t.Fatalf("error = %v, want EOF", err)
+				if CloseStatus(err) == -1 {
+					t.Fatalf("error = %v, want a *CloseError", err)
 				}
 			} else if !errors.Is(err, errInvalidFrame) {
 				t.Fatalf("error = %v, want errInvalidFrame", err)

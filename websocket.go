@@ -607,7 +607,8 @@ func (c *Conn) failureCloseSafe() bool {
 // ReadMessage reads the next complete WebSocket message. EOF before a message
 // begins is reported as io.EOF; a truncated frame or fragmented message returns
 // an error matching io.ErrUnexpectedEOF. A peer close frame returns a *CloseError
-// carrying the peer's status code and reason; it also matches io.EOF.
+// carrying the peer's status code and reason, which matches io.EOF only for a
+// normal close.
 // A header that already proves a protocol or size violation is rejected without
 // waiting for its payload, even when that payload is absent or truncated.
 // Invalid text is rejected as its payload arrives. A compressed message is
@@ -1452,9 +1453,7 @@ func (c *Conn) writeFrameTo(w *bufio.Writer, frame *wireFrame, owned bool) error
 	if frame.Masked {
 		header = append(header, 0, 0, 0, 0)
 		key := header[len(header)-4:]
-		if _, err := rand.Read(key); err != nil {
-			return fmt.Errorf("%w: failed to generate masking key: %v", errWriteFailed, err)
-		}
+		rand.Read(key) // never fails; see crypto/rand.Read
 		frame.MaskKey = [4]byte(key)
 	}
 
@@ -1567,10 +1566,10 @@ func dial(ctx context.Context, urlStr string, opts *dialOptions) (ws *Conn, resp
 
 	u, err := url.Parse(urlStr)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w: invalid URL: %v", ErrBadHandshake, err)
+		return nil, nil, fmt.Errorf("%w: invalid URL: %w", ErrInvalidConfig, err)
 	}
 	if (u.Scheme != "ws" && u.Scheme != "wss") || u.Hostname() == "" || u.User != nil || u.Fragment != "" {
-		return nil, nil, fmt.Errorf("%w: URL must use ws or wss, with a host and no user info or fragment", ErrBadHandshake)
+		return nil, nil, fmt.Errorf("%w: URL must use ws or wss, with a host and no user info or fragment", ErrInvalidConfig)
 	}
 	port := u.Port()
 	if port == "" {
@@ -1603,7 +1602,7 @@ func dial(ctx context.Context, urlStr string, opts *dialOptions) (ws *Conn, resp
 		if ctx.Err() != nil {
 			rawConn.Close()
 			ws = nil
-			err = fmt.Errorf("%w: %w", ErrBadHandshake, ctx.Err())
+			err = fmt.Errorf("%w: %w", ErrBadHandshake, context.Cause(ctx))
 		}
 	}()
 
@@ -1634,11 +1633,7 @@ func dial(ctx context.Context, urlStr string, opts *dialOptions) (ws *Conn, resp
 		conn = tlsConn
 	}
 
-	key, err := generateKey()
-	if err != nil {
-		conn.Close()
-		return nil, nil, fmt.Errorf("%w: %w", errFailedToGenerateKey, err)
-	}
+	key := generateKey()
 
 	// Build the request
 	var reqBuilder strings.Builder
@@ -1672,7 +1667,7 @@ func dial(ctx context.Context, urlStr string, opts *dialOptions) (ws *Conn, resp
 	// Send the request
 	if _, err = conn.Write([]byte(reqStr)); err != nil {
 		conn.Close()
-		return nil, nil, fmt.Errorf("%w: failed to send handshake request: %v", ErrBadHandshake, err)
+		return nil, nil, fmt.Errorf("%w: failed to send handshake request: %w", ErrBadHandshake, err)
 	}
 
 	// Read the response
@@ -2045,12 +2040,10 @@ func computeAcceptKey(challengeKey string) string {
 }
 
 // generateKey generates a random base64-encoded string for the Sec-WebSocket-Key header.
-func generateKey() (string, error) {
-	key := make([]byte, 16)
-	if _, err := io.ReadFull(rand.Reader, key); err != nil {
-		return "", fmt.Errorf("%w: %w", errFailedToGenerateKey, err)
-	}
-	return base64.StdEncoding.EncodeToString(key), nil
+func generateKey() string {
+	var key [16]byte
+	rand.Read(key[:]) // never fails; see crypto/rand.Read
+	return base64.StdEncoding.EncodeToString(key[:])
 }
 
 // headerContains checks if a header contains a specific value,

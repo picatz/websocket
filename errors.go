@@ -11,9 +11,10 @@ import (
 var (
 	// ErrBadHandshake reports an opening handshake that failed because of the
 	// other side or the network. From Dial, the server could not be reached,
-	// the request could not be sent, or the server answered with something
-	// other than a valid 101 response; Dial returns the server's response
-	// alongside it when one was read. From Upgrade, the client's request was
+	// the request could not be sent, the server answered with something
+	// other than a valid 101 response, or Dial's context ended first, in
+	// which case the error also matches the context's cause. Dial returns
+	// the server's response alongside it when one was read. From Upgrade, the client's request was
 	// malformed and Upgrade has already replied with a 4xx status, or the
 	// connection failed after Upgrade took it over.
 	ErrBadHandshake = errors.New("websocket: bad handshake")
@@ -27,7 +28,8 @@ var (
 	// together with ErrBadHandshake.
 	ErrUnsupportedVersion = errors.New("websocket: unsupported WebSocket version")
 	// ErrInvalidConfig reports a misconfigured Dialer, Upgrader, Compression
-	// or ConnConfig: the caller's mistake, not the peer's. Dial returns it
+	// or ConnConfig, or an invalid Dial URL: the caller's mistake, not the
+	// peer's. Dial returns it
 	// before connecting, NewConn before taking over the connection, and
 	// Upgrade before hijacking, after replying 500 Internal Server Error.
 	ErrInvalidConfig = errors.New("websocket: invalid configuration")
@@ -44,7 +46,6 @@ var (
 	errResponseHeaderTooLarge  = errors.New("websocket: response header too large")
 	errProxy                   = errors.New("websocket: proxy tunnel failed")
 	errInvalidSecAccept        = errors.New("websocket: invalid Sec-WebSocket-Accept header")
-	errFailedToGenerateKey     = errors.New("websocket: failed to generate key")
 	errInvalidMethod           = errors.New("websocket: invalid request method")
 	errInvalidUpgradeHeader    = errors.New("websocket: invalid Upgrade header")
 	errInvalidConnectionHeader = errors.New("websocket: invalid Connection header")

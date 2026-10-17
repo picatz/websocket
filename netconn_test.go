@@ -246,7 +246,7 @@ func TestNetConnAbnormalCloseFailsIOCopy(t *testing.T) {
 	}()
 	var got bytes.Buffer
 	n, err := io.Copy(&got, sn)
-	if n != 7 || CloseStatus(err) != StatusInternalServerError || !errors.Is(err, io.EOF) {
+	if n != 7 || CloseStatus(err) != StatusInternalServerError || errors.Is(err, io.EOF) {
 		t.Fatalf("io.Copy = %d, %v; want 7 bytes and a 1011 CloseError", n, err)
 	}
 	if _, err := sn.Read(make([]byte, 1)); CloseStatus(err) != StatusInternalServerError {

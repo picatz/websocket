@@ -161,7 +161,7 @@ func TestIncomingCloseStatusBoundaries(t *testing.T) {
 						t.Fatal(err)
 					}
 					want = []byte{3, 234}
-				} else if !errors.Is(err, io.EOF) || CloseStatus(err) != StatusCode(code) {
+				} else if errors.Is(err, io.EOF) != (code == 1000 || code == 1001) || CloseStatus(err) != StatusCode(code) {
 					t.Fatal(err)
 				}
 				if got := failureClosePayload(t, raw.written.Bytes(), server); !bytes.Equal(got, want) {
