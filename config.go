@@ -94,8 +94,10 @@ type Dialer struct {
 
 // Dial connects to the WebSocket server at urlStr, a ws or wss URL. ctx covers
 // TCP, any proxy tunnel, TLS and the HTTP upgrade handshake, but not later
-// message I/O. On a failed handshake the returned response, when non-nil, is
-// the server's reply with its body closed.
+// message I/O. When the server rejects the upgrade, Dial returns an error
+// matching ErrBadHandshake together with the server's response. Its Body
+// holds up to the first 4 KiB of the response body, read before the
+// connection is closed, so an explanation such as a 401's can still be read.
 func (d *Dialer) Dial(ctx context.Context, urlStr string) (*Conn, *http.Response, error) {
 	return d.dial(ctx, urlStr, nil)
 }

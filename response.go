@@ -2,9 +2,12 @@ package websocket
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"io"
+	"net"
 	"net/http"
+	"time"
 )
 
 // responseHeadReader bounds parser input without allocating the entire budget.
@@ -63,4 +66,17 @@ func readHandshakeResponse(src io.Reader, maxBytes int64) (*http.Response, *bufi
 	// Prefetched bytes after the head do not consume a lasting frame/body cap.
 	r.remaining = -1
 	return resp, br, nil
+}
+
+// maxRejectedBody is how much of a rejected handshake's response body Dial
+// keeps in the returned response's Body. gorilla/websocket keeps 1 KiB.
+const maxRejectedBody = 4 << 10
+
+// keepRejectedBody replaces resp.Body, which reads from a connection Dial is
+// about to close, with up to maxRejectedBody of it read now. A server
+// that is slow to send its body cannot hold Dial for more than a second.
+func keepRejectedBody(conn net.Conn, resp *http.Response) {
+	_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxRejectedBody))
+	resp.Body = io.NopCloser(bytes.NewReader(body))
 }

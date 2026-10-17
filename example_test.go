@@ -98,7 +98,7 @@ func ExampleUpgrader() {
 }
 
 // A rejected handshake returns an error matching ErrBadHandshake, together
-// with the server's response so the caller can inspect its status.
+// with the server's response and the start of its body.
 func ExampleDial_rejected() {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "sign in first", http.StatusUnauthorized)
@@ -106,8 +106,11 @@ func ExampleDial_rejected() {
 	defer srv.Close()
 
 	_, resp, err := websocket.Dial(context.Background(), wsURL(srv))
-	fmt.Println(errors.Is(err, websocket.ErrBadHandshake), resp.StatusCode)
-	// Output: true 401
+	if errors.Is(err, websocket.ErrBadHandshake) && resp != nil {
+		body, _ := io.ReadAll(resp.Body)
+		fmt.Printf("%d %s", resp.StatusCode, body)
+	}
+	// Output: 401 sign in first
 }
 
 // CloseWithStatus tells the peer why the connection is ending. The peer's
