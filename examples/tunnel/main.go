@@ -14,8 +14,10 @@
 //	go run ./examples/tunnel client -listen localhost:2222 ws://localhost:8080/tunnel
 //	ssh -p 2222 localhost
 //
-// When either side of a forwarded connection ends, both are closed: a
-// WebSocket has no equivalent of a TCP half-close. A peer that aborts reaches
+// When either side of a forwarded connection ends, both are closed. A
+// WebSocket's closing handshake is not a lasting half-close: the peer answers
+// a Close frame with its own, so the other direction cannot keep streaming. A
+// peer that aborts reaches
 // the other side as an error, not a clean end of stream, because NetConn
 // reports any close status other than a normal one as an error.
 //
