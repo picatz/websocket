@@ -354,6 +354,9 @@ type Conn struct {
 	// peerClosed reports, to goroutines other than the reader, that the
 	// peer's Close frame arrived. It is set before the connection is closed.
 	peerClosed atomic.Bool
+	// shuttingDown makes ReadMessage discard data messages once Shutdown
+	// has started.
+	shuttingDown atomic.Bool
 
 	// Optional handlers for control frames
 	handlerMu   sync.RWMutex
@@ -621,7 +624,21 @@ func (c *Conn) SetPongHandler(handler func(appData string) error) {
 // then abort the transport. Notification uses at most one second without changing
 // caller deadlines. Custom extensions may require dropping without notification.
 // Arbitrary callbacks and custom transport Close implementations can still block.
+// Once Shutdown has started, ReadMessage discards data messages and returns
+// only the peer's *CloseError or an error.
 func (c *Conn) ReadMessage() (messageType Opcode, data []byte, err error) {
+	for {
+		messageType, data, err = c.readMessage()
+		if err != nil || !c.shuttingDown.Load() {
+			return messageType, data, err
+		}
+		// Shutdown has started: drop the message and keep reading until the
+		// peer's Close frame or an error.
+	}
+}
+
+// readMessage reads one complete message for ReadMessage.
+func (c *Conn) readMessage() (messageType Opcode, data []byte, err error) {
 	if c.closed.Load() {
 		return 0, nil, errClosed
 	}
