@@ -204,7 +204,7 @@ func TestCloseWithStatusReachesPeer(t *testing.T) {
 
 // conn is the method set shared by browser.Conn and websocket.Conn. Both must
 // implement it with identical signatures, so code written against it works
-// with either. Subprotocol joins it once websocket.Conn has that method.
+// with either.
 type conn interface {
 	ReadMessage() (websocket.Opcode, []byte, error)
 	ReadMessageContext(context.Context) (websocket.Opcode, []byte, error)
@@ -212,6 +212,7 @@ type conn interface {
 	WriteMessageContext(context.Context, websocket.Opcode, []byte) error
 	Close() error
 	CloseWithStatus(websocket.StatusCode, string) error
+	Subprotocol() string
 }
 
 var (

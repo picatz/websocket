@@ -275,10 +275,12 @@ func (c *Conn) signal() {
 }
 
 // ReadMessage returns the next data message. Messages that arrived before the
-// connection ended are returned first. Then ReadMessage returns io.EOF if the
-// peer closed the connection, io.ErrClosedPipe after Close, an error matching
-// websocket.ErrPayloadTooLarge if a message exceeded the limit, or one matching
-// io.ErrUnexpectedEOF if the host reported a failure.
+// connection ended are returned first. Then ReadMessage returns a
+// *websocket.CloseError carrying the peer's code and reason if the peer closed
+// the connection, which matches io.EOF with errors.Is; io.ErrClosedPipe after
+// Close; an error matching websocket.ErrPayloadTooLarge if a message exceeded
+// the limit; or one matching io.ErrUnexpectedEOF if the host reported a
+// failure or the connection closed without a closing handshake.
 func (c *Conn) ReadMessage() (messageType websocket.Opcode, data []byte, err error) {
 	return c.ReadMessageContext(context.Background())
 }
