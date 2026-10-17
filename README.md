@@ -190,6 +190,9 @@ Each directory under [`examples`](examples) is a small program with tests:
 - [`pubsub`](examples/pubsub) delivers messages by topic over a small JSON
   protocol.
 - [`rpc`](examples/rpc) answers JSON requests sent as binary messages.
+- [`browser`](examples/browser) serves a page running Go compiled to
+  WebAssembly that talks to the server with the `browser` package. Start it
+  with `go run ./examples/browser`.
 
 ### Browser and WebAssembly clients
 
@@ -212,7 +215,8 @@ The browser handles the handshake, framing, Ping/Pong and compression, so
 headers, TLS, proxies and control frames are out of the program's hands, and
 dial failures carry no detail. See the package documentation for the full list.
 Its tests run in Node.js 22 or later against a native Go server as part of
-`go test ./...`, and are skipped when Node is not installed.
+`go test ./...`, and are skipped when Node is not installed. The
+[`browser` example](examples/browser) is a complete page and server.
 
 ## Connection details and JSON
 
