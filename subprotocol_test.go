@@ -197,12 +197,12 @@ func TestSubprotocolTokenByteAlphabet(t *testing.T) {
 		if (err == nil) != (allowed || i == ',') {
 			t.Fatalf("offer byte %d: %v", i, err)
 		}
-		err = validateSubprotocolSelection(http.Header{"Sec-WebSocket-Protocol": {token}}, map[string]struct{}{token: {}})
+		_, err = validateSubprotocolSelection(http.Header{"Sec-WebSocket-Protocol": {token}}, map[string]struct{}{token: {}})
 		if (err == nil) != allowed {
 			t.Fatalf("selection byte %d: %v", i, err)
 		}
 		if allowed {
-			if err := validateSubprotocolSelection(http.Header{"Sec-WebSocket-Protocol": {token}}, offered); err != nil {
+			if got, err := validateSubprotocolSelection(http.Header{"Sec-WebSocket-Protocol": {token}}, offered); err != nil || got != token {
 				t.Fatalf("round trip byte %d: %v", i, err)
 			}
 		}
@@ -218,9 +218,12 @@ func FuzzSubprotocolNegotiation(f *testing.F) {
 		if err != nil {
 			return
 		}
-		err = validateSubprotocolSelection(http.Header{"Sec-WebSocket-Protocol": {selected}}, offered)
+		got, err := validateSubprotocolSelection(http.Header{"Sec-WebSocket-Protocol": {selected}}, offered)
 		if err == nil {
 			token := strings.Trim(selected, " \t")
+			if got != token {
+				t.Fatalf("selection = %q, want %q", got, token)
+			}
 			if !isHTTPToken(token) {
 				t.Fatal("accepted invalid token")
 			}

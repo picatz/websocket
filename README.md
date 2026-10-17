@@ -301,6 +301,30 @@ Receiving the peer's close or calling `Close` closes the transport without
 sending another close frame. Call `Close` if the peer does not respond; there is
 no automatic handshake timeout. Close the connection after any write error.
 
+## Subprotocols
+
+`WithSubprotocols` offers application protocols from `Dial`, in order of
+preference. `WithUpgradeSubprotocols` lists the protocols a server supports, in
+its own order of preference; `Upgrade` selects the first one the client offered,
+or none. Both sides read the result with `Conn.Subprotocol()`, which is `""`
+when nothing was selected.
+
+```go
+// Client
+conn, _, err := websocket.Dial(ctx, "wss://example.com/socket",
+	websocket.WithSubprotocols("v2.chat", "v1.chat"))
+
+// Server
+conn, err := websocket.Upgrade(w, r, websocket.WithUpgradeSubprotocols("v2.chat", "v1.chat"))
+if err == nil && conn.Subprotocol() == "" {
+	conn.CloseWithStatus(websocket.StatusPolicyViolation, "unsupported subprotocol")
+}
+```
+
+Protocols are case-sensitive HTTP tokens and must be unique. Setting
+`Sec-WebSocket-Protocol` through `WithHeader` or `WithResponseHeader` still
+works, but combining it with the matching option is an error.
+
 ## Compression
 
 `permessage-deflate` ([RFC 7692]) is opt-in. Create one extension per connection;
