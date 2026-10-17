@@ -106,6 +106,8 @@ Every example is a tested program; run one with `go run ./examples/<name>`.
 | --- | --- |
 | [`echo`](examples/echo) | A server with a size limit, bounded writes and a graceful shutdown |
 | [`client`](examples/client) | A `wscat`-style command-line client with headers, subprotocols and compression |
+| [`reconnect`](examples/reconnect) | A client that resumes a subscription after failures, with jittered backoff and keepalive |
+| [`auth`](examples/auth) | Bearer tokens and single-use browser tickets checked before Upgrade, closing when a credential expires |
 | [`keepalive`](examples/keepalive) | Pinging clients on an interval and dropping those that stop answering |
 | [`chat`](examples/chat) | Broadcasting to every client, with a bounded send queue each |
 | [`pubsub`](examples/pubsub) | Topic subscriptions over a small JSON protocol |
