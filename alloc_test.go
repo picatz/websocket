@@ -132,7 +132,7 @@ func TestPayloadReaderGrowsWithReceivedBytes(t *testing.T) {
 	for _, sent := range []int{0, 1, 10, minPayloadAlloc, minPayloadAlloc + 1, 3 * minPayloadAlloc} {
 		data := benchmarkPayload(sent)
 		r := payloadReader{r: bufio.NewReaderSize(bytes.NewReader(data), 16), remaining: declared}
-		got, err := r.readAll(nil, true)
+		got, err := r.readAll(nil, 0)
 		if err != nil || !bytes.Equal(got, data) {
 			t.Fatalf("sent=%d: got %d bytes, err=%v", sent, len(got), err)
 		}
@@ -155,7 +155,7 @@ func TestPayloadReaderExactCapacity(t *testing.T) {
 			}
 			source := &streamChunkReader{data: wire, sizes: []int{1, 7, 4093, 65536}, tail: io.EOF}
 			r := payloadReader{r: bufio.NewReader(source), remaining: int64(size), key: key, masked: masked}
-			got, err := r.readAll(nil, true)
+			got, err := r.readAll(nil, 0)
 			if err != nil || !bytes.Equal(got, want) {
 				t.Fatalf("size=%d masked=%t: err=%v equal=%t", size, masked, err, bytes.Equal(got, want))
 			}
@@ -240,5 +240,23 @@ func TestReleasedWriterDropsFailedFrame(t *testing.T) {
 	releaseWriter(w)
 	if w.Buffered() != 0 {
 		t.Fatalf("released writer keeps %d bytes", w.Buffered())
+	}
+}
+
+func TestFragmentedReadStaysWithinLimit(t *testing.T) {
+	// Storage for a fragmented message grows ahead of later fragments, but a
+	// message limit bounds what is allocated as well as what is accepted.
+	const limit = 10000
+	for _, fragments := range []int{2, 7, 100, limit} {
+		payload := bytes.Repeat([]byte{'a'}, limit)
+		wire := benchmarkWire(payload, true, fragments)
+		c := NewConn(&benchmarkConn{reader: bytes.NewReader(wire), writer: io.Discard}, true, nil, WithMaxBytes(limit))
+		_, got, err := c.ReadMessage()
+		if err != nil || !bytes.Equal(got, payload) {
+			t.Fatalf("fragments=%d: read %d bytes, err=%v", fragments, len(got), err)
+		}
+		if cap(got) > limit {
+			t.Fatalf("fragments=%d: capacity %d exceeds the %d byte limit", fragments, cap(got), limit)
+		}
 	}
 }

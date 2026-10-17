@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -1143,7 +1144,16 @@ func (c *Conn) readFrameBodyText(frame *Frame, payloadLen uint64, checkText bool
 		if checkText {
 			r.pending = byte(copy(r.carry[:], tail))
 		}
-		buf, err = r.readAll(dst, frame.Final)
+		// A final frame ends its message. Earlier fragments may leave room
+		// for later ones, but never past the message size limit.
+		limit := 0 // The frame's own end.
+		if !frame.Final {
+			limit = math.MaxInt
+			if c.maxBytes > 0 {
+				limit = c.maxBytes
+			}
+		}
+		buf, err = r.readAll(dst, limit)
 		pending = int(r.pending)
 		if err != nil {
 			// Preserve the typed protocol failure for failRead's close mapping.
@@ -1271,19 +1281,20 @@ const minPayloadAlloc = 4096
 // readAll appends the rest of the payload to dst. Storage grows with the
 // bytes that have actually arrived, never with the declared length alone:
 // each step adds what dst already holds, what is already buffered, or the
-// rest of the frame up to minPayloadAlloc, whichever is most. For a final frame growth stops at the
-// payload's end, so a single-frame message has no spare capacity and the
+// rest of the frame up to minPayloadAlloc, whichever is most, and never past
+// limit or the payload's end, whichever is later. A final frame passes its
+// end as the limit, so a single-frame message has no spare capacity and the
 // caller may keep it without trimming. A message's earlier frames grow past
-// their own end, so a long run of fragments is not copied once per frame.
-func (r *payloadReader) readAll(dst []byte, final bool) ([]byte, error) {
+// their own end, up to the message limit, so a long run of fragments is not
+// copied once per frame.
+func (r *payloadReader) readAll(dst []byte, limit int) ([]byte, error) {
 	buf := dst
 	end := len(dst) + int(r.remaining)
+	limit = max(limit, end)
 	for len(buf) < end {
 		if len(buf) == cap(buf) {
 			size := len(buf) + max(len(buf), min(end-len(buf), minPayloadAlloc), r.r.Buffered())
-			if final {
-				size = min(size, end)
-			}
+			size = min(size, limit)
 			grown := make([]byte, len(buf), size)
 			copy(grown, buf)
 			buf = grown
