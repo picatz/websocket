@@ -1267,11 +1267,12 @@ const minPayloadAlloc = 4096
 // buffered, or the rest of the frame up to minPayloadAlloc, whichever is
 // most, and never past limit or the payload's end, whichever is later.
 // Quadrupling takes half the steps and copies of doubling, while a peer that
-// stalls mid-frame still pins at most four times what it sent. A final frame passes its
-// end as the limit, so a single-frame message has no spare capacity and the
-// caller may keep it without trimming. A message's earlier frames grow past
-// their own end, up to the message limit, so a long run of fragments is not
-// copied once per frame.
+// stalls mid-frame still pins at most four times what it sent.
+//
+// A final frame passes its end as the limit, so a single-frame message has
+// no spare capacity and the caller may keep it without trimming. A message's
+// earlier frames grow past their own end, up to the message limit, so a long
+// run of fragments is not copied once per frame.
 func (r *payloadReader) readAll(dst []byte, limit int) ([]byte, error) {
 	buf := dst
 	end := len(dst) + int(r.remaining)
