@@ -1,8 +1,9 @@
 # Performance measurements
 
 These benchmarks separate allocation and framing costs from transport costs.
-They are diagnostic tools, not a claim of production capacity or a comparison
-with other WebSocket libraries.
+They are diagnostic tools, not a claim of production capacity. For indicative
+numbers against other Go WebSocket libraries, see
+[Comparison with other libraries](#comparison-with-other-libraries).
 
 ## Reproduce
 
@@ -170,3 +171,79 @@ transport regression uncertainty must be resolved before shipping it. A
 production SIMD path needs its own complete-message proof and architecture/stack
 cost assessment; this snapshot does not justify custom assembly or an
 application-visible SIMD option.
+
+## Comparison with other libraries
+
+The [`benchmarks`](benchmarks) directory is a separate Go module that runs the
+same workloads against this package, [`coder/websocket`], [`gorilla/websocket`]
+and [`gobwas/ws`]. It is separate so the core module keeps no third-party
+dependencies. Each adapter uses its library's documented message API, with
+compression off and a 1 MiB read limit. `TestEcho` checks that every adapter
+round-trips every payload before any number is taken.
+
+```sh
+cd benchmarks
+go test ./...
+go test -run '^$' -bench 'Echo|Handshake' -benchmem -count=10 | tee new.txt
+go test -run '^$' -bench 'IdleConn' -benchtime=1x -count=10 | tee -a new.txt
+```
+
+- `Echo`: one client write and one echoed read of a binary message over one
+  loopback TCP connection. Both endpoints use the library under test, so the
+  time and allocations cover both sides.
+- `EchoParallel`: the same with 1 KiB messages and one connection per parallel
+  worker against one server.
+- `Handshake`: TCP connect, the HTTP upgrade on both sides, and close.
+- `IdleConn`: server heap and stack bytes held per idle connection after a GC,
+  over 500 connections from raw TCP clients, so no client library memory is
+  counted. The baseline row hijacks the request and blocks in a read while
+  keeping net/http's buffers.
+
+### Indicative results
+
+These are medians of 5 runs on a shared 4-vCPU cloud VM (Intel Xeon @ 2.10GHz,
+linux/amd64, Go 1.27.0, coder v1.8.15, gorilla v1.5.3, gobwas v1.4.0), taken on
+2026-10-17. Raw output is in
+[`benchmarks/results`](benchmarks/results/2026-10-17-linux-amd64.txt). A shared VM
+is not a fixed, quiet machine, so differences under roughly 15% in time are
+within noise. Allocation counts are deterministic and the most reliable column.
+Rerun on your own hardware before drawing conclusions.
+
+Echo round trip, time per op (lower is better):
+
+| Message | picatz | coder | gorilla | gobwas |
+| ---: | ---: | ---: | ---: | ---: |
+| 16 B | 7.5 µs | 8.4 µs | 7.0 µs | 13.9 µs |
+| 1 KiB | 11.3 µs | 11.6 µs | 10.1 µs | 20.9 µs |
+| 16 KiB | 65 µs | 72 µs | 60 µs | 66 µs |
+| 256 KiB | 775 µs | 894 µs | 1070 µs | 1115 µs |
+
+Echo round trip, allocations and bytes per op, both endpoints:
+
+| Message | picatz | coder | gorilla | gobwas |
+| ---: | ---: | ---: | ---: | ---: |
+| 16 B | 17 / 1.3 KiB | 2 / 1.0 KiB | 5 / 1.1 KiB | 11 / 1.5 KiB |
+| 1 KiB | 23 / 5.5 KiB | 8 / 4.3 KiB | 11 / 4.3 KiB | 16 / 4.7 KiB |
+| 16 KiB | 41 / 90 KiB | 26 / 74 KiB | 31 / 74 KiB | 34 / 75 KiB |
+| 256 KiB | 55 / 1.45 MiB | 40 / 1.20 MiB | 45 / 1.20 MiB | 49 / 1.45 MiB |
+
+Parallel echo (1 KiB), handshake and idle memory:
+
+| Workload | picatz | coder | gorilla | gobwas |
+| --- | ---: | ---: | ---: | ---: |
+| `EchoParallel` time/op | 10.7 µs | 11.1 µs | 10.4 µs | 15.1 µs |
+| `Handshake` time/op | 205 µs | 291 µs | 207 µs | 166 µs |
+| `Handshake` allocs/op | 131 | 231 | 121 | 75 |
+| `IdleConn` bytes/conn | 21.3 KiB | 23.7 KiB | 15.3 KiB | 14.5 KiB |
+
+The baseline for `IdleConn` was 14.7 KiB per connection.
+
+On this machine the throughput is in the same range as the other libraries.
+The clear gap is allocations: this package allocates more objects per message
+than any of the three, about 15 more than coder on a 16-byte echo, and holds
+about 6 KiB more per idle connection than gorilla. Those are the places to
+work on.
+
+[`coder/websocket`]: https://github.com/coder/websocket
+[`gorilla/websocket`]: https://github.com/gorilla/websocket
+[`gobwas/ws`]: https://github.com/gobwas/ws
