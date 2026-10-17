@@ -312,14 +312,20 @@ conn, err := websocket.Upgrade(w, r,
 
   | Mode | Kept per idle connection |
   | --- | --- |
-  | Default (takeover in both directions) | A compressor (about 0.3–1 MiB, by level) plus up to 32 KiB of receive history |
-  | `WithCompressionMemoryLimit(n)` | At most `n` bytes: the send and receive history only |
+  | Default (`WithCompressionMemoryLimit(64<<10)`) | Up to 64 KiB: 32 KiB of send and 32 KiB of receive history |
+  | `WithCompressionMemoryLimit(n)` | At most `n` bytes of send and receive history |
+  | `WithCompressionMemoryLimit(0)` (unlimited) | A whole compressor (about 0.5–1 MiB, by level) plus up to 32 KiB of receive history |
   | `no_context_takeover` in both directions | Nothing |
 
   A memory limit is enforced through negotiation: each direction gets half and
   uses the largest window that fits, or no context takeover when none does. The
-  sender then re-indexes its retained history for each message, trading CPU for
-  memory.
+  default limit fits full 32 KiB windows, so it changes nothing on the wire.
+  With a limit, the sender borrows a pooled encoder for each message and
+  re-indexes its retained history first. That costs CPU per message: tens of
+  microseconds for a small message, and about twice the time of the unlimited
+  mode for large ones, in exchange for a much smaller footprint per connection
+  and usually a better ratio. `WithCompressionMemoryLimit(0)` selects the
+  faster mode for clients or servers with few connections.
 - **Other extensions.** Custom frame extensions compose with compression. On
   send, a message is compressed first, then each frame passes through the custom
   extensions in registration order. On receive, each frame passes through them

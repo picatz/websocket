@@ -169,6 +169,11 @@ that follow RFC 7692 need no change; these are the observable differences:
   means more than one enabled built-in instance, or an extension changing RSV1.
 - With context takeover, a failure part-way through sending a compressed
   message poisons later writes on that connection.
+- Each connection keeps at most `DefaultCompressionMemoryLimit` (64 KiB) of
+  compression state between messages by default: its send and receive history,
+  not a whole compressor. Negotiated parameters are unchanged. Pass
+  `WithCompressionMemoryLimit(0)` to keep a compressor per connection instead,
+  which is faster per message and uses about 0.5–1 MiB.
 
 ## Verification scope
 

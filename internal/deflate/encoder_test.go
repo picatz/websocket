@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"math/rand/v2"
 	"strings"
 	"testing"
@@ -400,15 +401,14 @@ func FuzzEncoder(f *testing.F) {
 			t.Fatal(err)
 		}
 		n := max(1, int(chunk))
-		var history, out []byte
-		for i, p := 0, data; len(p) > 0; i++ {
+		var history []byte
+		for p := data; len(p) > 0; {
 			k := min(n, len(p))
-			out = e.Flush(e.Write(nil, p[:k]))
+			out := e.Flush(e.Write(nil, p[:k]))
 			checkStream(t, windowBits, history, out, p[:k])
 			history = append(history, p[:k]...)
 			p = p[k:]
 		}
-		_ = out
 	})
 }
 
@@ -440,6 +440,70 @@ func BenchmarkEncoder(b *testing.B) {
 				}
 				b.ReportMetric(float64(buf.Len())/float64(len(in[name])), "ratio")
 			})
+		}
+	}
+}
+
+// checkChains verifies that every hash chain, walked from its head while the
+// entries are still inside the window, visits only strictly decreasing
+// offsets that hash to that chain. A slide that misaligned prev slots would
+// splice unrelated chains together.
+func checkChains(t *testing.T, e *Encoder) {
+	t.Helper()
+	mask := e.window - 1
+	floor := max(e.base, e.base+e.ins-e.window)
+	for h, head := range e.head {
+		prev := math.MaxInt
+		for cand := int(head); cand >= floor; cand = int(e.prev[cand&mask]) {
+			if cand >= prev {
+				t.Fatalf("chain %d: offset %d follows %d", h, cand, prev)
+			}
+			if got := e.hash(cand - e.base); got != uint32(h) {
+				t.Fatalf("chain %d: offset %d hashes to chain %d", h, cand, got)
+			}
+			prev = cand
+		}
+	}
+}
+
+func TestEncoderHashChainsSurviveSlide(t *testing.T) {
+	input := testInputs()["mixed"]
+	r := rand.New(rand.NewPCG(5, 6))
+	for _, wb := range []int{8, 11, 15} {
+		for _, level := range []int{1, 6} {
+			t.Run(fmt.Sprintf("w%d/l%d", wb, level), func(t *testing.T) {
+				e, _ := NewEncoder(wb, level)
+				var out []byte
+				for p := input; len(p) > 0; {
+					k := min(len(p), 1+r.IntN(20_000))
+					out = e.Write(out, p[:k])
+					p = p[k:]
+					checkChains(t, e)
+				}
+				checkStream(t, wb, nil, e.Flush(out), input)
+			})
+		}
+	}
+}
+
+func TestEncoderRebase(t *testing.T) {
+	input := testInputs()["mixed"]
+	for _, wb := range []int{8, 15} {
+		e, _ := NewEncoder(wb, DefaultCompression)
+		// Fake a long-lived encoder whose offsets are about to overflow.
+		e.base = rebaseLimit - 3
+		e.Reset(nil)
+		var history []byte
+		for i, p := 0, input; len(p) > 0; i++ {
+			k := min(len(p), 70_000)
+			out := e.Flush(e.Write(nil, p[:k]))
+			checkStream(t, wb, history, out, p[:k])
+			checkChains(t, e)
+			if e.base > rebaseLimit {
+				t.Fatalf("base %d above the rebase limit", e.base)
+			}
+			history = append(history, p[:k]...)
+			p = p[k:]
 		}
 	}
 }

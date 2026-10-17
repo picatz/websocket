@@ -298,9 +298,11 @@ func WithCompressionThreshold(n int) PerMessageDeflateOption {
 // cannot be bounded, the corresponding no_context_takeover parameter is used
 // instead. A sender with a limit keeps only its window of history and re-indexes
 // it for each message, trading CPU for memory; without a limit it keeps a
-// whole compressor, which is faster but can use hundreds of KiB per connection.
+// whole compressor, which is faster but uses 0.5 to 1 MiB per connection.
 //
-// The default, 0, is unlimited. Negative values are ignored.
+// The default, [DefaultCompressionMemoryLimit], keeps full 2^15-byte windows,
+// so it changes no negotiated parameter, only what the sender retains. Pass 0
+// to remove the limit. Negative values are ignored.
 func WithCompressionMemoryLimit(n int) PerMessageDeflateOption {
 	return func(pmd *perMessageDeflate) {
 		if n >= 0 {
@@ -309,19 +311,29 @@ func WithCompressionMemoryLimit(n int) PerMessageDeflateOption {
 	}
 }
 
+// DefaultCompressionMemoryLimit is the default [WithCompressionMemoryLimit]:
+// about 64 KiB of state per idle connection, the two 32 KiB histories that
+// context takeover with the largest window needs (RFC 7692 section 7.1.1).
+const DefaultCompressionMemoryLimit = 64 << 10
+
 // NewPerMessageDeflateExtension creates an opt-in permessage-deflate (RFC 7692)
 // compression extension. Conn compresses and decompresses whole messages,
 // fragmented or not, with context takeover unless a no_context_takeover
 // parameter is negotiated, and with any negotiated window from 8 to 15 bits.
 //
+// Conn applies other enabled extensions to each frame after compression on
+// send and before decompression on receive. They may use RSV2 and RSV3, but
+// RSV1 belongs to permessage-deflate (RFC 7692 section 5); a frame whose RSV1
+// another extension changed fails with [ErrUnsupportedExtensionComposition],
+// as does enabling more than one permessage-deflate instance.
+//
 // Direct callbacks require complete messages; do not mix them concurrently
-// with Conn I/O. Enabled PMD cannot be combined with another enabled extension.
-// Create a separate instance for each connection. Configuration and negotiation
+// with Conn I/O. Create a separate instance for each connection. Configuration and negotiation
 // must finish before I/O; concurrent reconfiguration is not supported.
 //
 // https://www.rfc-editor.org/rfc/rfc7692
 func NewPerMessageDeflateExtension(options ...PerMessageDeflateOption) Extension {
-	pmd := &perMessageDeflate{level: flate.DefaultCompression}
+	pmd := &perMessageDeflate{level: flate.DefaultCompression, memoryLimit: DefaultCompressionMemoryLimit}
 	for _, option := range options {
 		option(pmd)
 	}

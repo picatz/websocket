@@ -63,15 +63,20 @@ func (c *flateCompressor) flush(dst []byte) []byte {
 	return dst
 }
 
+// getEncoder returns a pooled encoder primed with dict.
 func getEncoder(bits, level int, dict []byte) *deflate.Encoder {
-	pool := &encoderPools[bits-deflate.MinWindowBits][level+2]
-	if v := pool.Get(); v != nil {
+	if level == flate.DefaultCompression {
+		level = 6 // As NewEncoder normalizes it, so putEncoder files it here.
+	}
+	if v := encoderPools[bits-deflate.MinWindowBits][level+2].Get(); v != nil {
 		e := v.(*deflate.Encoder)
 		e.Reset(dict)
 		return e
 	}
 	e, _ := deflate.NewEncoder(bits, level) // Bits and level were validated.
-	e.Reset(dict)
+	if len(dict) > 0 {
+		e.Reset(dict)
+	}
 	return e
 }
 

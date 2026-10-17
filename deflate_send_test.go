@@ -2,6 +2,7 @@ package websocket
 
 import (
 	"bytes"
+	"compress/flate"
 	"errors"
 	"fmt"
 	"io"
@@ -203,24 +204,37 @@ func TestPMDCompressionThreshold(t *testing.T) {
 
 // TestPMDSendRetentionAndPooling checks which state survives a message.
 func TestPMDSendRetentionAndPooling(t *testing.T) {
+	unlimited := WithCompressionMemoryLimit(0)
 	for _, tc := range []struct {
 		params    string
+		limit     PerMessageDeflateOption
 		retention sendRetention
 	}{
-		{"permessage-deflate", retainCompressor},
-		{"permessage-deflate; client_max_window_bits=10", retainCompressor},
-		{"permessage-deflate; client_no_context_takeover", retainNothing},
-		{"permessage-deflate; client_max_window_bits=10; client_no_context_takeover", retainNothing},
+		{"permessage-deflate", nil, retainHistory},
+		{"permessage-deflate; client_max_window_bits=10", nil, retainHistory},
+		{"permessage-deflate", unlimited, retainCompressor},
+		{"permessage-deflate; client_max_window_bits=10", unlimited, retainCompressor},
+		{"permessage-deflate; client_no_context_takeover", nil, retainNothing},
+		{"permessage-deflate; client_no_context_takeover", unlimited, retainNothing},
+		{"permessage-deflate; client_max_window_bits=10; client_no_context_takeover", nil, retainNothing},
 	} {
-		send, _ := pmdLink(t, tc.params)
-		sendWire(t, send, []byte("hello hello hello"))
+		var options []PerMessageDeflateOption
+		if tc.limit != nil {
+			options = append(options, tc.limit)
+		}
+		send, _ := pmdLink(t, tc.params, options...)
+		msg := []byte("hello hello hello")
+		sendWire(t, send, msg)
 		s := &send.send
 		if s.retention != tc.retention || s.active {
 			t.Fatalf("%s: retention %d active %t", tc.params, s.retention, s.active)
 		}
 		held := s.flate != nil || s.enc != nil
-		if held != (tc.retention == retainCompressor) || s.history != nil {
-			t.Fatalf("%s: held compressor %t, history %d bytes", tc.params, held, len(s.history))
+		if held != (tc.retention == retainCompressor) {
+			t.Fatalf("%s: held compressor %t", tc.params, held)
+		}
+		if wantHistory := tc.retention == retainHistory; wantHistory != bytes.Equal(s.history, msg) {
+			t.Fatalf("%s: history %q", tc.params, s.history)
 		}
 	}
 }
@@ -249,6 +263,9 @@ func TestPMDInvalidOptionValuesIgnored(t *testing.T) {
 }
 
 func TestPMDSendAllocations(t *testing.T) {
+	if raceEnabled {
+		t.Skip("sync.Pool drops items at random under the race detector")
+	}
 	send, _ := pmdLink(t, "permessage-deflate")
 	raw := &memoryConn{Reader: bytes.NewReader(nil)}
 	c := NewConn(raw, false, []Extension{send})
@@ -264,6 +281,27 @@ func TestPMDSendAllocations(t *testing.T) {
 	// compressor and the encoded bytes reuse connection buffers.
 	if allocs > 3 {
 		t.Fatalf("allocations per compressed message = %v", allocs)
+	}
+}
+
+// TestEncoderPoolReuse checks that a message encoded without context takeover
+// returns its bounded-window encoder to the pool it is taken from, at every
+// level including the default.
+func TestEncoderPoolReuse(t *testing.T) {
+	if raceEnabled {
+		t.Skip("sync.Pool drops items at random under the race detector")
+	}
+	msg := []byte("hello hello hello")
+	for _, level := range []int{flate.DefaultCompression, flate.HuffmanOnly, flate.NoCompression, flate.BestSpeed, 6, flate.BestCompression} {
+		s := &deflateSender{bits: 10, level: level}
+		var dst []byte
+		allocs := testing.AllocsPerRun(20, func() {
+			s.begin()
+			dst = s.end(s.write(dst[:0], msg))
+		})
+		if allocs > 0 {
+			t.Errorf("level %d: %v allocations per message; the encoder pool is missing", level, allocs)
+		}
 	}
 }
 
@@ -485,19 +523,57 @@ func TestPMDCompositionRejectsRSV1Changes(t *testing.T) {
 }
 
 func TestPMDCloseReleasesSendCompressor(t *testing.T) {
-	send, _ := pmdLink(t, "permessage-deflate")
-	raw := &memoryConn{Reader: bytes.NewReader(nil)}
-	c := NewConn(raw, false, []Extension{send})
-	if err := c.WriteMessage(BinaryMessage, []byte("hello hello")); err != nil {
-		t.Fatal(err)
+	for _, limit := range []int{0, DefaultCompressionMemoryLimit} {
+		send, _ := pmdLink(t, "permessage-deflate", WithCompressionMemoryLimit(limit))
+		raw := &memoryConn{Reader: bytes.NewReader(nil)}
+		c := NewConn(raw, false, []Extension{send})
+		if err := c.WriteMessage(BinaryMessage, []byte("hello hello")); err != nil {
+			t.Fatal(err)
+		}
+		if limit == 0 && send.send.flate == nil || limit > 0 && send.send.history == nil {
+			t.Fatalf("limit %d: takeover state not retained between messages", limit)
+		}
+		if err := c.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if send.send.flate != nil || send.send.enc != nil || send.send.history != nil {
+			t.Fatalf("limit %d: Close kept send compression state", limit)
+		}
 	}
-	if send.send.flate == nil {
-		t.Fatal("takeover compressor not retained between messages")
+}
+
+// BenchmarkDeflateSenderRetention compares the per-message cost of the
+// takeover retention modes at the default level and a 15-bit window.
+func BenchmarkDeflateSenderRetention(b *testing.B) {
+	r := rand.New(rand.NewPCG(7, 8))
+	vocab := strings.Fields(`{"id": "name": "value": true, false, null, 42, "event", "user", "message", "created_at": "2026-10-17T00:00:00Z"}`)
+	var corpus []byte
+	for len(corpus) < 1<<20 {
+		corpus = append(corpus, vocab[r.IntN(len(vocab))]...)
+		corpus = append(corpus, ' ')
 	}
-	if err := c.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if send.send.flate != nil || send.send.enc != nil {
-		t.Fatal("Close kept the send compressor")
+	for _, size := range []int{256, 4 << 10, 64 << 10} {
+		for _, mode := range []struct {
+			name      string
+			retention sendRetention
+		}{{"compressor", retainCompressor}, {"history", retainHistory}, {"nothing", retainNothing}} {
+			b.Run(fmt.Sprintf("%d/%s", size, mode.name), func(b *testing.B) {
+				s := &deflateSender{bits: 15, level: flate.DefaultCompression, retention: mode.retention}
+				var dst []byte
+				off, n := 0, 0
+				b.SetBytes(int64(size))
+				for b.Loop() {
+					if off+size > len(corpus) {
+						off = 0
+					}
+					s.begin()
+					dst = s.end(s.write(dst[:0], corpus[off:off+size]))
+					off += size
+					n += len(dst)
+				}
+				b.ReportMetric(float64(n)/float64(b.N*size), "ratio")
+				s.release()
+			})
+		}
 	}
 }

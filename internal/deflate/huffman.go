@@ -10,15 +10,14 @@ import (
 //
 // https://www.rfc-editor.org/rfc/rfc1951#section-3.2.5
 const (
-	numLitLen    = 286 // Literal/length symbols that may appear in a block.
-	numDist      = 30  // Distance symbols that may appear in a block.
-	numCodeLen   = 19  // Code-length alphabet for dynamic block headers.
-	maxCodeBits  = 15  // Longest literal/length or distance code.
-	maxCLenBits  = 7   // Longest code-length code.
-	endOfBlock   = 256 // Literal/length symbol that terminates a block.
-	minMatch     = 3   // Shortest LZ77 match DEFLATE can encode.
-	maxMatch     = 258 // Longest LZ77 match DEFLATE can encode.
-	maxDistLimit = 1 << 15
+	numLitLen   = 286 // Literal/length symbols that may appear in a block.
+	numDist     = 30  // Distance symbols that may appear in a block.
+	numCodeLen  = 19  // Code-length alphabet for dynamic block headers.
+	maxCodeBits = 15  // Longest literal/length or distance code.
+	maxCLenBits = 7   // Longest code-length code.
+	endOfBlock  = 256 // Literal/length symbol that terminates a block.
+	minMatch    = 3   // Shortest LZ77 match DEFLATE can encode.
+	maxMatch    = 258 // Longest LZ77 match DEFLATE can encode.
 )
 
 // codeLenOrder is the transmission order of code-length code lengths.

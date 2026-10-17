@@ -42,11 +42,19 @@ const (
 var ErrInvalidParameter = errors.New("deflate: invalid window bits or compression level")
 
 const (
-	hashBitsMax  = 16
-	hashLen      = 4       // Bytes hashed per position; shorter matches are not searched.
-	blockBytes   = 1 << 16 // Raw bytes accumulated in the window per block.
-	maxTokens    = 1 << 14 // Tokens buffered before a block is emitted.
-	matchFlag    = 1 << 31
+	hashBitsMax = 16
+	hashLen     = 4       // Bytes hashed per position; shorter matches are not searched.
+	blockBytes  = 1 << 16 // Raw bytes accumulated in the window per block.
+	maxTokens   = 1 << 14 // Tokens buffered before a block is emitted.
+	matchFlag   = 1 << 31
+	rebaseLimit = 1 << 30 // Largest stream offset before hash entries are rebased.
+
+	// A Reset dictionary is indexed densely only in its final dictDense
+	// bytes, and at every dictStride-th position before that. A long match
+	// into the older part is still found within dictStride bytes of where it
+	// starts, at a quarter of the indexing cost per message.
+	dictDense    = 4 << 10
+	dictStride   = 4
 	lengthShift  = 16
 	distanceMask = 1<<lengthShift - 1
 )
@@ -82,14 +90,18 @@ type Encoder struct {
 	hashBits   uint
 
 	// win holds up to window bytes of history followed by pending input.
-	// Positions in head and prev are indices into win, or -1.
+	// head and prev hold stream offsets: win[i] is at offset base+i. Entries
+	// below base are stale, either slid out of win or left by an earlier
+	// stream, so neither slide nor Reset rewrites the tables, and prev stays
+	// indexed by offset & (window-1) across slides.
 	win   []byte
+	base  int
 	pos   int // Next position to tokenize.
 	end   int // End of buffered input.
 	block int // Start of the bytes the buffered tokens describe.
 	cover int // End of the bytes the buffered tokens describe.
 	head  []int32
-	prev  []int32 // Indexed by position & (window-1).
+	prev  []int32 // Indexed by offset & (window-1).
 	ins   int     // Positions below ins have been inserted into the hash chains.
 
 	// Lazy-match state carried across Write calls.
@@ -133,6 +145,7 @@ func NewEncoder(windowBits, level int) (*Encoder, error) {
 	}
 	e.win = make([]byte, e.window+blockBytes)
 	e.tokens = make([]uint32, 0, maxTokens)
+	e.base = 1 // Zeroed table entries are stale.
 	e.Reset(nil)
 	return e, nil
 }
@@ -146,22 +159,34 @@ func (e *Encoder) Level() int { return e.level }
 // Reset discards all state and starts a new stream whose back-references may
 // reach into the final window bytes of dict. The caller must ensure the
 // decoder's history ends with the same bytes, as context takeover does.
+//
+// Reset does not clear the encoder's tables; its cost is indexing dict. Only
+// the final 4 KiB is indexed at every position, so a match that starts
+// further back may be found a few bytes late.
 func (e *Encoder) Reset(dict []byte) {
 	if len(dict) > e.window {
 		dict = dict[len(dict)-e.window:]
 	}
-	for i := range e.head {
-		e.head[i] = -1
+	// Start past every offset of the previous stream, invalidating its hash
+	// entries without touching the tables.
+	e.base += e.end
+	if e.base > rebaseLimit {
+		e.rebase()
 	}
-	for i := range e.prev {
-		e.prev[i] = -1
-	}
+	e.litFreq, e.distFreq = [numLitLen]uint32{}, [numDist]uint32{}
 	e.end = copy(e.win, dict)
 	e.pos, e.block, e.cover, e.ins = e.end, e.end, e.end, 0
 	e.prevLen, e.prevDist, e.pending = 0, 0, false
 	e.tokens = e.tokens[:0]
 	e.bits, e.nbits = 0, 0
 	if e.level > 0 {
+		mask := e.window - 1
+		for i := 0; i < e.end-dictDense; i += dictStride {
+			h, off := e.hash(i), e.base+i
+			e.prev[off&mask] = e.head[h]
+			e.head[h] = int32(off)
+		}
+		e.ins = max(0, e.end-dictDense)
 		e.insert(e.end)
 	}
 }
@@ -221,11 +246,22 @@ func (e *Encoder) slide() {
 	e.block -= delta
 	e.cover -= delta
 	e.ins = max(0, e.ins-delta)
-	for i, v := range e.head {
-		e.head[i] = max(v-int32(delta), -1)
+	e.base += delta
+	if e.base > rebaseLimit {
+		e.rebase()
 	}
-	for i, v := range e.prev {
-		e.prev[i] = max(v-int32(delta), -1)
+}
+
+// rebase lowers base, and every hash entry with it, by a multiple of the
+// window, so offsets fit in int32 and prev slots keep their alignment.
+// Stale entries clamp to 0, which stays below the new base.
+func (e *Encoder) rebase() {
+	shift := (e.base - 1) &^ (e.window - 1)
+	e.base -= shift
+	for _, t := range [2][]int32{e.head, e.prev} {
+		for i, v := range t {
+			t[i] = int32(max(int(v)-shift, 0))
+		}
 	}
 }
 
@@ -238,9 +274,9 @@ func (e *Encoder) insert(upTo int) {
 	upTo = min(upTo, e.end-hashLen+1)
 	mask := e.window - 1
 	for i := e.ins; i < upTo; i++ {
-		h := e.hash(i)
-		e.prev[i&mask] = e.head[h]
-		e.head[h] = int32(i)
+		h, off := e.hash(i), e.base+i
+		e.prev[off&mask] = e.head[h]
+		e.head[h] = int32(off)
 	}
 	e.ins = max(e.ins, upTo)
 }
@@ -257,20 +293,23 @@ func (e *Encoder) findMatch(pos, best int) (length, dist int) {
 		chain >>= 2
 	}
 	nice := min(e.params.nice, avail)
-	limit := max(0, pos-e.window)
+	// Candidates are stream offsets; win[off-base] holds offset off.
+	base, off := e.base, e.base+pos
+	limit := max(base, off-e.window)
 	mask := e.window - 1
 	win := e.win
 	cand := int(e.head[e.hash(pos)])
 	// The current position is usually inserted already; skip a self-reference.
-	if cand == pos {
+	if cand == off {
 		cand = int(e.prev[cand&mask])
 	}
 	first := binary.LittleEndian.Uint32(win[pos:])
-	for ; cand >= limit && cand < pos && chain > 0; chain-- {
-		if win[cand+best] == win[pos+best] && binary.LittleEndian.Uint32(win[cand:]) == first {
-			n := matchLen(win[cand:cand+avail], win[pos:pos+avail])
+	for ; cand >= limit && cand < off && chain > 0; chain-- {
+		i := cand - base
+		if win[i+best] == win[pos+best] && binary.LittleEndian.Uint32(win[i:]) == first {
+			n := matchLen(win[i:i+avail], win[pos:pos+avail])
 			if n > best {
-				best, length, dist = n, n, pos-cand
+				best, length, dist = n, n, off-cand
 				if n >= nice {
 					break
 				}
@@ -342,7 +381,9 @@ func (e *Encoder) compress(final bool) {
 		}
 		return
 	}
+	misses := 0
 	for e.pos < stop {
+		e.ins = max(e.ins, e.pos)
 		e.insert(e.pos + 1)
 		length, dist := 0, 0
 		if e.prevLen < e.params.lazy {
@@ -353,11 +394,25 @@ func (e *Encoder) compress(final bool) {
 			e.match(e.prevLen, e.prevDist)
 			e.pos += e.prevLen - 1
 			e.insert(e.pos)
-			e.pending, e.prevLen = false, 0
+			e.pending, e.prevLen, misses = false, 0, 0
 			continue
 		}
 		if e.pending {
 			e.literal(e.win[e.pos-1])
+		}
+		if length == 0 {
+			// As in the greedy path, a long literal run skips probing (and
+			// indexing) progressively more positions.
+			if misses++; misses >= 32 {
+				for n := 1 + misses>>5; n > 0 && e.pos < stop; n-- {
+					e.literal(e.win[e.pos])
+					e.pos++
+				}
+				e.pending, e.prevLen = false, 0
+				continue
+			}
+		} else {
+			misses = 0
 		}
 		e.pending, e.prevLen, e.prevDist = true, length, dist
 		e.pos++

@@ -100,8 +100,11 @@
 // parameter is negotiated, and with any window from 8 to 15 bits. Options set
 // the level, a size threshold below which messages are sent uncompressed, and
 // WithCompressionMemoryLimit, which bounds the state a connection keeps between
-// messages by negotiating smaller windows or no context takeover. Compressors
-// and decompressors are pooled across connections while idle.
+// messages by negotiating smaller windows or no context takeover. The default
+// limit, DefaultCompressionMemoryLimit, keeps only the 32 KiB histories in
+// each direction; a limit of 0 keeps a whole compressor per connection, which
+// is faster but uses up to about 1 MiB. Compressors and decompressors are
+// pooled across connections while idle.
 //
 // Custom frame extensions compose with compression: a message is compressed and
 // then each frame passes through the custom extensions in registration order,
