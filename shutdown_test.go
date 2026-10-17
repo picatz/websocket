@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -63,41 +64,57 @@ func TestShutdownCompletesHandshake(t *testing.T) {
 	}
 }
 
-// With a read loop running, Shutdown leaves the reading to it: messages the
-// peer sends before its Close frame reach the loop, followed by the peer's
-// CloseError.
+// With a read loop running, Shutdown still ends the reading side: a data
+// message the peer sends after receiving the Close frame is discarded, and the
+// loop's ReadMessage returns the peer's CloseError or net.ErrClosed, never
+// the message. The peer is scripted on a pipe so the order is exact.
 func TestShutdownWithReadLoop(t *testing.T) {
-	release := make(chan struct{})
-	c := shutdownPair(t, func(s *websocket.Conn) {
-		<-release
-		_ = s.WriteMessage(websocket.TextMessage, []byte("last words"))
-		_, _, _ = s.ReadMessage() // receives the Close frame and answers it
-	})
-	type result struct {
-		data []byte
-		err  error
-	}
-	reads := make(chan result, 4)
-	go func() {
-		for {
-			_, data, err := c.ReadMessage()
-			reads <- result{data, err}
-			if err != nil {
+	for range 50 {
+		a, b := net.Pipe()
+		peer := make(chan error, 1)
+		go func() {
+			defer b.Close()
+			buf := make([]byte, 512)
+			for {
+				n, err := b.Read(buf)
+				if err != nil {
+					peer <- err
+					return
+				}
+				if n > 0 && buf[0] == 0x88 { // the client's Close frame
+					break
+				}
+			}
+			late := []byte{0x81, 4, 'l', 'a', 't', 'e'}
+			closeFrame := []byte{0x88, 2, 0x03, 0xe8} // StatusNormalClosure
+			_, err := b.Write(append(late, closeFrame...))
+			peer <- err
+			_, _ = io.Copy(io.Discard, b)
+		}()
+		c := websocket.NewConn(a, websocket.ConnConfig{})
+
+		reads := make(chan error, 1)
+		go func() {
+			for {
+				_, data, err := c.ReadMessage()
+				if err != nil {
+					reads <- err
+					return
+				}
+				reads <- fmt.Errorf("read loop got %q after Shutdown started", data)
 				return
 			}
+		}()
+		if err := c.Shutdown(shutdownContext(t), websocket.StatusNormalClosure, ""); err != nil {
+			t.Fatalf("Shutdown: %v", err)
 		}
-	}()
-	done := make(chan error, 1)
-	go func() { done <- c.Shutdown(shutdownContext(t), websocket.StatusNormalClosure, "") }()
-	close(release)
-	if r := <-reads; string(r.data) != "last words" {
-		t.Fatalf("first read = %q, %v; want the message sent before the peer's Close", r.data, r.err)
-	}
-	if r := <-reads; websocket.CloseStatus(r.err) != websocket.StatusNormalClosure {
-		t.Fatalf("second read: err = %v, want the peer's CloseError", r.err)
-	}
-	if err := <-done; err != nil {
-		t.Fatalf("Shutdown: %v", err)
+		if err := <-peer; err != nil {
+			t.Fatalf("peer: %v", err)
+		}
+		err := <-reads
+		if websocket.CloseStatus(err) != websocket.StatusNormalClosure && !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("read loop: err = %v, want the peer's CloseError or net.ErrClosed", err)
+		}
 	}
 }
 
