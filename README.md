@@ -3,6 +3,7 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/picatz/websocket.svg)](https://pkg.go.dev/github.com/picatz/websocket)
 [![Test](https://github.com/picatz/websocket/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/picatz/websocket/actions/workflows/test.yml)
 [![Autobahn](https://github.com/picatz/websocket/actions/workflows/conformance.yml/badge.svg?branch=main)](#conformance)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 A [WebSocket] client and server for Go 1.26 and later, built only on the
 standard library. It implements [RFC 6455] and the permessage-deflate
@@ -198,3 +199,7 @@ go test . -run '^$' -fuzz '^FuzzReadMessage$' -fuzztime=30s
 [`api/v0.txt`](api/v0.txt), so any change to it shows up as a reviewed diff.
 After an intended change, run `go test -run '^TestAPI$' -update-api .` and
 commit the result.
+
+## License
+
+Licensed under the [Apache License, Version 2.0](LICENSE).
