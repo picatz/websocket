@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/picatz/websocket"
@@ -151,26 +152,28 @@ func TestShutdownDrainsUnreadMessages(t *testing.T) {
 
 // A peer that never answers cannot hold Shutdown past its context.
 func TestShutdownContextBoundsSilentPeer(t *testing.T) {
-	a, b := net.Pipe()
-	defer b.Close()
-	go func() { // read frames, never answer
-		buf := make([]byte, 512)
-		for {
-			if _, err := b.Read(buf); err != nil {
-				return
+	synctest.Test(t, func(t *testing.T) {
+		a, b := net.Pipe()
+		defer b.Close()
+		go func() { // read frames, never answer
+			buf := make([]byte, 512)
+			for {
+				if _, err := b.Read(buf); err != nil {
+					return
+				}
 			}
+		}()
+		c := mustNewConn(a, websocket.ConnConfig{})
+		ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+		defer cancel()
+		err := c.Shutdown(ctx, websocket.StatusNormalClosure, "")
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("Shutdown: err = %v, want context.DeadlineExceeded", err)
 		}
-	}()
-	c := mustNewConn(a, websocket.ConnConfig{})
-	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
-	defer cancel()
-	err := c.Shutdown(ctx, websocket.StatusNormalClosure, "")
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("Shutdown: err = %v, want context.DeadlineExceeded", err)
-	}
-	if err := c.WriteMessage(websocket.TextMessage, nil); !errors.Is(err, net.ErrClosed) {
-		t.Fatalf("write after timed-out Shutdown: err = %v, want net.ErrClosed", err)
-	}
+		if err := c.WriteMessage(websocket.TextMessage, nil); !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("write after timed-out Shutdown: err = %v, want net.ErrClosed", err)
+		}
+	})
 }
 
 // A peer that drops the TCP connection instead of answering is an
