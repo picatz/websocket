@@ -229,7 +229,7 @@ func TestFailureTLSNewConnAbortsWithoutCloseNotify(t *testing.T) {
 			if raw.closes.Load() != 1 {
 				t.Fatalf("abort count=%d", raw.closes.Load())
 			}
-			if _, _, err := c.ReadMessage(); err != io.ErrClosedPipe {
+			if _, _, err := c.ReadMessage(); !errors.Is(err, net.ErrClosed) {
 				t.Fatal(err)
 			}
 		})
@@ -397,7 +397,7 @@ func TestFailureTLSDialRetainsRawAbortTransport(t *testing.T) {
 	if _, err := c.abortConn.Write([]byte{0}); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("raw transport remains writable: %v", err)
 	}
-	if _, _, err := c.ReadMessage(); err != io.ErrClosedPipe {
+	if _, _, err := c.ReadMessage(); !errors.Is(err, net.ErrClosed) {
 		t.Fatal(err)
 	}
 }

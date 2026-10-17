@@ -1,4 +1,7 @@
 # websocket
+
+[![Go Reference](https://pkg.go.dev/badge/github.com/picatz/websocket.svg)](https://pkg.go.dev/github.com/picatz/websocket)
+[![Test](https://github.com/picatz/websocket/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/picatz/websocket/actions/workflows/test.yml)
  
 This package provides a small, standard-library-only [WebSocket] client and server implementation for Go 1.27 and later.
 It supports text and binary messages, ping/pong/close frames, message fragmentation, and
@@ -9,9 +12,11 @@ optional [`permessage-deflate`](#compression) compression with context takeover 
 [RFC 7692]: https://tools.ietf.org/html/rfc7692
 
 > [!NOTE]
-> You probably want to use the [`github.com/coder/websocket`] package instead of this one,
-> especially when you need comprehensive protocol compliance or production compression.
-> This package is intentionally small and is not a claim of full RFC conformance.
+> This package is intentionally small and depends only on the standard library.
+> It passes every graded case of the [Autobahn TestSuite](#conformance) as both client
+> and server, with and without compression, but that suite is a test baseline,
+> not a certification. [`github.com/coder/websocket`] is the more established
+> choice if you want a longer production track record.
 
 [`github.com/coder/websocket`]: https://pkg.go.dev/github.com/coder/websocket
 
@@ -482,6 +487,32 @@ malformed handshake. The 400, 405 and 426 errors match `ErrBadHandshake`, so a h
 its own misconfiguration. After `ErrHandshakeFailed` the transport may have been
 hijacked, so nothing is written.
 
+## Conformance
+
+The [Autobahn TestSuite](https://github.com/crossbario/autobahn-testsuite) is
+the standard interoperability suite for WebSocket implementations. The
+[`Autobahn baseline`](.github/workflows/conformance.yml) workflow runs all 517
+of its cases against this package as a server and as a client, on each change
+to the protocol code. It uses only the public `Dial`, `Upgrade`, `ReadMessage`,
+`WriteMessage` and `Close` API, and excludes no case for being a known failure.
+
+Results for commit
+[`f0b52e4`](https://github.com/picatz/websocket/actions/runs/38998965945), the
+same for server and client:
+
+| Profile | Autobahn sections | Cases | OK | Informational | Failed |
+| --- | --- | ---: | ---: | ---: | ---: |
+| core | 1–7, 10 | 247 | 244 | 3 | 0 |
+| limits | 9 (large messages) | 54 | 54 | 0 | 0 |
+| compression | 12–13 (permessage-deflate) | 216 | 216 | 0 | 0 |
+
+Informational cases have no pass or fail verdict in the suite. The workflow
+fails on an incomplete run but not on a failed case, so this table is updated by
+hand from a reviewed run rather than shown as a badge. Each run's artifact holds
+the full Autobahn report for 30 days; see
+[`conformance/autobahn`](conformance/autobahn) to reproduce it locally with
+Docker.
+
 ## Protocol limitations
 
 - Authenticate and authorize requests and validate the authoritative Host in your
@@ -521,8 +552,8 @@ hijacked, so nothing is written.
   transport or an outer wrapper hiding TLS may block in `Close`; trusted
   extension/handler callbacks can also block. These cannot be bounded by the
   library
-- The tests are focused regressions and local round trips, not a full RFC 6455 or
-  RFC 7692 compliance certification
+- Neither the tests nor the [Autobahn baseline](#conformance) are a formal
+  RFC 6455 or RFC 7692 compliance certification
 
 See [RFC 6455] for framing and [RFC 7692] for compression semantics.
 

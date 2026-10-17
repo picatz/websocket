@@ -3,6 +3,7 @@ package websocket
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -117,10 +118,10 @@ func TestReadMessageUTF8RejectsBeforeFIN(t *testing.T) {
 						t.Fatalf("close code %d", code)
 					}
 					before := bytes.Clone(raw.written.Bytes())
-					if _, _, err := c.ReadMessage(); err != io.ErrClosedPipe {
+					if _, _, err := c.ReadMessage(); !errors.Is(err, net.ErrClosed) {
 						t.Fatal(err)
 					}
-					if err := c.WriteMessage(TextMessage, []byte("late")); err != io.ErrClosedPipe {
+					if err := c.WriteMessage(TextMessage, []byte("late")); !errors.Is(err, net.ErrClosed) {
 						t.Fatal(err)
 					}
 					if raw.closes != 1 || !bytes.Equal(raw.written.Bytes(), before) {

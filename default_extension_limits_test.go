@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"testing"
 )
 
@@ -90,10 +91,10 @@ func defaultRepeatedDeflate(size int) []byte {
 
 func requireDefaultExtensionTerminal(t *testing.T, c *Conn, raw *memoryConn, closeCode uint16) {
 	t.Helper()
-	if _, p, err := c.ReadMessage(); !errors.Is(err, io.ErrClosedPipe) || p != nil {
+	if _, p, err := c.ReadMessage(); !errors.Is(err, net.ErrClosed) || p != nil {
 		t.Fatalf("later read: payload %d, error %v", len(p), err)
 	}
-	if err := c.WriteMessage(BinaryMessage, []byte("later")); !errors.Is(err, io.ErrClosedPipe) {
+	if err := c.WriteMessage(BinaryMessage, []byte("later")); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("later write: %v", err)
 	}
 	if c.closeSent != (closeCode != 0) {

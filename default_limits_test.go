@@ -99,10 +99,10 @@ func requireLimitFailure(t *testing.T, c *Conn, raw *memoryConn) {
 	if !errors.Is(err, ErrPayloadTooLarge) || p != nil {
 		t.Fatalf("payload %d error %v", len(p), err)
 	}
-	if _, _, err := c.ReadMessage(); !errors.Is(err, io.ErrClosedPipe) {
+	if _, _, err := c.ReadMessage(); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("later read: %v", err)
 	}
-	if err := c.WriteMessage(TextMessage, []byte("x")); !errors.Is(err, io.ErrClosedPipe) {
+	if err := c.WriteMessage(TextMessage, []byte("x")); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("later write: %v", err)
 	}
 	if raw != nil {
@@ -412,11 +412,11 @@ func TestHighLevelDefaultCloseInterruptsStalledPeer(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The in-flight read retains the detecting transport error. A later read
-	// reports io.ErrClosedPipe, as specified by the terminal-error contract.
+	// reports net.ErrClosed, as specified by the terminal-error contract.
 	if err := failureAwait(t, result); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("stalled read: %v", err)
 	}
-	if _, _, err := c.ReadMessage(); !errors.Is(err, io.ErrClosedPipe) {
+	if _, _, err := c.ReadMessage(); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("later read: %v", err)
 	}
 }

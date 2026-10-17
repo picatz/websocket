@@ -173,10 +173,10 @@ func deadlineTimeout(t *testing.T, err error) {
 
 func deadlineTerminal(t *testing.T, c *websocket.Conn) {
 	t.Helper()
-	if _, data, err := c.ReadMessage(); !errors.Is(err, io.ErrClosedPipe) || data != nil {
+	if _, data, err := c.ReadMessage(); !errors.Is(err, net.ErrClosed) || data != nil {
 		t.Fatalf("read after failure = %x, %v", data, err)
 	}
-	if err := c.WriteMessage(websocket.BinaryMessage, nil); !errors.Is(err, io.ErrClosedPipe) {
+	if err := c.WriteMessage(websocket.BinaryMessage, nil); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("write after read failure = %v", err)
 	}
 }

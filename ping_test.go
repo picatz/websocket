@@ -110,8 +110,8 @@ func TestPingReturnsWhenConnectionCloses(t *testing.T) {
 	readLoop(client)
 	done := make(chan error, 1)
 	go func() { done <- client.Ping(t.Context()) }()
-	if err := contextAwait(t, done); !errors.Is(err, io.ErrClosedPipe) {
-		t.Fatalf("err = %v, want io.ErrClosedPipe", err)
+	if err := contextAwait(t, done); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("err = %v, want net.ErrClosed", err)
 	}
 }
 
@@ -123,8 +123,8 @@ func TestPingAfterClose(t *testing.T) {
 	if err := closed.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := closed.Ping(t.Context()); !errors.Is(err, io.ErrClosedPipe) {
-		t.Fatalf("err = %v, want io.ErrClosedPipe", err)
+	if err := closed.Ping(t.Context()); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("err = %v, want net.ErrClosed", err)
 	}
 }
 

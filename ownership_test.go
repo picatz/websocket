@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"sync"
 	"testing"
 	"time"
@@ -277,10 +278,10 @@ func ownershipRequireTerminal(t *testing.T, c *Conn, raw *memoryConn, server boo
 		}
 	}
 	before := bytes.Clone(raw.written.Bytes())
-	if _, p, err := c.ReadMessage(); err != io.ErrClosedPipe || p != nil {
+	if _, p, err := c.ReadMessage(); !errors.Is(err, net.ErrClosed) || p != nil {
 		t.Fatalf("terminal read: len=%d err=%v", len(p), err)
 	}
-	if err := c.WriteMessage(BinaryMessage, nil); err != io.ErrClosedPipe {
+	if err := c.WriteMessage(BinaryMessage, nil); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("terminal write: %v", err)
 	}
 	if err := c.Close(); err != ErrAlreadyClosed {
