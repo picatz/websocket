@@ -28,9 +28,15 @@ func serverURL(t *testing.T, path string) string {
 	return base + path
 }
 
+// dialTimeout bounds each dial so a broken host fails the test instead of
+// hanging it. It is not a latency check: the first connection a Node process
+// opens loads its WebSocket client, which has taken over 5 seconds on a busy
+// Windows runner.
+const dialTimeout = 30 * time.Second
+
 func dial(t *testing.T, path string, d *browser.Dialer) *browser.Conn {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), dialTimeout)
 	defer cancel()
 	conn, err := d.Dial(ctx, serverURL(t, path))
 	if err != nil {
@@ -138,7 +144,7 @@ func TestMaxMessageSize(t *testing.T) {
 }
 
 func TestDialFailure(t *testing.T) {
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), dialTimeout)
 	defer cancel()
 	if _, err := browser.Dial(ctx, serverURL(t, "/reject")); !errors.Is(err, browser.ErrDialFailed) || errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("rejected handshake: err = %v, want ErrDialFailed", err)
@@ -200,7 +206,7 @@ func TestCloseWithStatusReachesPeer(t *testing.T) {
 	}
 	// Wait for the handshake to finish; the server records what it received.
 	_, _, _ = conn.ReadMessage()
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), dialTimeout)
 	defer cancel()
 	check, err := browser.Dial(ctx, serverURL(t, "/lastclose"))
 	if err != nil {
