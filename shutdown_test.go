@@ -47,7 +47,7 @@ func shutdownContext(t *testing.T) context.Context {
 func TestShutdownCompletesHandshake(t *testing.T) {
 	got := make(chan error, 1)
 	c := shutdownPair(t, func(s *websocket.Conn) {
-		_, _, err := s.ReadMessage()
+		_, _, err := s.ReadMessage(context.Background())
 		got <- err
 	})
 	if err := c.Shutdown(shutdownContext(t), websocket.StatusGoingAway, "restarting"); err != nil {
@@ -57,7 +57,7 @@ func TestShutdownCompletesHandshake(t *testing.T) {
 	if err := <-got; !errors.As(err, &ce) || ce.Code != websocket.StatusGoingAway || ce.Reason != "restarting" {
 		t.Fatalf("server read: err = %v, want StatusGoingAway \"restarting\"", err)
 	}
-	if err := c.WriteMessage(websocket.TextMessage, []byte("late")); !errors.Is(err, net.ErrClosed) {
+	if err := c.WriteMessage(context.Background(), websocket.TextMessage, []byte("late")); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("write after Shutdown: err = %v, want net.ErrClosed", err)
 	}
 	if err := c.Shutdown(shutdownContext(t), websocket.StatusNormalClosure, ""); !errors.Is(err, net.ErrClosed) {
@@ -97,7 +97,7 @@ func TestShutdownWithReadLoop(t *testing.T) {
 		reads := make(chan error, 1)
 		go func() {
 			for {
-				_, data, err := c.ReadMessage()
+				_, data, err := c.ReadMessage(context.Background())
 				if err != nil {
 					reads <- err
 					return
@@ -129,12 +129,12 @@ func TestShutdownDrainsUnreadMessages(t *testing.T) {
 		big := bytes.Repeat([]byte("x"), 64<<10)
 		var err error
 		for range 64 { // far more than the socket buffers hold
-			if err = s.WriteMessage(websocket.BinaryMessage, big); err != nil {
+			if err = s.WriteMessage(context.Background(), websocket.BinaryMessage, big); err != nil {
 				break
 			}
 		}
 		writeErr <- err
-		_, _, err = s.ReadMessage()
+		_, _, err = s.ReadMessage(context.Background())
 		readErr <- err
 	})
 	// Let the server fill the client's receive buffer before shutting down.
@@ -170,7 +170,7 @@ func TestShutdownContextBoundsSilentPeer(t *testing.T) {
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("Shutdown: err = %v, want context.DeadlineExceeded", err)
 		}
-		if err := c.WriteMessage(websocket.TextMessage, nil); !errors.Is(err, net.ErrClosed) {
+		if err := c.WriteMessage(context.Background(), websocket.TextMessage, nil); !errors.Is(err, net.ErrClosed) {
 			t.Fatalf("write after timed-out Shutdown: err = %v, want net.ErrClosed", err)
 		}
 	})
@@ -195,13 +195,13 @@ func TestShutdownPeerDropsConnection(t *testing.T) {
 func TestShutdownInvalidStatusLeavesConnOpen(t *testing.T) {
 	echo := make(chan string, 1)
 	c := shutdownPair(t, func(s *websocket.Conn) {
-		_, data, _ := s.ReadMessage()
+		_, data, _ := s.ReadMessage(context.Background())
 		echo <- string(data)
 	})
 	if err := c.Shutdown(shutdownContext(t), websocket.StatusAbnormalClosure, ""); !errors.Is(err, websocket.ErrInvalidCloseStatus) {
 		t.Fatalf("Shutdown(1006): err = %v, want ErrInvalidCloseStatus", err)
 	}
-	if err := c.WriteMessage(websocket.TextMessage, []byte("still open")); err != nil {
+	if err := c.WriteMessage(context.Background(), websocket.TextMessage, []byte("still open")); err != nil {
 		t.Fatalf("write after rejected Shutdown: %v", err)
 	}
 	if got := <-echo; got != "still open" {
@@ -219,7 +219,7 @@ func ExampleConn_Shutdown() {
 			return
 		}
 		defer conn.Close()
-		_, _, err = conn.ReadMessage() // answers the client's Close frame
+		_, _, err = conn.ReadMessage(context.Background()) // answers the client's Close frame
 		status <- websocket.CloseStatus(err)
 	}))
 	defer srv.Close()

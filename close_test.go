@@ -85,7 +85,7 @@ func TestCloseWithStatusRejectsInvalid(t *testing.T) {
 			if raw.written.Len() != 0 {
 				t.Fatalf("wrote %x for an invalid status", raw.written.Bytes())
 			}
-			if err := c.WriteMessage(TextMessage, []byte("still open")); err != nil {
+			if err := c.WriteMessage(context.Background(), TextMessage, []byte("still open")); err != nil {
 				t.Fatalf("write after rejected close: %v", err)
 			}
 		})
@@ -106,7 +106,7 @@ func TestReadMessageReturnsPeerCloseError(t *testing.T) {
 			wire := append(failureWire(server, 0x02, []byte("a")), failureWire(server, 0x88, tt.payload)...)
 			raw := &memoryConn{Reader: bytes.NewReader(wire)}
 			c := newTestConn(raw, ConnConfig{Server: server})
-			_, data, err := c.ReadMessage()
+			_, data, err := c.ReadMessage(context.Background())
 			ce, ok := errors.AsType[*CloseError](err)
 			if !ok || *ce != tt.want || data != nil {
 				t.Fatalf("server=%v: ReadMessage = %q, %v; want %+v", server, data, err, tt.want)
@@ -122,7 +122,7 @@ func TestReadMessageReturnsPeerCloseError(t *testing.T) {
 			if got := failureClosePayload(t, raw.written.Bytes(), server); !bytes.Equal(got, tt.payload) {
 				t.Fatalf("echo = %x, want %x", got, tt.payload)
 			}
-			if _, _, err := c.ReadMessage(); !errors.Is(err, net.ErrClosed) || CloseStatus(err) != -1 {
+			if _, _, err := c.ReadMessage(context.Background()); !errors.Is(err, net.ErrClosed) || CloseStatus(err) != -1 {
 				t.Fatalf("read after peer close: %v", err)
 			}
 		}
@@ -135,7 +135,7 @@ func TestReadMessageReturnsPeerCloseErrorDuringCompression(t *testing.T) {
 	compressed := defaultStoredDeflate([]byte("partial"))
 	wire := append(failureWire(false, 0x42, compressed), failureWire(false, 0x88, append([]byte{3, 233}, "away"...))...)
 	c := newTestConn(&memoryConn{Reader: bytes.NewReader(wire)}, ConnConfig{}, []frameExtension{defaultLimitPMD(t, false)}...)
-	_, _, err := c.ReadMessage()
+	_, _, err := c.ReadMessage(context.Background())
 	if ce, ok := errors.AsType[*CloseError](err); !ok || ce.Code != StatusGoingAway || ce.Reason != "away" {
 		t.Fatalf("ReadMessage = %v, want StatusGoingAway close", err)
 	}
@@ -167,7 +167,7 @@ func TestCloseStatus(t *testing.T) {
 }
 
 // End to end over a synchronous pipe: each side observes the other's status,
-// including through ReadMessageContext.
+// including through a ReadMessage with a context.
 func TestCloseWithStatusRoundTrip(t *testing.T) {
 	a, b := net.Pipe()
 	server := newTestConn(a, ConnConfig{Server: true})
@@ -179,7 +179,7 @@ func TestCloseWithStatusRoundTrip(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, _, err := client.ReadMessageContext(ctx)
+	_, _, err := client.ReadMessage(ctx)
 	if ce, ok := errors.AsType[*CloseError](err); !ok || ce.Code != StatusPolicyViolation || ce.Reason != "quota exceeded" {
 		t.Fatalf("client read = %v", err)
 	}

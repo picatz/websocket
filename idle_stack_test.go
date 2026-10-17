@@ -2,6 +2,7 @@ package websocket
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -66,7 +67,7 @@ func TestUpgradeKeepsInitialStack(t *testing.T) {
 			return
 		}
 		defer c.Close()
-		c.ReadMessage()
+		c.ReadMessage(context.Background())
 	})
 	if got > baseline+512 {
 		t.Fatalf("idle connection stack = %.0f bytes, want about the %.0f of a hijacked net/http connection", got, baseline)

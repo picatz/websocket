@@ -234,7 +234,7 @@ func TestPMDEntryDialComposition(t *testing.T) {
 					if conn == nil || err != nil {
 						t.Fatalf("Dial=%v, %v", conn, err)
 					}
-					opcode, data, err := conn.ReadMessage()
+					opcode, data, err := conn.ReadMessage(context.Background())
 					if err != nil || opcode != BinaryMessage || string(data) != "x" {
 						t.Fatalf("first message=%v, %q, %v", opcode, data, err)
 					}
@@ -266,13 +266,13 @@ func TestPMDEntryManualCompositionBeforeIO(t *testing.T) {
 		run  func(*Conn) error
 	}{
 		{"read", func(c *Conn) error {
-			_, data, err := c.ReadMessage()
+			_, data, err := c.ReadMessage(context.Background())
 			if len(data) != 0 {
 				t.Error("rejected read returned data")
 			}
 			return err
 		}},
-		{"write", func(c *Conn) error { return c.WriteMessage(BinaryMessage, []byte("application")) }},
+		{"write", func(c *Conn) error { return c.WriteMessage(context.Background(), BinaryMessage, []byte("application")) }},
 		{"ping", func(c *Conn) error { return c.writeControlFrame(opPing, []byte("ping")) }},
 		{"pong", func(c *Conn) error { return c.writeControlFrame(opPong, []byte("pong")) }},
 		{"close control", func(c *Conn) error { return c.writeControlFrame(opClose, nil) }},
@@ -318,10 +318,10 @@ func TestPMDEntryManualCompositionBeforeIO(t *testing.T) {
 							t.Fatal(err)
 						}
 					}
-					if err := conn.WriteMessage(BinaryMessage, []byte("later")); err == nil {
+					if err := conn.WriteMessage(context.Background(), BinaryMessage, []byte("later")); err == nil {
 						t.Fatal("write resurrected failed connection")
 					}
-					if _, data, err := conn.ReadMessage(); err == nil || len(data) != 0 {
+					if _, data, err := conn.ReadMessage(context.Background()); err == nil || len(data) != 0 {
 						t.Fatalf("read after rejection=%q, %v", data, err)
 					}
 					if err := conn.Close(); !errors.Is(err, errAlreadyClosed) {
@@ -358,10 +358,10 @@ func TestPMDEntryManualPermittedCompositions(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if opcode, data, err := conn.ReadMessage(); err != nil || opcode != BinaryMessage || string(data) != want {
+			if opcode, data, err := conn.ReadMessage(context.Background()); err != nil || opcode != BinaryMessage || string(data) != want {
 				t.Fatalf("read=%v, %q, %v", opcode, data, err)
 			}
-			if err := conn.WriteMessage(BinaryMessage, []byte("x")); err != nil {
+			if err := conn.WriteMessage(context.Background(), BinaryMessage, []byte("x")); err != nil {
 				t.Fatal(err)
 			}
 			if err := conn.writeControlFrame(opPing, nil); err != nil {
@@ -394,7 +394,7 @@ func TestPMDEntryCompositionUsesBuiltinIdentity(t *testing.T) {
 				exts = append(exts, pmd)
 			}
 			raw := newEntryConn(nil)
-			err := newTestConn(raw, ConnConfig{Server: true}, exts...).WriteMessage(BinaryMessage, []byte("x"))
+			err := newTestConn(raw, ConnConfig{Server: true}, exts...).WriteMessage(context.Background(), BinaryMessage, []byte("x"))
 			// Only the built-in type owns permessage-deflate semantics; a custom
 			// extension with the same name is an ordinary frame extension.
 			if err != nil || custom.outgoing != 1 || raw.writes == 0 {
@@ -581,9 +581,9 @@ func TestPMDEntryManualCompositionRevalidated(t *testing.T) {
 			var err error
 			switch operation {
 			case "read":
-				_, _, err = conn.ReadMessage()
+				_, _, err = conn.ReadMessage(context.Background())
 			case "write":
-				err = conn.WriteMessage(BinaryMessage, []byte("later"))
+				err = conn.WriteMessage(context.Background(), BinaryMessage, []byte("later"))
 			case "control":
 				err = conn.writeControlFrame(opPing, nil)
 			case "Close":

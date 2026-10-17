@@ -3,6 +3,7 @@ package websocket
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -168,11 +169,11 @@ func TestPMDSmallLocalWindowsRoundTrip(t *testing.T) {
 				}
 				defer c.Close()
 				for {
-					kind, data, err := c.ReadMessage()
+					kind, data, err := c.ReadMessage(context.Background())
 					if err != nil {
 						return
 					}
-					if err := c.WriteMessage(kind, data); err != nil {
+					if err := c.WriteMessage(context.Background(), kind, data); err != nil {
 						t.Error(err)
 						return
 					}
@@ -189,10 +190,10 @@ func TestPMDSmallLocalWindowsRoundTrip(t *testing.T) {
 				t.Fatalf("selected %q, want %q", got, want)
 			}
 			for range 3 {
-				if err := c.WriteMessage(BinaryMessage, message); err != nil {
+				if err := c.WriteMessage(context.Background(), BinaryMessage, message); err != nil {
 					t.Fatal(err)
 				}
-				_, got, err := c.ReadMessage()
+				_, got, err := c.ReadMessage(context.Background())
 				if err != nil || !bytes.Equal(got, message) {
 					t.Fatalf("echo = %d bytes, %v", len(got), err)
 				}
@@ -333,7 +334,7 @@ func TestPMDDirectConnRoleSwitchHonorsWindow(t *testing.T) {
 	if got := p.(*perMessageDeflate).localWindowBits(); got != 9 {
 		t.Fatalf("server send window = %d, want 9", got)
 	}
-	if err := c.WriteMessage(BinaryMessage, []byte("data")); err != nil || raw.written.Len() == 0 {
+	if err := c.WriteMessage(context.Background(), BinaryMessage, []byte("data")); err != nil || raw.written.Len() == 0 {
 		t.Fatalf("direct send = %v, wire %x", err, raw.written.Bytes())
 	}
 }
@@ -353,7 +354,7 @@ func TestPMDDirectServerNegotiation(t *testing.T) {
 	if !pmd.server || pmd.localNoContextTakeover() || !pmd.peerNoContextTakeover() {
 		t.Fatal("Negotiate lost the bound server role")
 	}
-	if err := c.WriteMessage(BinaryMessage, []byte("hello")); err != nil || raw.written.Len() == 0 {
+	if err := c.WriteMessage(context.Background(), BinaryMessage, []byte("hello")); err != nil || raw.written.Len() == 0 {
 		t.Fatalf("direct server write = %v", err)
 	}
 }

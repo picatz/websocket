@@ -1,6 +1,7 @@
 package websocket
 
 import (
+	"context"
 	"errors"
 	"testing"
 )
@@ -38,7 +39,7 @@ func TestProtocolErrorsMatchErrProtocol(t *testing.T) {
 // returns for a peer's frame with a reserved opcode.
 func TestReadProtocolViolationMatchesErrProtocol(t *testing.T) {
 	c := frameConn([]byte{0x83, 0x00}, false, 0)
-	if _, _, err := c.ReadMessage(); !errors.Is(err, ErrProtocol) {
+	if _, _, err := c.ReadMessage(context.Background()); !errors.Is(err, ErrProtocol) {
 		t.Fatalf("ReadMessage = %v, want a match for ErrProtocol", err)
 	}
 }

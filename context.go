@@ -5,48 +5,25 @@ import (
 	"fmt"
 )
 
-// ReadMessageContext is like ReadMessage, but ctx bounds the call.
-//
-// If ctx is already done, it returns the context's cause without reading and
-// the connection is unaffected. If ctx ends while the read is in progress, the
-// connection is aborted: the transport closes without a closing handshake, the
-// blocked read returns an error matching both the context's cause and the
-// underlying failure, and later operations fail as after Close. A message that
-// completed as ctx ended is still returned, but the connection may already be
-// aborted.
-//
-// This is the same terminal contract as a read timeout. It never changes the
-// deadlines set with SetDeadline or SetReadDeadline. To bound a single read
-// without risking the connection, use SetReadDeadline knowing that read
-// timeouts are terminal too, or leave the read running and select on its
-// result.
-func (c *Conn) ReadMessageContext(ctx context.Context) (messageType MessageType, data []byte, err error) {
+// watch arranges for ctx to abort the connection while an operation runs.
+// If ctx is already done, it returns the context's cause and the operation
+// must not start. Otherwise the caller passes the returned stop to ctxError
+// when the operation ends. A context that can never be done, such as
+// context.Background, costs nothing: stop is nil.
+func (c *Conn) watch(ctx context.Context) (stop func() bool, err error) {
+	if ctx.Done() == nil {
+		return nil, nil
+	}
 	if err := ctx.Err(); err != nil {
-		return 0, nil, context.Cause(ctx)
+		return nil, context.Cause(ctx)
 	}
-	stop := context.AfterFunc(ctx, c.cancelIO)
-	messageType, data, err = c.ReadMessage()
-	if !stop() && err != nil {
-		return 0, nil, fmt.Errorf("%w: %w", context.Cause(ctx), err)
-	}
-	return messageType, data, err
+	return context.AfterFunc(ctx, c.cancelIO), nil
 }
 
-// WriteMessageContext is like WriteMessage, but ctx bounds the call,
-// including any wait for a concurrent writer.
-//
-// If ctx is already done, it returns the context's cause without writing and
-// the connection is unaffected. If ctx ends while the write is in progress, the
-// connection is aborted as described for ReadMessageContext, because a
-// partially written frame cannot be retried. The returned error matches both
-// the context's cause and the underlying failure.
-func (c *Conn) WriteMessageContext(ctx context.Context, messageType MessageType, data []byte) error {
-	if err := ctx.Err(); err != nil {
-		return context.Cause(ctx)
-	}
-	stop := context.AfterFunc(ctx, c.cancelIO)
-	err := c.WriteMessage(messageType, data)
-	if !stop() && err != nil {
+// ctxError unregisters stop and returns err, wrapped with ctx's cause when
+// ctx ended the operation, so the result matches both.
+func ctxError(ctx context.Context, stop func() bool, err error) error {
+	if stop != nil && !stop() && err != nil {
 		return fmt.Errorf("%w: %w", context.Cause(ctx), err)
 	}
 	return err

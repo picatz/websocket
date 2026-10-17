@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -34,7 +35,7 @@ func TestReadingClientStaysConnected(t *testing.T) {
 	go func() {
 		defer close(messages)
 		for {
-			_, msg, err := conn.ReadMessage()
+			_, msg, err := conn.ReadMessage(context.Background())
 			if err != nil {
 				return
 			}
@@ -43,7 +44,7 @@ func TestReadingClientStaysConnected(t *testing.T) {
 	}()
 
 	time.Sleep(5 * testKeepalive.pongWait)
-	if err := conn.WriteMessage(websocket.TextMessage, []byte("still here")); err != nil {
+	if err := conn.WriteMessage(context.Background(), websocket.TextMessage, []byte("still here")); err != nil {
 		t.Fatalf("WriteMessage: %v", err)
 	}
 	select {

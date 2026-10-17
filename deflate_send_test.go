@@ -3,6 +3,7 @@ package websocket
 import (
 	"bytes"
 	"compress/flate"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -42,7 +43,7 @@ func sendWire(t *testing.T, pmd *perMessageDeflate, messages ...[]byte) []byte {
 	raw := &memoryConn{Reader: bytes.NewReader(nil)}
 	c := newTestConn(raw, ConnConfig{}, []frameExtension{pmd}...)
 	for _, m := range messages {
-		if err := c.WriteMessage(BinaryMessage, m); err != nil {
+		if err := c.WriteMessage(context.Background(), BinaryMessage, m); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -84,7 +85,7 @@ func readAll(t *testing.T, pmd *perMessageDeflate, wire []byte) [][]byte {
 	c := newTestConn(&memoryConn{Reader: bytes.NewReader(wire)}, ConnConfig{Server: true}, []frameExtension{pmd}...)
 	var out [][]byte
 	for {
-		_, data, err := c.ReadMessage()
+		_, data, err := c.ReadMessage(context.Background())
 		if errors.Is(err, io.EOF) {
 			return out
 		}
@@ -271,10 +272,10 @@ func TestPMDSendAllocations(t *testing.T) {
 	raw := &memoryConn{Reader: bytes.NewReader(nil)}
 	c := newTestConn(raw, ConnConfig{}, []frameExtension{send}...)
 	msg := bytes.Repeat([]byte("steady state message "), 100)
-	c.WriteMessage(BinaryMessage, msg)
+	c.WriteMessage(context.Background(), BinaryMessage, msg)
 	allocs := testing.AllocsPerRun(100, func() {
 		raw.written.Reset()
-		if err := c.WriteMessage(BinaryMessage, msg); err != nil {
+		if err := c.WriteMessage(context.Background(), BinaryMessage, msg); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -364,11 +365,11 @@ func TestPMDMemoryLimitRetention(t *testing.T) {
 				}
 				defer c.Close()
 				for {
-					kind, data, err := c.ReadMessage()
+					kind, data, err := c.ReadMessage(context.Background())
 					if err != nil {
 						return
 					}
-					if err := c.WriteMessage(kind, data); err != nil {
+					if err := c.WriteMessage(context.Background(), kind, data); err != nil {
 						t.Error(err)
 						return
 					}
@@ -380,10 +381,10 @@ func TestPMDMemoryLimitRetention(t *testing.T) {
 				t.Fatal(err)
 			}
 			for range 3 {
-				if err := c.WriteMessage(BinaryMessage, msg); err != nil {
+				if err := c.WriteMessage(context.Background(), BinaryMessage, msg); err != nil {
 					t.Fatal(err)
 				}
-				if _, got, err := c.ReadMessage(); err != nil || !bytes.Equal(got, msg) {
+				if _, got, err := c.ReadMessage(context.Background()); err != nil || !bytes.Equal(got, msg) {
 					t.Fatalf("echo: %v", err)
 				}
 			}
@@ -472,11 +473,11 @@ func TestPMDComposesWithFrameExtensions(t *testing.T) {
 		}
 		defer c.Close()
 		for {
-			kind, data, err := c.ReadMessage()
+			kind, data, err := c.ReadMessage(context.Background())
 			if err != nil {
 				return
 			}
-			if err := c.WriteMessage(kind, data); err != nil {
+			if err := c.WriteMessage(context.Background(), kind, data); err != nil {
 				t.Error(err)
 				return
 			}
@@ -493,10 +494,10 @@ func TestPMDComposesWithFrameExtensions(t *testing.T) {
 		t.Fatalf("selection %q", got)
 	}
 	for _, m := range [][]byte{text, big, text, nil} {
-		if err := c.WriteMessage(BinaryMessage, m); err != nil {
+		if err := c.WriteMessage(context.Background(), BinaryMessage, m); err != nil {
 			t.Fatal(err)
 		}
-		if _, got, err := c.ReadMessage(); err != nil || !bytes.Equal(got, m) {
+		if _, got, err := c.ReadMessage(context.Background()); err != nil || !bytes.Equal(got, m) {
 			t.Fatalf("echo %d bytes: got %d, %v", len(m), len(got), err)
 		}
 	}
@@ -513,12 +514,12 @@ func TestPMDCompositionRejectsRSV1Changes(t *testing.T) {
 	custom := &xorExtension{enabled: true, tamperRSV1: true}
 	raw := &memoryConn{Reader: bytes.NewReader(nil)}
 	c := newTestConn(raw, ConnConfig{}, []frameExtension{pmd, custom}...)
-	err := c.WriteMessage(BinaryMessage, []byte("hello"))
+	err := c.WriteMessage(context.Background(), BinaryMessage, []byte("hello"))
 	if !errors.Is(err, errUnsupportedExtensionComposition) || raw.written.Len() != 0 {
 		t.Fatalf("RSV1 change = %v, wire %x", err, raw.written.Bytes())
 	}
 	// Compression consumed input into the takeover context: writes stay poisoned.
-	if err := c.WriteMessage(BinaryMessage, []byte("again")); !errors.Is(err, errWriteFailed) {
+	if err := c.WriteMessage(context.Background(), BinaryMessage, []byte("again")); !errors.Is(err, errWriteFailed) {
 		t.Fatalf("later write = %v", err)
 	}
 }
@@ -528,7 +529,7 @@ func TestPMDCloseReleasesSendCompressor(t *testing.T) {
 		send, _ := pmdLink(t, "permessage-deflate", withCompressionMemoryLimit(limit))
 		raw := &memoryConn{Reader: bytes.NewReader(nil)}
 		c := newTestConn(raw, ConnConfig{}, []frameExtension{send}...)
-		if err := c.WriteMessage(BinaryMessage, []byte("hello hello")); err != nil {
+		if err := c.WriteMessage(context.Background(), BinaryMessage, []byte("hello hello")); err != nil {
 			t.Fatal(err)
 		}
 		if limit == 0 && send.send.flate == nil || limit > 0 && send.send.history == nil {

@@ -2,6 +2,7 @@ package websocket
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"net"
@@ -29,7 +30,7 @@ func TestConcurrentCloseReadWrite(t *testing.T) {
 		c := frameConn(nil, true, 0)
 		var wg sync.WaitGroup
 		start := make(chan struct{})
-		for _, fn := range []func(){func() { c.ReadMessage() }, func() { c.WriteMessage(BinaryMessage, nil) }, func() { c.Close() }} {
+		for _, fn := range []func(){func() { c.ReadMessage(context.Background()) }, func() { c.WriteMessage(context.Background(), BinaryMessage, nil) }, func() { c.Close() }} {
 			wg.Go(func() { <-start; fn() })
 		}
 		close(start)
@@ -43,7 +44,7 @@ func TestCloseUnblocksStalledWriter(t *testing.T) {
 	defer raw.Close()
 	c := newTestConn(raw, ConnConfig{Server: true})
 	result := make(chan error, 1)
-	go func() { result <- c.WriteMessage(BinaryMessage, bytes.Repeat([]byte{'x'}, 8192)) }()
+	go func() { result <- c.WriteMessage(context.Background(), BinaryMessage, bytes.Repeat([]byte{'x'}, 8192)) }()
 	// Read only the header. The writer is still blocked on its payload.
 	var header [4]byte
 	if _, err := io.ReadFull(peer, header[:]); err != nil {
@@ -80,7 +81,7 @@ func TestWriteMessagePreservesPayloadDuringWrite(t *testing.T) {
 	data := []byte("shared payload")
 	observer := &payloadObserver{source: data, want: bytes.Clone(data), t: t}
 	c := newTestConn(&benchmarkConn{reader: bytes.NewReader(nil), writer: observer}, ConnConfig{Server: false})
-	if err := c.WriteMessage(BinaryMessage, data); err != nil {
+	if err := c.WriteMessage(context.Background(), BinaryMessage, data); err != nil {
 		t.Fatal(err)
 	}
 }

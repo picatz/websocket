@@ -2,6 +2,7 @@ package websocket
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -31,7 +32,7 @@ func requireHeaderRejection(t *testing.T, wire []byte, server bool, limit int, e
 	t.Helper()
 	raw := &headerOnlyConn{memoryConn: memoryConn{Reader: bytes.NewReader(wire)}}
 	c := newTestConn(raw, ConnConfig{Server: server, MaxMessageSize: limit}, extensions...)
-	_, _, err := c.ReadMessage()
+	_, _, err := c.ReadMessage(context.Background())
 	if !errors.Is(err, want) || raw.bodyReads != 0 {
 		t.Fatalf("ReadMessage = %v, reads after header = %d; want %v without reading a body", err, raw.bodyReads, want)
 	}
@@ -95,7 +96,7 @@ func TestReadMessageRemainingBudgetLengthBoundaries(t *testing.T) {
 			requireHeaderRejection(t, wire, false, size, nil, ErrMessageTooLarge)
 			wire = append(wire, bytes.Repeat([]byte{'b'}, size)...)
 			for _, limit := range []int{0, size + 1, size + 2} {
-				_, data, err := frameConn(wire, false, limit).ReadMessage()
+				_, data, err := frameConn(wire, false, limit).ReadMessage(context.Background())
 				if err != nil || len(data) != size+1 || data[0] != 'a' {
 					t.Fatalf("limit %d: len = %d, error = %v", limit, len(data), err)
 				}
@@ -143,7 +144,7 @@ func TestReadMessageControlsAtLimit(t *testing.T) {
 				c := frameConn(wire, server, 2)
 				var received string
 				onControlPayload(c, func(p []byte) { received = string(p) })
-				op, data, err := c.ReadMessage()
+				op, data, err := c.ReadMessage(context.Background())
 				if opcode == opClose {
 					if ce, ok := errors.AsType[*CloseError](err); !ok || ce.Code != StatusNormalClosure || ce.Reason != string(control[2:]) {
 						t.Fatalf("close = %v", err)
@@ -218,7 +219,7 @@ func TestReadMessageCustomHeaderTransforms(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c := frameConn(tc.wire, false, 2)
 			c.extensions = []frameExtension{&headerTransformExtension{enabled: true, process: tc.process}}
-			_, data, err := c.ReadMessage()
+			_, data, err := c.ReadMessage(context.Background())
 			if !errors.Is(err, tc.wantErr) || string(data) != tc.want {
 				t.Fatalf("message = %q, %v; want %q, %v", data, err, tc.want, tc.wantErr)
 			}
@@ -253,7 +254,7 @@ func TestReadMessageBuiltinReservedBits(t *testing.T) {
 			}
 			c := frameConn(wire, false, 3)
 			c.extensions = extensions
-			if _, data, err := c.ReadMessage(); err != nil || string(data) != "x" {
+			if _, data, err := c.ReadMessage(context.Background()); err != nil || string(data) != "x" {
 				t.Fatalf("custom first %v, wire %x: %q, %v", first, wire, data, err)
 			}
 		}
@@ -265,7 +266,7 @@ func TestReadMessageBuiltinReservedBits(t *testing.T) {
 func TestReadMessageAtLimitStillRequiresFinalFrame(t *testing.T) {
 	for _, tail := range [][]byte{nil, {0x80}, {0x80, 1}, {0x80, 126, 0}, {0x8a, 0}, {0x00, 0}} {
 		wire := append([]byte{0x02, 2, 'a', 'b'}, tail...)
-		_, _, err := frameConn(wire, false, 2).ReadMessage()
+		_, _, err := frameConn(wire, false, 2).ReadMessage(context.Background())
 		want := io.ErrUnexpectedEOF
 		if bytes.Equal(tail, []byte{0x80, 1}) {
 			want = ErrMessageTooLarge
@@ -317,7 +318,7 @@ func TestCloseInterruptsFrameReadStages(t *testing.T) {
 			defer raw.Close()
 			c := newTestConn(raw, ConnConfig{Server: tc.server, MaxMessageSize: 2})
 			result := make(chan error, 1)
-			go func() { _, _, err := c.ReadMessage(); result <- err }()
+			go func() { _, _, err := c.ReadMessage(context.Background()); result <- err }()
 			select {
 			case <-raw.waiting:
 			case err := <-result:

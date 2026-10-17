@@ -2,6 +2,7 @@ package websocket
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"testing"
 	"unicode/utf8"
@@ -20,11 +21,11 @@ func TestPMDMessageRFCFragmentation(t *testing.T) {
 				wire = append(wire, failureWire(server, 0x81, []byte("next"))...)
 				raw := &memoryConn{Reader: bytes.NewReader(wire)}
 				c := newTestConn(raw, ConnConfig{Server: server}, []frameExtension{p}...)
-				typ, got, err := c.ReadMessage()
+				typ, got, err := c.ReadMessage(context.Background())
 				if err != nil || typ != TextMessage || string(got) != "Hello" {
 					t.Fatalf("server=%v payload=%s split=%d: %v %q", server, encoded, split, err, got)
 				}
-				_, got, err = c.ReadMessage()
+				_, got, err = c.ReadMessage(context.Background())
 				if err != nil || string(got) != "next" {
 					t.Fatalf("next: %q %v", got, err)
 				}
@@ -45,7 +46,7 @@ func TestPMDMessageTakeoverAndFinalStreams(t *testing.T) {
 		}
 		c := newTestConn(&memoryConn{Reader: bytes.NewReader(wire)}, ConnConfig{Server: server}, []frameExtension{p}...)
 		for _, want := range []string{"Hello", "Hello", "HelloHello"} {
-			_, got, err := c.ReadMessage()
+			_, got, err := c.ReadMessage(context.Background())
 			if err != nil || string(got) != want {
 				t.Fatalf("server=%v %q %v", server, got, err)
 			}
@@ -75,7 +76,7 @@ func FuzzPMDReadMessage(f *testing.F) {
 		}
 		c := newTestConn(&memoryConn{Reader: bytes.NewReader(wire)}, ConnConfig{Server: server, MaxMessageSize: limit}, []frameExtension{p}...)
 		for range 4 {
-			kind, data, err := c.ReadMessage()
+			kind, data, err := c.ReadMessage(context.Background())
 			if err != nil {
 				return
 			}

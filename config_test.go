@@ -267,8 +267,8 @@ func TestNewConnAgreedCompression(t *testing.T) {
 
 	msg := bytes.Repeat([]byte("agreed "), 200)
 	errc := make(chan error, 1)
-	go func() { errc <- client.WriteMessage(TextMessage, msg) }()
-	_, got, err := server.ReadMessage()
+	go func() { errc <- client.WriteMessage(context.Background(), TextMessage, msg) }()
+	_, got, err := server.ReadMessage(context.Background())
 	if err != nil || !bytes.Equal(got, msg) {
 		t.Fatalf("server read %d bytes, %v", len(got), err)
 	}

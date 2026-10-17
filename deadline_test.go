@@ -173,10 +173,10 @@ func deadlineTimeout(t *testing.T, err error) {
 
 func deadlineTerminal(t *testing.T, c *websocket.Conn) {
 	t.Helper()
-	if _, data, err := c.ReadMessage(); !errors.Is(err, net.ErrClosed) || data != nil {
+	if _, data, err := c.ReadMessage(context.Background()); !errors.Is(err, net.ErrClosed) || data != nil {
 		t.Fatalf("read after failure = %x, %v", data, err)
 	}
-	if err := c.WriteMessage(websocket.BinaryMessage, nil); !errors.Is(err, net.ErrClosed) {
+	if err := c.WriteMessage(context.Background(), websocket.BinaryMessage, nil); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("write after read failure = %v", err)
 	}
 }
@@ -190,7 +190,7 @@ type deadlineMessage struct {
 func deadlineRead(c *websocket.Conn) <-chan deadlineMessage {
 	done := make(chan deadlineMessage, 1)
 	go func() {
-		opcode, data, err := c.ReadMessage()
+		opcode, data, err := c.ReadMessage(context.Background())
 		done <- deadlineMessage{opcode, data, err}
 	}()
 	return done
@@ -227,7 +227,7 @@ func deadlineExchange(t *testing.T, from, to *websocket.Conn) {
 	t.Helper()
 	read := deadlineRead(to)
 	write := make(chan error, 1)
-	go func() { write <- from.WriteMessage(websocket.BinaryMessage, []byte("live")) }()
+	go func() { write <- from.WriteMessage(context.Background(), websocket.BinaryMessage, []byte("live")) }()
 	if err := deadlineWait(t, write, "loopback write"); err != nil {
 		t.Fatal(err)
 	}
@@ -341,7 +341,7 @@ func TestDeadlineWriteFailureRequiresClose(t *testing.T) {
 	read := deadlineRead(c)
 	deadlineWait(t, raw.reads, "concurrent read")
 	write := make(chan error, 1)
-	go func() { write <- c.WriteMessage(websocket.BinaryMessage, []byte("payload")) }()
+	go func() { write <- c.WriteMessage(context.Background(), websocket.BinaryMessage, []byte("payload")) }()
 	// Consume only the header; the caller's write remains blocked on payload.
 	if _, err := io.ReadFull(peer, make([]byte, 2)); err != nil {
 		t.Fatal(err)
@@ -425,7 +425,7 @@ func TestDeadlineConcurrentSettersAndClose(t *testing.T) {
 		c, raw, _ := deadlinePipe(t, true)
 		read := deadlineRead(c)
 		write := make(chan error, 1)
-		go func() { write <- c.WriteMessage(websocket.BinaryMessage, []byte("blocked")) }()
+		go func() { write <- c.WriteMessage(context.Background(), websocket.BinaryMessage, []byte("blocked")) }()
 		deadlineWait(t, raw.reads, "concurrent read")
 		deadlineWait(t, raw.writes, "concurrent write")
 		start := make(chan struct{})
@@ -494,7 +494,7 @@ func TestDeadlineFailurePreservesCallerDeadlines(t *testing.T) {
 		deadlineSet(t, setter, time.Now().Add(-time.Second))
 	}
 	before := append([]deadlineCall(nil), raw.calls...)
-	if _, _, err := c.ReadMessage(); !errors.Is(err, websocket.ErrProtocol) {
+	if _, _, err := c.ReadMessage(context.Background()); !errors.Is(err, websocket.ErrProtocol) {
 		t.Fatalf("protocol failure = %v", err)
 	}
 	if len(raw.calls) != len(before) {

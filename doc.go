@@ -12,10 +12,10 @@
 //		return err
 //	}
 //	defer conn.Close()
-//	if err := conn.WriteMessage(websocket.TextMessage, []byte("hello")); err != nil {
+//	if err := conn.WriteMessage(ctx, websocket.TextMessage, []byte("hello")); err != nil {
 //		return err
 //	}
-//	typ, data, err := conn.ReadMessage()
+//	typ, data, err := conn.ReadMessage(ctx)
 //
 // The package uses only the standard library. Programs compiled for js/wasm
 // use [github.com/picatz/websocket/browser], which drives the host's
@@ -50,7 +50,7 @@
 // written frame cannot be retried. Test what ended a connection with
 // errors.Is and CloseStatus:
 //
-//	_, _, err := conn.ReadMessage()
+//	_, _, err := conn.ReadMessage(ctx)
 //	switch {
 //	case websocket.CloseStatus(err) != -1:
 //		// The peer closed; *CloseError holds its code and reason.
@@ -71,9 +71,10 @@
 // # Contexts and deadlines
 //
 // Dial's context bounds connecting, TLS, any proxy tunnel and the handshake,
-// and nothing after Dial returns. To bound a single call use
-// Conn.ReadMessageContext or Conn.WriteMessageContext; if the context ends
-// mid-call the connection is aborted, exactly as after a deadline expires.
+// and nothing after Dial returns. Every message method takes a context that
+// bounds that call; if the context ends mid-call the connection is aborted,
+// exactly as after a deadline expires. A context that is never done, such as
+// context.Background, costs nothing.
 // Conn.SetDeadline and its variants delegate to the transport and apply to
 // blocked I/O as well. There is no default timeout for messages.
 //

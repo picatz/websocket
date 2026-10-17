@@ -96,14 +96,14 @@ func highLevelReader(t *testing.T, server bool, wire []byte, limit ...int) (*Con
 
 func requireLimitFailure(t *testing.T, c *Conn, raw *memoryConn) {
 	t.Helper()
-	_, p, err := c.ReadMessage()
+	_, p, err := c.ReadMessage(context.Background())
 	if !errors.Is(err, ErrMessageTooLarge) || p != nil {
 		t.Fatalf("payload %d error %v", len(p), err)
 	}
-	if _, _, err := c.ReadMessage(); !errors.Is(err, net.ErrClosed) {
+	if _, _, err := c.ReadMessage(context.Background()); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("later read: %v", err)
 	}
-	if err := c.WriteMessage(TextMessage, []byte("x")); !errors.Is(err, net.ErrClosed) {
+	if err := c.WriteMessage(context.Background(), TextMessage, []byte("x")); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("later write: %v", err)
 	}
 	if raw != nil {
@@ -134,7 +134,7 @@ func TestHighLevelDefaultLimit(t *testing.T) {
 							requireLimitFailure(t, c, raw)
 							return
 						}
-						got, p, err := c.ReadMessage()
+						got, p, err := c.ReadMessage(context.Background())
 						if err != nil || got != op || !bytes.Equal(p, payload) {
 							t.Fatalf("read %v %d %v", got, len(p), err)
 						}
@@ -160,7 +160,7 @@ func TestHighLevelDefaultHeaderLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := c.ReadMessage(); !errors.Is(err, ErrMessageTooLarge) || raw.bodyReads != 0 {
+	if _, _, err := c.ReadMessage(context.Background()); !errors.Is(err, ErrMessageTooLarge) || raw.bodyReads != 0 {
 		t.Fatalf("error %v body reads %d", err, raw.bodyReads)
 	}
 }
@@ -187,7 +187,7 @@ func TestHighLevelDefaultBudgetSemantics(t *testing.T) {
 					requireLimitFailure(t, c, raw)
 				} else {
 					for range 2 {
-						op, p, err := c.ReadMessage()
+						op, p, err := c.ReadMessage(context.Background())
 						if op != TextMessage || err != nil || !bytes.Equal(p, payload) {
 							t.Fatalf("read %v %d %v", op, len(p), err)
 						}
@@ -222,7 +222,7 @@ func TestExplicitLimitCompatibility(t *testing.T) {
 				if c.maxBytes != tc.want {
 					t.Fatalf("limit %d, want %d", c.maxBytes, tc.want)
 				}
-				_, p, err := c.ReadMessage()
+				_, p, err := c.ReadMessage(context.Background())
 				if err != nil || len(p) != tc.size {
 					t.Fatalf("read %d %v", len(p), err)
 				}
@@ -254,7 +254,7 @@ func TestExplicitLimitCompatibility(t *testing.T) {
 			if c.maxBytes != tc.want {
 				t.Fatalf("limit %d want %d", c.maxBytes, tc.want)
 			}
-			_, p, err := c.ReadMessage()
+			_, p, err := c.ReadMessage(context.Background())
 			if err != nil || len(p) != size {
 				t.Fatalf("read %d %v", len(p), err)
 			}
@@ -268,10 +268,10 @@ func TestExplicitLimitCompatibility(t *testing.T) {
 func TestHighLevelDefaultDoesNotLimitWrites(t *testing.T) {
 	payload := bytes.Repeat([]byte{'x'}, DefaultMaxMessageSize+1)
 	c, raw := highLevelReader(t, true, nil)
-	if err := c.WriteMessage(BinaryMessage, payload); err != nil {
+	if err := c.WriteMessage(context.Background(), BinaryMessage, payload); err != nil {
 		t.Fatal(err)
 	}
-	_, p, err := frameConn(raw.written.Bytes(), false, 0).ReadMessage()
+	_, p, err := frameConn(raw.written.Bytes(), false, 0).ReadMessage(context.Background())
 	if err != nil || !bytes.Equal(p, payload) {
 		t.Fatalf("server write %d %v", len(p), err)
 	}
@@ -283,7 +283,7 @@ func TestHighLevelDefaultDoesNotLimitWrites(t *testing.T) {
 			return
 		}
 		defer c.conn.Close()
-		_, p, err := c.ReadMessage()
+		_, p, err := c.ReadMessage(context.Background())
 		if err == nil && !bytes.Equal(p, payload) {
 			err = errors.New("different payload")
 		}
@@ -295,7 +295,7 @@ func TestHighLevelDefaultDoesNotLimitWrites(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer client.conn.Close()
-	if err := client.WriteMessage(BinaryMessage, payload); err != nil {
+	if err := client.WriteMessage(context.Background(), BinaryMessage, payload); err != nil {
 		t.Fatal(err)
 	}
 	if err := <-result; err != nil {
@@ -315,7 +315,7 @@ func TestHighLevelDefaultLoopbackServer(t *testing.T) {
 				}
 				defer c.conn.Close()
 				c.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-				_, p, err := c.ReadMessage()
+				_, p, err := c.ReadMessage(context.Background())
 				if err == nil && len(p) != size {
 					err = fmt.Errorf("payload length %d", len(p))
 				}
@@ -396,7 +396,7 @@ func TestHighLevelDefaultCloseInterruptsStalledPeer(t *testing.T) {
 	stalled := make(chan struct{})
 	c.br = bufio.NewReader(&limitStallReader{Reader: c.br, stalled: stalled})
 	result := make(chan error, 1)
-	go func() { _, _, err := c.ReadMessage(); result <- err }()
+	go func() { _, _, err := c.ReadMessage(context.Background()); result <- err }()
 	select {
 	case <-stalled:
 	case err := <-result:
@@ -412,7 +412,7 @@ func TestHighLevelDefaultCloseInterruptsStalledPeer(t *testing.T) {
 	if err := failureAwait(t, result); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("stalled read: %v", err)
 	}
-	if _, _, err := c.ReadMessage(); !errors.Is(err, net.ErrClosed) {
+	if _, _, err := c.ReadMessage(context.Background()); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("later read: %v", err)
 	}
 }

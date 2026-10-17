@@ -34,11 +34,11 @@ func Example() {
 		}
 		defer conn.Close()
 		for {
-			typ, data, err := conn.ReadMessage()
+			typ, data, err := conn.ReadMessage(context.Background())
 			if err != nil {
 				return // io.EOF-matching *CloseError on a normal close
 			}
-			if err := conn.WriteMessage(typ, data); err != nil {
+			if err := conn.WriteMessage(context.Background(), typ, data); err != nil {
 				return
 			}
 		}
@@ -54,10 +54,10 @@ func Example() {
 	}
 	defer conn.Close()
 
-	if err := conn.WriteMessage(websocket.TextMessage, []byte("hello")); err != nil {
+	if err := conn.WriteMessage(context.Background(), websocket.TextMessage, []byte("hello")); err != nil {
 		log.Fatal(err)
 	}
-	typ, data, err := conn.ReadMessage()
+	typ, data, err := conn.ReadMessage(context.Background())
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func ExampleUpgrader() {
 			return
 		}
 		defer conn.Close()
-		_ = conn.WriteMessage(websocket.TextMessage, []byte("welcome, "+conn.Subprotocol()))
+		_ = conn.WriteMessage(context.Background(), websocket.TextMessage, []byte("welcome, "+conn.Subprotocol()))
 	}
 	srv := httptest.NewServer(http.HandlerFunc(handler))
 	defer srv.Close()
@@ -90,7 +90,7 @@ func ExampleUpgrader() {
 		log.Fatal(err)
 	}
 	defer conn.Close()
-	_, data, err := conn.ReadMessage()
+	_, data, err := conn.ReadMessage(context.Background())
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -133,7 +133,7 @@ func ExampleCloseStatus() {
 	}
 	defer conn.Close()
 
-	_, _, err = conn.ReadMessage()
+	_, _, err = conn.ReadMessage(context.Background())
 	fmt.Println(websocket.CloseStatus(err), errors.Is(err, io.EOF))
 
 	var ce *websocket.CloseError
@@ -158,7 +158,7 @@ func ExampleConn_Ping() {
 		defer conn.Close()
 		for {
 			// ReadMessage answers Pings automatically.
-			if _, _, err := conn.ReadMessage(); err != nil {
+			if _, _, err := conn.ReadMessage(context.Background()); err != nil {
 				return
 			}
 		}
@@ -172,7 +172,7 @@ func ExampleConn_Ping() {
 	defer conn.Close()
 	go func() {
 		for {
-			if _, _, err := conn.ReadMessage(); err != nil {
+			if _, _, err := conn.ReadMessage(context.Background()); err != nil {
 				return
 			}
 		}
@@ -189,18 +189,18 @@ func ExampleConn_Ping() {
 	// Output: pong
 }
 
-// WriteMessageContext bounds a write, including the wait for another writer,
+// WriteMessage's context bounds the write, including the wait for another writer,
 // so a stalled peer cannot hold the caller forever. If the context ends
 // mid-write the connection is aborted, because a partial frame cannot be
 // retried.
-func ExampleConn_WriteMessageContext() {
+func ExampleConn_WriteMessage() {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := websocket.Upgrade(w, r)
 		if err != nil {
 			return
 		}
 		defer conn.Close()
-		_, data, _ := conn.ReadMessage()
+		_, data, _ := conn.ReadMessage(context.Background())
 		fmt.Printf("server got %s\n", data)
 	}))
 	defer srv.Close()
@@ -213,11 +213,11 @@ func ExampleConn_WriteMessageContext() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if err := conn.WriteMessageContext(ctx, websocket.TextMessage, []byte("tick")); err != nil {
+	if err := conn.WriteMessage(ctx, websocket.TextMessage, []byte("tick")); err != nil {
 		log.Fatal(err)
 	}
 	// Wait for the server's reply to the close so its output is printed.
-	_, _, _ = conn.ReadMessage()
+	_, _, _ = conn.ReadMessage(context.Background())
 	// Output: server got tick
 }
 
@@ -233,11 +233,11 @@ func ExampleCompression() {
 			return
 		}
 		defer conn.Close()
-		typ, data, err := conn.ReadMessage()
+		typ, data, err := conn.ReadMessage(context.Background())
 		if err != nil {
 			return
 		}
-		_ = conn.WriteMessage(typ, data)
+		_ = conn.WriteMessage(context.Background(), typ, data)
 	}))
 	defer srv.Close()
 
@@ -250,10 +250,10 @@ func ExampleCompression() {
 	fmt.Println(resp.Header.Get("Sec-WebSocket-Extensions"))
 
 	msg := strings.Repeat("compressible ", 100)
-	if err := conn.WriteMessage(websocket.TextMessage, []byte(msg)); err != nil {
+	if err := conn.WriteMessage(context.Background(), websocket.TextMessage, []byte(msg)); err != nil {
 		log.Fatal(err)
 	}
-	_, data, err := conn.ReadMessage()
+	_, data, err := conn.ReadMessage(context.Background())
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -342,7 +342,7 @@ func ExampleDialer_netDialContext() {
 			return
 		}
 		defer conn.Close()
-		_ = conn.WriteMessage(websocket.TextMessage, []byte("served for "+r.Host))
+		_ = conn.WriteMessage(context.Background(), websocket.TextMessage, []byte("served for "+r.Host))
 	}))
 	defer srv.Close()
 
@@ -357,7 +357,7 @@ func ExampleDialer_netDialContext() {
 		log.Fatal(err)
 	}
 	defer conn.Close()
-	_, data, err := conn.ReadMessage()
+	_, data, err := conn.ReadMessage(context.Background())
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -399,17 +399,17 @@ func ExampleUpgrader_error() {
 	// Output: 400 {"error":"Bad Request"}
 }
 
-// ReadMessageContext bounds a single read. When the context ends mid-read
+// ReadMessage's context bounds a single read. When the context ends mid-read
 // the connection is aborted, just as after a read timeout, so later calls
 // fail with an error matching net.ErrClosed.
-func ExampleConn_ReadMessageContext() {
+func ExampleConn_ReadMessage_timeout() {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := websocket.Upgrade(w, r)
 		if err != nil {
 			return
 		}
 		defer conn.Close()
-		_, _, _ = conn.ReadMessage() // Never sends; waits for the client to go.
+		_, _, _ = conn.ReadMessage(context.Background()) // Never sends; waits for the client to go.
 	}))
 	defer srv.Close()
 
@@ -421,10 +421,10 @@ func ExampleConn_ReadMessageContext() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	_, _, err = conn.ReadMessageContext(ctx)
+	_, _, err = conn.ReadMessage(ctx)
 	fmt.Println(errors.Is(err, context.DeadlineExceeded))
 
-	err = conn.WriteMessage(websocket.TextMessage, []byte("too late"))
+	err = conn.WriteMessage(context.Background(), websocket.TextMessage, []byte("too late"))
 	fmt.Println(errors.Is(err, net.ErrClosed))
 	// Output:
 	// true
@@ -457,7 +457,7 @@ func ExampleConn_Shutdown_server() {
 	// The client's read loop answers the Close frame and ends with the
 	// server's status.
 	for {
-		if _, _, err := conn.ReadMessage(); err != nil {
+		if _, _, err := conn.ReadMessage(context.Background()); err != nil {
 			var ce *websocket.CloseError
 			if errors.As(err, &ce) {
 				fmt.Println("client:", ce.Code, ce.Reason)
@@ -471,10 +471,10 @@ func ExampleConn_Shutdown_server() {
 	// server: <nil>
 }
 
-// ConnectionState reports the TLS state of a wss connection, on the client
-// and on a server upgraded from HTTPS, for example to read the peer's
-// certificates.
-func ExampleConn_ConnectionState() {
+// As with net/http, Dial's response carries the TLS state of a wss
+// connection, for example to read the server's certificates. A server reads
+// the client's from the request's TLS field.
+func ExampleDial_tls() {
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := websocket.Upgrade(w, r)
 		if err != nil {
@@ -488,14 +488,14 @@ func ExampleConn_ConnectionState() {
 	dialer := &websocket.Dialer{
 		TLSClientConfig: srv.Client().Transport.(*http.Transport).TLSClientConfig,
 	}
-	conn, _, err := dialer.Dial(context.Background(), wsURL(srv))
+	conn, resp, err := dialer.Dial(context.Background(), wsURL(srv))
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer conn.Close()
 
-	state, ok := conn.ConnectionState()
-	fmt.Println(ok, tls.VersionName(state.Version), len(state.PeerCertificates) > 0)
+	state := resp.TLS
+	fmt.Println(state != nil, tls.VersionName(state.Version), len(state.PeerCertificates) > 0)
 	// Output: true TLS 1.3 true
 }
 
@@ -547,11 +547,11 @@ func ExampleConn_NextWriter() {
 			return
 		}
 		defer conn.Close()
-		_, data, err := conn.ReadMessage()
+		_, data, err := conn.ReadMessage(context.Background())
 		if err != nil {
 			return
 		}
-		_ = conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprint(len(data))))
+		_ = conn.WriteMessage(context.Background(), websocket.TextMessage, []byte(fmt.Sprint(len(data))))
 	}))
 	defer srv.Close()
 
@@ -561,7 +561,7 @@ func ExampleConn_NextWriter() {
 	}
 	defer conn.Close()
 
-	w, err := conn.NextWriter(websocket.BinaryMessage)
+	w, err := conn.NextWriter(context.Background(), websocket.BinaryMessage)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -571,7 +571,7 @@ func ExampleConn_NextWriter() {
 	if err := w.Close(); err != nil {
 		log.Fatal(err)
 	}
-	_, data, err := conn.ReadMessage()
+	_, data, err := conn.ReadMessage(context.Background())
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -588,13 +588,13 @@ func ExampleConn_NextReader() {
 			return
 		}
 		defer conn.Close()
-		mw, err := conn.NextWriter(websocket.BinaryMessage)
+		mw, err := conn.NextWriter(context.Background(), websocket.BinaryMessage)
 		if err != nil {
 			return
 		}
 		_, _ = io.Copy(mw, io.LimitReader(zeros{}, 8<<20))
 		_ = mw.Close()
-		_, _, _ = conn.ReadMessage()
+		_, _, _ = conn.ReadMessage(context.Background())
 	}))
 	defer srv.Close()
 
@@ -605,7 +605,7 @@ func ExampleConn_NextReader() {
 	}
 	defer conn.Close()
 
-	_, r, err := conn.NextReader()
+	_, r, err := conn.NextReader(context.Background())
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -636,11 +636,11 @@ func ExampleConn_CloseWrite() {
 		}
 		defer conn.Close()
 		for {
-			typ, data, err := conn.ReadMessage()
+			typ, data, err := conn.ReadMessage(context.Background())
 			if err != nil {
 				return
 			}
-			_ = conn.WriteMessage(typ, bytes.ToUpper(data))
+			_ = conn.WriteMessage(context.Background(), typ, bytes.ToUpper(data))
 		}
 	}))
 	defer srv.Close()
@@ -652,7 +652,7 @@ func ExampleConn_CloseWrite() {
 	defer conn.Close()
 
 	for _, req := range []string{"one", "two", "three"} {
-		if err := conn.WriteMessage(websocket.TextMessage, []byte(req)); err != nil {
+		if err := conn.WriteMessage(context.Background(), websocket.TextMessage, []byte(req)); err != nil {
 			log.Fatal(err)
 		}
 	}
@@ -664,7 +664,7 @@ func ExampleConn_CloseWrite() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	for {
-		_, data, err := conn.ReadMessageContext(ctx)
+		_, data, err := conn.ReadMessage(ctx)
 		if err != nil {
 			fmt.Println("closed:", websocket.CloseStatus(err))
 			break
@@ -700,20 +700,20 @@ func ExampleNewConn() {
 	go func() {
 		defer server.Close()
 		for {
-			typ, data, err := server.ReadMessage()
+			typ, data, err := server.ReadMessage(context.Background())
 			if err != nil {
 				return
 			}
-			if err := server.WriteMessage(typ, append([]byte("echo: "), data...)); err != nil {
+			if err := server.WriteMessage(context.Background(), typ, append([]byte("echo: "), data...)); err != nil {
 				return
 			}
 		}
 	}()
 
-	if err := client.WriteMessage(websocket.TextMessage, []byte("over a pipe")); err != nil {
+	if err := client.WriteMessage(context.Background(), websocket.TextMessage, []byte("over a pipe")); err != nil {
 		log.Fatal(err)
 	}
-	_, data, err := client.ReadMessage()
+	_, data, err := client.ReadMessage(context.Background())
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -800,7 +800,7 @@ func ExampleConn_ReadMessage() {
 		}
 		defer conn.Close()
 		for {
-			_, data, err := conn.ReadMessage()
+			_, data, err := conn.ReadMessage(context.Background())
 			switch {
 			case err == nil:
 				fmt.Printf("server read %q\n", data)
@@ -826,11 +826,11 @@ func ExampleConn_ReadMessage() {
 		log.Fatal(err)
 	}
 	defer conn.Close()
-	_ = conn.WriteMessage(websocket.TextMessage, []byte("short"))
-	_ = conn.WriteMessage(websocket.TextMessage, []byte("far longer than sixteen bytes"))
+	_ = conn.WriteMessage(context.Background(), websocket.TextMessage, []byte("short"))
+	_ = conn.WriteMessage(context.Background(), websocket.TextMessage, []byte("far longer than sixteen bytes"))
 
 	fmt.Println("server:", <-ended)
-	_, _, err = conn.ReadMessage()
+	_, _, err = conn.ReadMessage(context.Background())
 	fmt.Println("client:", websocket.CloseStatus(err))
 	// Output:
 	// server read "short"

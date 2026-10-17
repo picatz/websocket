@@ -39,7 +39,7 @@ func TestUpgradePreservesBufferedFrame(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, data, err := conn.ReadMessage()
+	_, data, err := conn.ReadMessage(context.Background())
 	if err != nil || string(data) != "x" {
 		t.Fatalf("message = %q, %v; want x", data, err)
 	}
@@ -65,7 +65,7 @@ func TestDialPreservesBufferedFrame(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	_, data, err := conn.ReadMessage()
+	_, data, err := conn.ReadMessage(context.Background())
 	if err != nil || string(data) != "x" {
 		t.Fatalf("message = %q, %v; want x", data, err)
 	}
@@ -160,7 +160,7 @@ func TestUpgradeMaxMessageSize(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := conn.ReadMessage(); !errors.Is(err, ErrMessageTooLarge) {
+	if _, _, err := conn.ReadMessage(context.Background()); !errors.Is(err, ErrMessageTooLarge) {
 		t.Fatalf("error = %v, want ErrMessageTooLarge", err)
 	}
 }
@@ -183,9 +183,9 @@ func TestDialContextDetachedAfterHandshake(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-		opcode, data, err := conn.ReadMessage()
+		opcode, data, err := conn.ReadMessage(context.Background())
 		if err == nil {
-			conn.WriteMessage(opcode, data)
+			conn.WriteMessage(context.Background(), opcode, data)
 		}
 	}))
 	defer srv.Close()
@@ -197,10 +197,10 @@ func TestDialContextDetachedAfterHandshake(t *testing.T) {
 	}
 	defer conn.Close()
 	cancel()
-	if err := conn.WriteMessage(TextMessage, []byte("still alive")); err != nil {
+	if err := conn.WriteMessage(context.Background(), TextMessage, []byte("still alive")); err != nil {
 		t.Fatal(err)
 	}
-	if _, data, err := conn.ReadMessage(); err != nil || string(data) != "still alive" {
+	if _, data, err := conn.ReadMessage(context.Background()); err != nil || string(data) != "still alive" {
 		t.Fatalf("message = %q, %v", data, err)
 	}
 }

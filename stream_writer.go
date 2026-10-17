@@ -1,6 +1,7 @@
 package websocket
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -19,8 +20,8 @@ var errWriterClosed = errors.New("websocket: message writer closed")
 // NextWriter wait until the writer is closed or fails, or the connection
 // becomes terminal. Control frames, including Ping and the automatic Pong from
 // ReadMessage, may be sent between the message's frames, as RFC 6455 section
-// 5.4 allows. A WriteMessageContext waiting behind an open writer counts as
-// in progress: if its ctx ends, the connection is aborted. The returned writer
+// 5.4 allows. A WriteMessage waiting behind an open writer counts as in
+// progress: if its ctx ends, the connection is aborted. The returned writer
 // must not be used concurrently.
 //
 // For TextMessage, the payload is checked as UTF-8 across Write calls. An
@@ -31,7 +32,28 @@ var errWriterClosed = errors.New("websocket: message writer closed")
 // error and no longer blocks other writers.
 //
 // https://www.rfc-editor.org/rfc/rfc6455#section-5.4
-func (c *Conn) NextWriter(messageType MessageType) (io.WriteCloser, error) {
+//
+// ctx bounds both the wait for a concurrent writer and the writing of the
+// message. If ctx is already done, NextWriter returns the context's cause
+// without writing. If ctx ends before the writer is closed or fails, the
+// connection is aborted as described for ReadMessage, and the call, Write or
+// Close returns an error matching both the context's cause and the underlying
+// failure. Once the message ends, ctx no longer matters.
+func (c *Conn) NextWriter(ctx context.Context, messageType MessageType) (io.WriteCloser, error) {
+	stop, err := c.watch(ctx)
+	if err != nil {
+		return nil, err
+	}
+	w, err := c.nextWriter(messageType)
+	if err != nil {
+		return nil, ctxError(ctx, stop, err)
+	}
+	w.ctx, w.stopCtx = ctx, stop
+	return w, nil
+}
+
+// nextWriter is NextWriter without a context.
+func (c *Conn) nextWriter(messageType MessageType) (*streamWriter, error) {
 	if messageType != TextMessage && messageType != BinaryMessage {
 		return nil, errInvalidMessageType
 	}
@@ -69,6 +91,13 @@ type streamWriter struct {
 	text bool
 	utf8 utf8Stream
 	done bool
+
+	// ctx is NextWriter's context, which bounds the message. stopCtx
+	// unregisters its abort when the message ends; ctxEnded records that
+	// ctx had already ended the message by then.
+	ctx      context.Context
+	stopCtx  func() bool
+	ctxEnded bool
 }
 
 func (s *streamWriter) Write(p []byte) (int, error) {
@@ -122,6 +151,13 @@ func (s *streamWriter) writable() error {
 func (s *streamWriter) finish(err error) error {
 	s.done = true
 	s.c.releaseData()
+	if s.stopCtx != nil && !s.stopCtx() {
+		s.ctxEnded = true
+	}
+	s.stopCtx = nil
+	if s.ctxEnded && err != nil {
+		return fmt.Errorf("%w: %w", context.Cause(s.ctx), err)
+	}
 	return err
 }
 

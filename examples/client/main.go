@@ -115,7 +115,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	received := make(chan error, 1)
 	go func() {
 		for {
-			typ, data, err := conn.ReadMessage()
+			typ, data, err := conn.ReadMessage(context.Background())
 			if err != nil {
 				received <- err
 				return
@@ -134,7 +134,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	go func() {
 		lines := bufio.NewScanner(stdin)
 		for lines.Scan() {
-			if err := conn.WriteMessage(websocket.TextMessage, lines.Bytes()); err != nil {
+			if err := conn.WriteMessage(context.Background(), websocket.TextMessage, lines.Bytes()); err != nil {
 				sent <- err
 				return
 			}

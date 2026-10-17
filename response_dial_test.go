@@ -126,7 +126,7 @@ func TestDialResponseHeadLimits(t *testing.T) {
 					t.Fatalf("101 body=%T", resp.Body)
 				}
 				resp.Body.Close()
-				op, p, err := c.ReadMessage()
+				op, p, err := c.ReadMessage(context.Background())
 				if err != nil || op != BinaryMessage || string(p) != "x" {
 					t.Fatalf("first frame=%v %q %v", op, p, err)
 				}
@@ -159,7 +159,7 @@ func TestDialResponseHeadTCPAndTLSBoundaries(t *testing.T) {
 						}
 						defer c.conn.Close()
 						resp.Body.Close()
-						_, got, err := c.ReadMessage()
+						_, got, err := c.ReadMessage(context.Background())
 						if err != nil || !bytes.Equal(got, payload) {
 							t.Fatalf("first frame length=%d error=%v", len(got), err)
 						}

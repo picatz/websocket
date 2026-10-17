@@ -2,6 +2,7 @@ package websocket
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -90,11 +91,11 @@ func TestReadMessageUTF8Splits(t *testing.T) {
 					}
 					return true
 				}
-				op, got, err := c.ReadMessage()
+				op, got, err := c.ReadMessage(context.Background())
 				if err != nil || op != TextMessage || !bytes.Equal(got, payload) || ping != 1 || pong != 1 {
 					t.Fatalf("role %v splits %d/%d = %v %x %v; controls %d/%d", server, a, b, op, got, err, ping, pong)
 				}
-				if op, got, err = c.ReadMessage(); err != nil || op != TextMessage || string(got) != "next" {
+				if op, got, err = c.ReadMessage(context.Background()); err != nil || op != TextMessage || string(got) != "next" {
 					t.Fatalf("next message = %v %q %v", op, got, err)
 				}
 			}
@@ -116,7 +117,7 @@ func TestReadMessageUTF8RejectsBeforeFIN(t *testing.T) {
 					wire = append(wire, failureWire(server, 0x00, invalid[split:])...)
 					raw := &failureMemoryConn{memoryConn: memoryConn{Reader: bytes.NewReader(wire)}}
 					c := newTestConn(raw, ConnConfig{Server: server})
-					op, p, err := c.ReadMessage()
+					op, p, err := c.ReadMessage(context.Background())
 					if op != 0 || p != nil || err != errInvalidFrame {
 						t.Fatalf("read = %v %x %v", op, p, err)
 					}
@@ -124,10 +125,10 @@ func TestReadMessageUTF8RejectsBeforeFIN(t *testing.T) {
 						t.Fatalf("close code %d", code)
 					}
 					before := bytes.Clone(raw.written.Bytes())
-					if _, _, err := c.ReadMessage(); !errors.Is(err, net.ErrClosed) {
+					if _, _, err := c.ReadMessage(context.Background()); !errors.Is(err, net.ErrClosed) {
 						t.Fatal(err)
 					}
-					if err := c.WriteMessage(TextMessage, []byte("late")); !errors.Is(err, net.ErrClosed) {
+					if err := c.WriteMessage(context.Background(), TextMessage, []byte("late")); !errors.Is(err, net.ErrClosed) {
 						t.Fatal(err)
 					}
 					if raw.closes != 1 || !bytes.Equal(raw.written.Bytes(), before) {
@@ -148,7 +149,7 @@ func TestReadMessageUTF8RejectsWhilePeerWaits(t *testing.T) {
 			peer.SetDeadline(time.Now().Add(3 * time.Second))
 			c := newTestConn(raw, ConnConfig{Server: server})
 			done := make(chan error, 1)
-			go func() { _, _, err := c.ReadMessage(); done <- err }()
+			go func() { _, _, err := c.ReadMessage(context.Background()); done <- err }()
 			// ED is incomplete; A0 proves a surrogate without a final frame.
 			for _, wire := range [][]byte{failureWire(server, 0x01, []byte{0xed}), failureWire(server, 0x00, []byte{0xa0})} {
 				if _, err := peer.Write(wire); err != nil {
@@ -176,7 +177,7 @@ func TestReadMessageUTF8IncompleteAndBinary(t *testing.T) {
 			if final {
 				wire = append(wire, failureWire(false, 0x80, nil)...)
 			}
-			_, _, err := frameConn(wire, false, 0).ReadMessage()
+			_, _, err := frameConn(wire, false, 0).ReadMessage(context.Background())
 			want := io.ErrUnexpectedEOF
 			if final {
 				want = errInvalidFrame
@@ -189,7 +190,7 @@ func TestReadMessageUTF8IncompleteAndBinary(t *testing.T) {
 	for _, server := range []bool{false, true} {
 		wire := failureWire(server, 0x02, []byte{0xff, 0xed})
 		wire = append(wire, failureWire(server, 0x80, []byte{0xa0})...)
-		op, p, err := frameConn(wire, server, 3).ReadMessage()
+		op, p, err := frameConn(wire, server, 3).ReadMessage(context.Background())
 		if err != nil || op != BinaryMessage || !bytes.Equal(p, []byte{0xff, 0xed, 0xa0}) {
 			t.Fatalf("binary = %v %x %v", op, p, err)
 		}
@@ -220,7 +221,7 @@ func TestReadMessageUTF8AfterExtensions(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c := frameConn(tc.wire, false, 2)
 			c.extensions = []frameExtension{&headerTransformExtension{enabled: true, process: tc.transform}}
-			_, p, err := c.ReadMessage()
+			_, p, err := c.ReadMessage(context.Background())
 			if err != tc.wantErr || !bytes.Equal(p, tc.want) {
 				t.Fatalf("read = %x %v; want %x %v", p, err, tc.want, tc.wantErr)
 			}
@@ -274,7 +275,7 @@ func FuzzUTF8Fragments(f *testing.F) {
 			start = end
 			part++
 		}
-		op, data, err := frameConn(wire, server, len(p)+1).ReadMessage()
+		op, data, err := frameConn(wire, server, len(p)+1).ReadMessage(context.Background())
 		if utf8.Valid(p) {
 			if err != nil || op != TextMessage || !bytes.Equal(data, p) {
 				t.Fatalf("valid: %v %x %v", op, data, err)

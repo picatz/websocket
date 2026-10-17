@@ -105,12 +105,12 @@ func echo(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 	for {
-		messageType, message, err := conn.ReadMessage()
+		messageType, message, err := conn.ReadMessage(r.Context())
 		if err != nil {
 			return
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-		err = conn.WriteMessageContext(ctx, messageType, message)
+		err = conn.WriteMessage(ctx, messageType, message)
 		cancel()
 		if err != nil {
 			return

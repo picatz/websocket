@@ -2,6 +2,7 @@ package websocket
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -100,7 +101,7 @@ func TestReadFailureStatusAndTerminalState(t *testing.T) {
 			t.Run(strconv.FormatBool(server)+"/"+tc.name, func(t *testing.T) {
 				raw := &failureMemoryConn{memoryConn: memoryConn{Reader: bytes.NewReader(append(tc.wire, prefix(0x81, []byte("late"))...))}}
 				c := newTestConn(raw, ConnConfig{Server: server, MaxMessageSize: tc.limit})
-				_, data, err := c.ReadMessage()
+				_, data, err := c.ReadMessage(context.Background())
 				if !errors.Is(err, tc.cause) || (tc.exact && err != tc.cause) || data != nil {
 					t.Fatalf("first read: %x %v", data, err)
 				}
@@ -113,10 +114,10 @@ func TestReadFailureStatusAndTerminalState(t *testing.T) {
 				}
 				before := bytes.Clone(raw.written.Bytes())
 				for range 3 {
-					if _, p, e := c.ReadMessage(); !errors.Is(e, net.ErrClosed) || p != nil {
+					if _, p, e := c.ReadMessage(context.Background()); !errors.Is(e, net.ErrClosed) || p != nil {
 						t.Fatalf("later read %x %v", p, e)
 					}
-					for _, write := range []func() error{func() error { return c.WriteMessage(TextMessage, []byte("late")) }, func() error { return c.writeControlFrame(opPing, nil) }, func() error { return c.writeControlFrame(opClose, nil) }} {
+					for _, write := range []func() error{func() error { return c.WriteMessage(context.Background(), TextMessage, []byte("late")) }, func() error { return c.writeControlFrame(opPing, nil) }, func() error { return c.writeControlFrame(opClose, nil) }} {
 						if e := write(); !errors.Is(e, net.ErrClosed) {
 							t.Fatal(e)
 						}
@@ -136,7 +137,7 @@ func TestReadFailureStatusAndTerminalState(t *testing.T) {
 func TestReadFailureMaskingStatus(t *testing.T) {
 	for _, server := range []bool{false, true} {
 		raw := &failureMemoryConn{memoryConn: memoryConn{Reader: bytes.NewReader(failureWire(!server, 0x82, nil))}}
-		_, _, err := newTestConn(raw, ConnConfig{Server: server}).ReadMessage()
+		_, _, err := newTestConn(raw, ConnConfig{Server: server}).ReadMessage(context.Background())
 		want := errMaskedFrame
 		if server {
 			want = errUnmaskedFrame
@@ -154,7 +155,7 @@ func TestIncomingCloseStatusBoundaries(t *testing.T) {
 				p := []byte{byte(code >> 8), byte(code)}
 				raw := &failureMemoryConn{memoryConn: memoryConn{Reader: bytes.NewReader(failureWire(server, 0x88, p))}}
 				c := newTestConn(raw, ConnConfig{Server: server})
-				_, _, err := c.ReadMessage()
+				_, _, err := c.ReadMessage(context.Background())
 				invalid := code < 1000 || code >= 5000 || code == 1004 || code == 1005 || code == 1006 || (code >= 1015 && code < 3000)
 				want := p
 				if invalid {
@@ -172,7 +173,7 @@ func TestIncomingCloseStatusBoundaries(t *testing.T) {
 		}
 		for _, p := range [][]byte{nil, append([]byte{3, 232}, bytes.Repeat([]byte{'x'}, 123)...)} {
 			raw := &failureMemoryConn{memoryConn: memoryConn{Reader: bytes.NewReader(failureWire(server, 0x88, p))}}
-			if _, _, err := newTestConn(raw, ConnConfig{Server: server}).ReadMessage(); !errors.Is(err, io.EOF) {
+			if _, _, err := newTestConn(raw, ConnConfig{Server: server}).ReadMessage(context.Background()); !errors.Is(err, io.EOF) {
 				t.Fatal(err)
 			}
 			if got := failureClosePayload(t, raw.written.Bytes(), server); !bytes.Equal(got, p) {
@@ -204,7 +205,7 @@ func TestReadFailureCallbackProvenance(t *testing.T) {
 			ext := &failureExtension{enabled: true, cause: fmt.Errorf("custom: %w", cause)}
 			raw := &failureMemoryConn{memoryConn: memoryConn{Reader: bytes.NewReader([]byte{0x82, 0})}}
 			c := newTestConn(raw, ConnConfig{}, []frameExtension{ext}...)
-			_, _, err := c.ReadMessage()
+			_, _, err := c.ReadMessage(context.Background())
 			want := "extension failure-test failed to process incoming frame: " + ext.cause.Error()
 			if !errors.Is(err, cause) || err.Error() != want || raw.closes != 1 || raw.written.Len() != 0 || ext.outgoing != 0 {
 				t.Fatalf("error=%v wire=%x closes=%d outgoing=%d", err, raw.written.Bytes(), raw.closes, ext.outgoing)
@@ -214,7 +215,7 @@ func TestReadFailureCallbackProvenance(t *testing.T) {
 	for _, enabled := range []bool{false, true} {
 		ext := &failureExtension{enabled: enabled}
 		raw := &failureMemoryConn{memoryConn: memoryConn{Reader: bytes.NewReader([]byte{0x81, 1, 255})}}
-		_, _, err := newTestConn(raw, ConnConfig{}, []frameExtension{ext}...).ReadMessage()
+		_, _, err := newTestConn(raw, ConnConfig{}, []frameExtension{ext}...).ReadMessage(context.Background())
 		if err != errInvalidFrame || ext.outgoing != 0 {
 			t.Fatal(err)
 		}
@@ -237,7 +238,7 @@ func TestReadFailureBuiltInDecodedLimitDiagnostic(t *testing.T) {
 	}
 	raw := &failureMemoryConn{memoryConn: memoryConn{Reader: bytes.NewReader(failureWire(false, 0xc1, f.Payload))}}
 	c := newTestConn(raw, ConnConfig{MaxMessageSize: 128}, []frameExtension{pmd}...)
-	_, _, err := c.ReadMessage()
+	_, _, err := c.ReadMessage(context.Background())
 	if !errors.Is(err, ErrMessageTooLarge) || err.Error() != "extension permessage-deflate failed to process incoming frame: "+ErrMessageTooLarge.Error() {
 		t.Fatal(err)
 	}
@@ -307,7 +308,7 @@ func TestReadFailurePreservesTransportDeadlines(t *testing.T) {
 				raw := &failurePipeConn{Conn: transport, input: bytes.NewReader([]byte{0x81, 1, 255}), started: make(chan struct{})}
 				c := newTestConn(raw, ConnConfig{})
 				start := time.Now()
-				_, _, err := c.ReadMessage()
+				_, _, err := c.ReadMessage(context.Background())
 				if err != errInvalidFrame || raw.setters.Load() != 0 || raw.closes.Load() != 1 {
 					t.Fatalf("error=%v setters=%d closes=%d", err, raw.setters.Load(), raw.closes.Load())
 				}
@@ -328,13 +329,13 @@ func TestConcurrentCloseCancelsFailureNotification(t *testing.T) {
 			done := make(chan error, 1)
 			finished := make(chan struct{})
 			t.Cleanup(func() { transport.Close(); peer.Close(); <-finished })
-			go func() { defer close(finished); _, _, err := c.ReadMessage(); done <- err }()
+			go func() { defer close(finished); _, _, err := c.ReadMessage(context.Background()); done <- err }()
 			select {
 			case <-raw.started:
 			case <-time.After(2 * time.Second):
 				t.Fatal("notification never started")
 			}
-			if _, _, err := c.ReadMessage(); !errors.Is(err, net.ErrClosed) {
+			if _, _, err := c.ReadMessage(context.Background()); !errors.Is(err, net.ErrClosed) {
 				t.Fatal(err)
 			}
 			start := time.Now()
@@ -365,7 +366,7 @@ func TestReadFailureAbortsStalledDataWriter(t *testing.T) {
 			finished := make(chan struct{})
 			t.Cleanup(func() { transport.Close(); peer.Close(); <-finished })
 			payload := bytes.Repeat([]byte{'a'}, 8192)
-			go func() { defer close(finished); done <- c.WriteMessage(BinaryMessage, payload) }()
+			go func() { defer close(finished); done <- c.WriteMessage(context.Background(), BinaryMessage, payload) }()
 			if err := peer.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
 				t.Fatal(err)
 			}
@@ -378,7 +379,7 @@ func TestReadFailureAbortsStalledDataWriter(t *testing.T) {
 				t.Fatal(err)
 			}
 			start := time.Now()
-			_, _, err := c.ReadMessage()
+			_, _, err := c.ReadMessage(context.Background())
 			if err != errInvalidFrame || time.Since(start) != 0 {
 				t.Fatalf("failure=%v", err)
 			}
@@ -419,13 +420,13 @@ func TestReadFailureNeverRetriesPoisonedWriter(t *testing.T) {
 				t.Run(fmt.Sprintf("%d/%d/%v", size, n, cause), func(t *testing.T) {
 					raw := &failureFaultConn{failureMemoryConn: failureMemoryConn{memoryConn: memoryConn{Reader: bytes.NewReader([]byte{0x81, 1, 255})}}, n: n, cause: cause}
 					c := newTestConn(raw, ConnConfig{})
-					err := c.WriteMessage(BinaryMessage, bytes.Repeat([]byte{'a'}, size))
+					err := c.WriteMessage(context.Background(), BinaryMessage, bytes.Repeat([]byte{'a'}, size))
 					if !errors.Is(err, errWriteFailed) || (cause != nil && !errors.Is(err, cause)) {
 						t.Fatalf("write error=%v", err)
 					}
 					before := bytes.Clone(raw.written.Bytes())
 					calls := raw.writes
-					if _, _, err := c.ReadMessage(); err != errInvalidFrame {
+					if _, _, err := c.ReadMessage(context.Background()); err != errInvalidFrame {
 						t.Fatal(err)
 					}
 					c.Close()
@@ -439,8 +440,8 @@ func TestReadFailureNeverRetriesPoisonedWriter(t *testing.T) {
 	// A sticky error encountered while writing a new header is also retained.
 	raw := &failureFaultConn{failureMemoryConn: failureMemoryConn{memoryConn: memoryConn{Reader: bytes.NewReader(nil)}}, cause: io.ErrClosedPipe}
 	c := newTestConn(raw, ConnConfig{Server: true})
-	c.WriteMessage(BinaryMessage, bytes.Repeat([]byte{'a'}, 32))
-	if err := c.WriteMessage(BinaryMessage, nil); !errors.Is(err, errWriteFailed) || !errors.Is(err, io.ErrClosedPipe) || !strings.Contains(err.Error(), "header") {
+	c.WriteMessage(context.Background(), BinaryMessage, bytes.Repeat([]byte{'a'}, 32))
+	if err := c.WriteMessage(context.Background(), BinaryMessage, nil); !errors.Is(err, errWriteFailed) || !errors.Is(err, io.ErrClosedPipe) || !strings.Contains(err.Error(), "header") {
 		t.Fatal(err)
 	}
 }
@@ -449,7 +450,7 @@ func TestReadFailureTransportEOFIsTerminal(t *testing.T) {
 	for _, wire := range [][]byte{nil, {0x82}, {0x82, 1}} {
 		raw := &failureMemoryConn{memoryConn: memoryConn{Reader: bytes.NewReader(wire)}}
 		c := newTestConn(raw, ConnConfig{})
-		_, _, err := c.ReadMessage()
+		_, _, err := c.ReadMessage(context.Background())
 		if len(wire) == 0 && err != io.EOF {
 			t.Fatal(err)
 		}
@@ -468,7 +469,7 @@ func TestReadFailureKeepsCauseWhenPeerCannotReceive(t *testing.T) {
 	defer transport.Close()
 	raw := &failurePipeConn{Conn: transport, input: bytes.NewReader([]byte{0x81, 1, 255}), started: make(chan struct{})}
 	c := newTestConn(raw, ConnConfig{})
-	if _, _, err := c.ReadMessage(); err != errInvalidFrame {
+	if _, _, err := c.ReadMessage(context.Background()); err != errInvalidFrame {
 		t.Fatal(err)
 	}
 	if raw.closes.Load() != 1 || raw.setters.Load() != 0 {
@@ -484,7 +485,7 @@ func TestReadFailureAfterExplicitCloseDoesNotSendAnother(t *testing.T) {
 			t.Fatal(err)
 		}
 		before := bytes.Clone(raw.written.Bytes())
-		if _, _, err := c.ReadMessage(); err != errInvalidFrame {
+		if _, _, err := c.ReadMessage(context.Background()); err != errInvalidFrame {
 			t.Fatal(err)
 		}
 		if raw.closes != 1 || !bytes.Equal(before, raw.written.Bytes()) {
@@ -499,7 +500,7 @@ func TestReadFailurePlatformLimitStatus(t *testing.T) {
 	}
 	wire := []byte{0x82, 127, 0, 0, 0, 0, 128, 0, 0, 0}
 	raw := &failureMemoryConn{memoryConn: memoryConn{Reader: bytes.NewReader(wire)}}
-	if _, _, err := newTestConn(raw, ConnConfig{}).ReadMessage(); err != ErrMessageTooLarge {
+	if _, _, err := newTestConn(raw, ConnConfig{}).ReadMessage(context.Background()); err != ErrMessageTooLarge {
 		t.Fatal(err)
 	}
 	if binary.BigEndian.Uint16(failureClosePayload(t, raw.written.Bytes(), false)) != 1009 {
@@ -521,7 +522,7 @@ func TestReadFailureDoesNotRequireDeadlineSupport(t *testing.T) {
 		defer transport.Close()
 		raw := &unsupportedDeadlineConn{&failurePipeConn{Conn: transport, input: bytes.NewReader([]byte{0x81, 1, 255}), started: make(chan struct{})}}
 		start := time.Now()
-		if _, _, err := newTestConn(raw, ConnConfig{}).ReadMessage(); err != errInvalidFrame {
+		if _, _, err := newTestConn(raw, ConnConfig{}).ReadMessage(context.Background()); err != errInvalidFrame {
 			t.Fatal(err)
 		}
 		if elapsed := time.Since(start); elapsed != time.Second {
@@ -557,7 +558,7 @@ func TestReadFailureJoinsRunningAbortWatchdog(t *testing.T) {
 		finished := make(chan struct{})
 		var release sync.Once
 		t.Cleanup(func() { release.Do(func() { close(raw.release) }); transport.Close(); peer.Close(); <-finished })
-		go func() { defer close(finished); _, _, err := c.ReadMessage(); done <- err }()
+		go func() { defer close(finished); _, _, err := c.ReadMessage(context.Background()); done <- err }()
 		// No peer reads and no deadline exists. Only the watchdog can end the write.
 		select {
 		case <-raw.entered:
@@ -584,7 +585,7 @@ func TestReadFailurePartialNotificationIsNeverRetried(t *testing.T) {
 		for _, n := range []int{0, 1, 2, 3, 4} {
 			raw := &failureFaultConn{failureMemoryConn: failureMemoryConn{memoryConn: memoryConn{Reader: bytes.NewReader(failureWire(server, 0x81, []byte{255}))}}, n: n, cause: io.ErrClosedPipe}
 			c := newTestConn(raw, ConnConfig{Server: server})
-			if _, _, err := c.ReadMessage(); err != errInvalidFrame {
+			if _, _, err := c.ReadMessage(context.Background()); err != errInvalidFrame {
 				t.Fatal(err)
 			}
 			before := bytes.Clone(raw.written.Bytes())

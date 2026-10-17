@@ -30,11 +30,11 @@ import (
 // fails, and returns that error.
 func echoLoop(c *websocket.Conn) error {
 	for {
-		typ, data, err := c.ReadMessage()
+		typ, data, err := c.ReadMessage(context.Background())
 		if err != nil {
 			return err
 		}
-		if err := c.WriteMessage(typ, data); err != nil {
+		if err := c.WriteMessage(context.Background(), typ, data); err != nil {
 			return err
 		}
 	}
@@ -45,10 +45,10 @@ func roundTrip(t *testing.T, c *websocket.Conn, typ websocket.MessageType, data 
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	if err := c.WriteMessageContext(ctx, typ, data); err != nil {
+	if err := c.WriteMessage(ctx, typ, data); err != nil {
 		t.Fatalf("write %d bytes: %v", len(data), err)
 	}
-	gotType, got, err := c.ReadMessageContext(ctx)
+	gotType, got, err := c.ReadMessage(ctx)
 	if err != nil {
 		t.Fatalf("read echo of %d bytes: %v", len(data), err)
 	}
@@ -108,9 +108,9 @@ func TestEndToEndTLSWithHTTP2(t *testing.T) {
 	}
 	defer c.Close()
 
-	state, ok := c.ConnectionState()
-	if !ok {
-		t.Fatal("ConnectionState reports no TLS")
+	state := resp.TLS
+	if state == nil {
+		t.Fatal("Dial's response has no TLS state")
 	}
 	// httptest's listener lists only h2, so ALPN agrees on nothing here;
 	// http.Server.ServeTLS would add and select http/1.1.
@@ -379,7 +379,7 @@ func TestEndToEndGracefulServerShutdown(t *testing.T) {
 	for i, c := range conns {
 		wg.Go(func() {
 			for {
-				_, _, err := c.ReadMessage()
+				_, _, err := c.ReadMessage(context.Background())
 				if err == nil {
 					continue
 				}
@@ -419,12 +419,12 @@ func TestEndToEndCloseHandshake(t *testing.T) {
 		defer c.Close()
 		switch r.URL.Path {
 		case "/server-closes":
-			if _, _, err := c.ReadMessage(); err != nil {
+			if _, _, err := c.ReadMessage(context.Background()); err != nil {
 				serverSaw <- err
 				return
 			}
 			c.CloseWithStatus(websocket.StatusPolicyViolation, "quota exceeded")
-			_, _, err := c.ReadMessage()
+			_, _, err := c.ReadMessage(context.Background())
 			serverSaw <- err
 		default:
 			serverSaw <- echoLoop(c)
@@ -446,10 +446,10 @@ func TestEndToEndCloseHandshake(t *testing.T) {
 		if !errors.As(err, &ce) || ce.Code != websocket.StatusNormalClosure || ce.Reason != "done" {
 			t.Fatalf("server read error = %v, want the client's 1000 \"done\"", err)
 		}
-		if err := c.WriteMessage(websocket.TextMessage, []byte("late")); !errors.Is(err, net.ErrClosed) {
+		if err := c.WriteMessage(context.Background(), websocket.TextMessage, []byte("late")); !errors.Is(err, net.ErrClosed) {
 			t.Fatalf("write after close: err = %v, want net.ErrClosed", err)
 		}
-		if _, _, err := c.ReadMessage(); !errors.Is(err, net.ErrClosed) {
+		if _, _, err := c.ReadMessage(context.Background()); !errors.Is(err, net.ErrClosed) {
 			t.Fatalf("read after close: err = %v, want net.ErrClosed", err)
 		}
 	})
@@ -460,10 +460,10 @@ func TestEndToEndCloseHandshake(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer c.Close()
-		if err := c.WriteMessage(websocket.TextMessage, []byte("over quota")); err != nil {
+		if err := c.WriteMessage(context.Background(), websocket.TextMessage, []byte("over quota")); err != nil {
 			t.Fatal(err)
 		}
-		_, _, err = c.ReadMessage()
+		_, _, err = c.ReadMessage(context.Background())
 		if websocket.CloseStatus(err) != websocket.StatusPolicyViolation {
 			t.Fatalf("client read error = %v, want StatusPolicyViolation", err)
 		}
@@ -517,7 +517,7 @@ func TestEndToEndKeepalive(t *testing.T) {
 	readDone := make(chan error, 1)
 	go func() {
 		for {
-			if _, _, err := c.ReadMessage(); err != nil {
+			if _, _, err := c.ReadMessage(context.Background()); err != nil {
 				readDone <- err
 				return
 			}
@@ -539,7 +539,7 @@ func TestEndToEndKeepalive(t *testing.T) {
 	defer quiet.Close()
 	go func() {
 		for {
-			if _, _, err := quiet.ReadMessage(); err != nil {
+			if _, _, err := quiet.ReadMessage(context.Background()); err != nil {
 				return
 			}
 		}
@@ -571,10 +571,10 @@ func TestEndToEndMessageTooLarge(t *testing.T) {
 
 	send := map[string]func(*websocket.Conn) error{
 		"whole": func(c *websocket.Conn) error {
-			return c.WriteMessage(websocket.BinaryMessage, randomBytes(limit+1))
+			return c.WriteMessage(context.Background(), websocket.BinaryMessage, randomBytes(limit+1))
 		},
 		"fragmented": func(c *websocket.Conn) error {
-			w, err := c.NextWriter(websocket.BinaryMessage)
+			w, err := c.NextWriter(context.Background(), websocket.BinaryMessage)
 			if err != nil {
 				return err
 			}
@@ -588,7 +588,7 @@ func TestEndToEndMessageTooLarge(t *testing.T) {
 		"compressed": func(c *websocket.Conn) error {
 			// Deflate shrinks this far below the limit on the wire; the
 			// limit applies to the inflated message.
-			return c.WriteMessage(websocket.TextMessage, bytes.Repeat([]byte{'a'}, 4*limit))
+			return c.WriteMessage(context.Background(), websocket.TextMessage, bytes.Repeat([]byte{'a'}, 4*limit))
 		},
 	}
 	for name, write := range send {
@@ -606,7 +606,7 @@ func TestEndToEndMessageTooLarge(t *testing.T) {
 			// The server may close before the client finishes writing, so
 			// a write error is expected; the read reports why.
 			write(c)
-			_, _, err = c.ReadMessage()
+			_, _, err = c.ReadMessage(context.Background())
 			if websocket.CloseStatus(err) != websocket.StatusMessageTooBig {
 				t.Fatalf("client read error = %v, want StatusMessageTooBig", err)
 			}
@@ -693,7 +693,7 @@ func TestEndToEndConcurrentBroadcast(t *testing.T) {
 			h.mu.Unlock()
 		}()
 		for {
-			typ, data, err := c.ReadMessage()
+			typ, data, err := c.ReadMessage(context.Background())
 			if err != nil {
 				return
 			}
@@ -706,7 +706,7 @@ func TestEndToEndConcurrentBroadcast(t *testing.T) {
 			}
 			h.mu.Unlock()
 			for _, p := range peers {
-				p.WriteMessage(typ, data)
+				p.WriteMessage(context.Background(), typ, data)
 			}
 		}
 	}))
@@ -736,7 +736,7 @@ func TestEndToEndConcurrentBroadcast(t *testing.T) {
 	for i, c := range conns {
 		wg.Go(func() {
 			for n := range messages {
-				if err := c.WriteMessage(websocket.TextMessage, payload(i, n)); err != nil {
+				if err := c.WriteMessage(context.Background(), websocket.TextMessage, payload(i, n)); err != nil {
 					t.Errorf("client %d write %d: %v", i, n, err)
 					return
 				}
@@ -745,7 +745,7 @@ func TestEndToEndConcurrentBroadcast(t *testing.T) {
 		wg.Go(func() {
 			next := make([]int, clients)
 			for range clients * messages {
-				_, data, err := c.ReadMessage()
+				_, data, err := c.ReadMessage(context.Background())
 				if err != nil {
 					t.Errorf("client %d read: %v", i, err)
 					return

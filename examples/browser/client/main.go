@@ -63,7 +63,7 @@ func runPage(document js.Value) {
 	go func() {
 		for message := range outgoing {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			err := conn.WriteMessageContext(ctx, websocket.TextMessage, []byte(message))
+			err := conn.WriteMessage(ctx, websocket.TextMessage, []byte(message))
 			cancel()
 			if err != nil {
 				show("write: " + err.Error())
@@ -95,7 +95,7 @@ func runPage(document js.Value) {
 	input.Call("focus")
 
 	for {
-		_, data, err := conn.ReadMessage()
+		_, data, err := conn.ReadMessage(context.Background())
 		if err != nil {
 			show(describeClose(err))
 			break
@@ -116,10 +116,10 @@ func runArgs(url string, messages []string) error {
 	}
 	defer conn.Close()
 	for _, message := range messages {
-		if err := conn.WriteMessageContext(ctx, websocket.TextMessage, []byte(message)); err != nil {
+		if err := conn.WriteMessage(ctx, websocket.TextMessage, []byte(message)); err != nil {
 			return err
 		}
-		_, data, err := conn.ReadMessageContext(ctx)
+		_, data, err := conn.ReadMessage(ctx)
 		if err != nil {
 			return err
 		}

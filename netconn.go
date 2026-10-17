@@ -20,7 +20,7 @@ import (
 // Prefer BinaryMessage. With TextMessage every Write must be valid UTF-8 on its
 // own, so a Write of arbitrary bytes fails.
 //
-// When ctx ends, the connection is aborted as described for ReadMessageContext
+// When ctx ends, the connection is aborted as described for Conn.ReadMessage
 // and blocked calls return. Close stops watching ctx and closes c.
 //
 // Read returns io.EOF once the peer closes the WebSocket with
@@ -66,7 +66,7 @@ func (nc *netConn) Read(p []byte) (int, error) {
 		if len(p) == 0 {
 			return 0, nil
 		}
-		typ, data, err := nc.c.ReadMessage()
+		typ, data, err := nc.c.readDataMessage()
 		switch {
 		case err != nil:
 			nc.readErr = netConnError(err)
@@ -89,7 +89,7 @@ func (nc *netConn) Write(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
-	if err := nc.c.WriteMessage(nc.messageType, p); err != nil {
+	if err := nc.c.writeMessage(nc.messageType, p); err != nil {
 		return 0, netConnError(err)
 	}
 	return len(p), nil

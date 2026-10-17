@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -35,12 +36,12 @@ func TestCommands(t *testing.T) {
 		defer conn.Close()
 		switch r.URL.Path {
 		case "/getCaseCount":
-			_ = conn.WriteMessage(websocket.TextMessage, []byte("247"))
+			_ = conn.WriteMessage(context.Background(), websocket.TextMessage, []byte("247"))
 		case "/getCaseStatus":
 			if r.URL.Query().Get("case") != "247" {
 				t.Errorf("case query = %q", r.URL.RawQuery)
 			}
-			_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"behavior":"OK"}`))
+			_ = conn.WriteMessage(context.Background(), websocket.TextMessage, []byte(`{"behavior":"OK"}`))
 		case "/updateReports":
 		default:
 			t.Errorf("unexpected path %s", r.URL.Path)

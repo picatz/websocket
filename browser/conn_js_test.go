@@ -28,9 +28,15 @@ func serverURL(t *testing.T, path string) string {
 	return base + path
 }
 
+// dialTimeout bounds each dial so a broken host fails the test instead of
+// hanging it. It is not a latency check: the first connection a Node process
+// opens loads its WebSocket client, which has taken over 5 seconds on a busy
+// Windows runner.
+const dialTimeout = 30 * time.Second
+
 func dial(t *testing.T, path string, d *browser.Dialer) *browser.Conn {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), dialTimeout)
 	defer cancel()
 	conn, err := d.Dial(ctx, serverURL(t, path))
 	if err != nil {
@@ -52,10 +58,10 @@ func TestEcho(t *testing.T) {
 		{websocket.TextMessage, []byte{}},
 		{websocket.BinaryMessage, bytes.Repeat([]byte{7}, 70000)},
 	} {
-		if err := conn.WriteMessage(tc.opcode, tc.data); err != nil {
+		if err := conn.WriteMessage(context.Background(), tc.opcode, tc.data); err != nil {
 			t.Fatalf("WriteMessage: %v", err)
 		}
-		opcode, data, err := conn.ReadMessage()
+		opcode, data, err := conn.ReadMessage(context.Background())
 		if err != nil || opcode != tc.opcode || !bytes.Equal(data, tc.data) {
 			t.Fatalf("ReadMessage = %v, %d bytes, %v; want %v, %d bytes", opcode, len(data), err, tc.opcode, len(tc.data))
 		}
@@ -64,10 +70,10 @@ func TestEcho(t *testing.T) {
 
 func TestWriteValidation(t *testing.T) {
 	conn := dial(t, "/echo", nil)
-	if err := conn.WriteMessage(websocket.TextMessage, []byte{0xff}); err == nil {
+	if err := conn.WriteMessage(context.Background(), websocket.TextMessage, []byte{0xff}); err == nil {
 		t.Fatal("WriteMessage accepted invalid UTF-8 text")
 	}
-	if err := conn.WriteMessage(websocket.MessageType(9), nil); err == nil {
+	if err := conn.WriteMessage(context.Background(), websocket.MessageType(9), nil); err == nil {
 		t.Fatal("WriteMessage accepted an invalid message type")
 	}
 }
@@ -86,18 +92,18 @@ func TestPeerClose(t *testing.T) {
 	conn := dial(t, "/goodbye", nil)
 	// Messages that arrived before the close are still delivered.
 	for _, want := range []string{"one", "two"} {
-		if _, data, err := conn.ReadMessage(); err != nil || string(data) != want {
+		if _, data, err := conn.ReadMessage(context.Background()); err != nil || string(data) != want {
 			t.Fatalf("ReadMessage = %q, %v; want %q", data, err, want)
 		}
 	}
-	_, _, err := conn.ReadMessage()
+	_, _, err := conn.ReadMessage(context.Background())
 	if !errors.Is(err, io.EOF) || websocket.CloseStatus(err) != websocket.StatusGoingAway {
 		t.Fatalf("after peer close: err = %v, want a CloseError with StatusGoingAway", err)
 	}
 	if ce, ok := errors.AsType[*websocket.CloseError](err); !ok || ce.Reason != "bye" {
 		t.Fatalf("after peer close: err = %#v, want reason %q", err, "bye")
 	}
-	if err := conn.WriteMessage(websocket.TextMessage, []byte("late")); !errors.Is(err, net.ErrClosed) {
+	if err := conn.WriteMessage(context.Background(), websocket.TextMessage, []byte("late")); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("write after peer close: err = %v, want net.ErrClosed", err)
 	}
 }
@@ -110,35 +116,35 @@ func TestClose(t *testing.T) {
 	if err := conn.Close(); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("second Close: err = %v, want net.ErrClosed", err)
 	}
-	if err := conn.WriteMessage(websocket.TextMessage, []byte("x")); !errors.Is(err, net.ErrClosed) {
+	if err := conn.WriteMessage(context.Background(), websocket.TextMessage, []byte("x")); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("write after Close: err = %v, want net.ErrClosed", err)
 	}
-	if _, _, err := conn.ReadMessage(); !errors.Is(err, net.ErrClosed) {
+	if _, _, err := conn.ReadMessage(context.Background()); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("read after Close: err = %v, want net.ErrClosed", err)
 	}
 }
 
 func TestMaxMessageSize(t *testing.T) {
 	conn := dial(t, "/echo", &browser.Dialer{MaxMessageSize: 4})
-	if err := conn.WriteMessage(websocket.BinaryMessage, []byte("12345")); err != nil {
+	if err := conn.WriteMessage(context.Background(), websocket.BinaryMessage, []byte("12345")); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := conn.ReadMessage(); !errors.Is(err, websocket.ErrMessageTooLarge) {
+	if _, _, err := conn.ReadMessage(context.Background()); !errors.Is(err, websocket.ErrMessageTooLarge) {
 		t.Fatalf("err = %v, want ErrMessageTooLarge", err)
 	}
 
 	// A negative limit means none.
 	conn = dial(t, "/echo", &browser.Dialer{MaxMessageSize: -1})
-	if err := conn.WriteMessage(websocket.BinaryMessage, []byte("12345")); err != nil {
+	if err := conn.WriteMessage(context.Background(), websocket.BinaryMessage, []byte("12345")); err != nil {
 		t.Fatal(err)
 	}
-	if _, data, err := conn.ReadMessage(); err != nil || string(data) != "12345" {
+	if _, data, err := conn.ReadMessage(context.Background()); err != nil || string(data) != "12345" {
 		t.Fatalf("unlimited: ReadMessage = %q, %v", data, err)
 	}
 }
 
 func TestDialFailure(t *testing.T) {
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), dialTimeout)
 	defer cancel()
 	if _, err := browser.Dial(ctx, serverURL(t, "/reject")); !errors.Is(err, browser.ErrDialFailed) || errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("rejected handshake: err = %v, want ErrDialFailed", err)
@@ -152,11 +158,11 @@ func TestReadContext(t *testing.T) {
 	conn := dial(t, "/silent", nil)
 	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()
-	if _, _, err := conn.ReadMessageContext(ctx); !errors.Is(err, context.DeadlineExceeded) {
+	if _, _, err := conn.ReadMessage(ctx); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("err = %v, want context.DeadlineExceeded", err)
 	}
 	// The canceled read closed the connection.
-	if err := conn.WriteMessage(websocket.TextMessage, []byte("x")); !errors.Is(err, net.ErrClosed) {
+	if err := conn.WriteMessage(context.Background(), websocket.TextMessage, []byte("x")); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("write after canceled read: err = %v, want net.ErrClosed", err)
 	}
 }
@@ -178,10 +184,10 @@ func TestCloseWithStatus(t *testing.T) {
 		}
 	}
 	// Rejected statuses leave the connection open.
-	if err := conn.WriteMessage(websocket.TextMessage, []byte("ping")); err != nil {
+	if err := conn.WriteMessage(context.Background(), websocket.TextMessage, []byte("ping")); err != nil {
 		t.Fatalf("WriteMessage after rejected status: %v", err)
 	}
-	if _, data, err := conn.ReadMessage(); err != nil || string(data) != "ping" {
+	if _, data, err := conn.ReadMessage(context.Background()); err != nil || string(data) != "ping" {
 		t.Fatalf("ReadMessage = %q, %v", data, err)
 	}
 
@@ -199,15 +205,15 @@ func TestCloseWithStatusReachesPeer(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Wait for the handshake to finish; the server records what it received.
-	_, _, _ = conn.ReadMessage()
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	_, _, _ = conn.ReadMessage(context.Background())
+	ctx, cancel := context.WithTimeout(t.Context(), dialTimeout)
 	defer cancel()
 	check, err := browser.Dial(ctx, serverURL(t, "/lastclose"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer check.Close()
-	if _, data, err := check.ReadMessage(); err != nil || string(data) != "4321 done" {
+	if _, data, err := check.ReadMessage(context.Background()); err != nil || string(data) != "4321 done" {
 		t.Fatalf("server saw %q, %v; want %q", data, err, "4321 done")
 	}
 }
@@ -216,10 +222,8 @@ func TestCloseWithStatusReachesPeer(t *testing.T) {
 // implement it with identical signatures, so code written against it works
 // with either.
 type conn interface {
-	ReadMessage() (websocket.MessageType, []byte, error)
-	ReadMessageContext(context.Context) (websocket.MessageType, []byte, error)
-	WriteMessage(websocket.MessageType, []byte) error
-	WriteMessageContext(context.Context, websocket.MessageType, []byte) error
+	ReadMessage(context.Context) (websocket.MessageType, []byte, error)
+	WriteMessage(context.Context, websocket.MessageType, []byte) error
 	Close() error
 	CloseWithStatus(websocket.StatusCode, string) error
 	Subprotocol() string
@@ -242,7 +246,7 @@ func TestWriteBackpressure(t *testing.T) {
 	defer cancel()
 	var err error
 	for range 1000 {
-		if err = conn.WriteMessageContext(ctx, websocket.BinaryMessage, chunk); err != nil {
+		if err = conn.WriteMessage(ctx, websocket.BinaryMessage, chunk); err != nil {
 			break
 		}
 	}
