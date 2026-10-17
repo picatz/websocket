@@ -2,50 +2,83 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/picatz/websocket"
 )
 
-func Test_echoHandler(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(echoHandler))
+func dial(t *testing.T, srv *httptest.Server) *websocket.Conn {
+	t.Helper()
+	conn, _, err := websocket.Dial(t.Context(), "ws"+strings.TrimPrefix(srv.URL, "http")+"/ws")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	return conn
+}
+
+func TestEcho(t *testing.T) {
+	srv := httptest.NewServer(newServer(t.Context()))
 	defer srv.Close()
+	conn := dial(t, srv)
 
-	// Convert the server URL to a WebSocket URL
-	wsURL := "ws" + srv.URL[len("http"):]
-
-	// Create a WebSocket client
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
-	defer cancel()
-
-	conn, resp, err := websocket.Dial(ctx, wsURL)
-	if err != nil {
-		t.Fatalf("Dial failed: %v", err)
+	for _, msg := range []struct {
+		typ  websocket.Opcode
+		data string
+	}{
+		{websocket.TextMessage, "hello"},
+		{websocket.BinaryMessage, "\x00\x01\x02"},
+		{websocket.TextMessage, ""},
+	} {
+		if err := conn.WriteMessage(msg.typ, []byte(msg.data)); err != nil {
+			t.Fatal(err)
+		}
+		typ, data, err := conn.ReadMessage()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if typ != msg.typ || string(data) != msg.data {
+			t.Fatalf("echo = %v %q, want %v %q", typ, data, msg.typ, msg.data)
+		}
 	}
-	defer conn.Close()
-	defer resp.Body.Close()
+}
 
-	// Send a message
-	testMessage := "Hello, WebSocket!"
-	err = conn.WriteMessage(websocket.TextMessage, []byte(testMessage))
-	if err != nil {
-		t.Fatalf("WriteMessage failed: %v", err)
+// TestShutdown checks that a server shutdown reaches each client as a
+// going-away close, and that the server waits for its connections.
+func TestShutdown(t *testing.T) {
+	ctx, shutdown := context.WithCancel(t.Context())
+	s := newServer(ctx)
+	srv := httptest.NewServer(s)
+	defer srv.Close()
+	conn := dial(t, srv)
+
+	// A round trip proves the handler is running before shutdown starts.
+	if err := conn.WriteMessage(websocket.TextMessage, []byte("ping")); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := conn.ReadMessage(); err != nil {
+		t.Fatal(err)
 	}
 
-	// Read the echoed message
-	messageType, messageData, err := conn.ReadMessage()
-	if err != nil {
-		t.Fatalf("ReadMessage failed: %v", err)
+	shutdown()
+	_, _, err := conn.ReadMessage()
+	var ce *websocket.CloseError
+	if !errors.As(err, &ce) || ce.Code != websocket.StatusGoingAway {
+		t.Fatalf("ReadMessage = %v, want a StatusGoingAway close", err)
 	}
 
-	if messageType != websocket.TextMessage {
-		t.Fatalf("Expected message type %d, got %d", websocket.TextMessage, messageType)
+	done := make(chan struct{})
+	go func() { s.conns.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(shutdownWait):
+		t.Fatal("server did not finish its connections")
 	}
-
-	t.Logf("Read echoed message: %q", string(messageData))
 }
 
 func TestHandshakeHTTPResponses(t *testing.T) {
@@ -76,7 +109,7 @@ func TestHandshakeHTTPResponses(t *testing.T) {
 				r.Header.Set("Origin", tc.origin)
 			}
 			w := httptest.NewRecorder()
-			echoHandler(w, r)
+			newServer(t.Context()).ServeHTTP(w, r)
 			if tc.status == http.StatusUpgradeRequired && w.Header().Get("Sec-WebSocket-Version") != "13" {
 				t.Fatal("missing supported version")
 			}
