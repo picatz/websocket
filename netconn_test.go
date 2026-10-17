@@ -123,13 +123,13 @@ func (l *chanListener) Addr() net.Addr { return &net.TCPAddr{} }
 func TestNetConnRejectsOtherMessageType(t *testing.T) {
 	raw := &memoryConn{Reader: bytes.NewReader([]byte{0x81, 1, 'x'})}
 	nc := NetConn(t.Context(), newTestConn(raw, ConnConfig{}), BinaryMessage)
-	if _, err := nc.Read(make([]byte, 8)); !errors.Is(err, ErrUnexpectedFrame) {
-		t.Fatalf("Read = %v, want ErrUnexpectedFrame", err)
+	if _, err := nc.Read(make([]byte, 8)); !errors.Is(err, errUnexpectedFrame) {
+		t.Fatalf("Read = %v, want errUnexpectedFrame", err)
 	}
 	if got := failureClosePayload(t, raw.written.Bytes(), false); !bytes.Equal(got, []byte{0x03, 0xeb}) {
 		t.Fatalf("close payload = %x, want StatusUnsupportedData", got)
 	}
-	if _, err := nc.Read(make([]byte, 8)); !errors.Is(err, ErrUnexpectedFrame) {
+	if _, err := nc.Read(make([]byte, 8)); !errors.Is(err, errUnexpectedFrame) {
 		t.Fatalf("second Read = %v, want the sticky error", err)
 	}
 }
@@ -138,7 +138,7 @@ func TestNetConnTextMessages(t *testing.T) {
 	server, client := pipeConns(t)
 	cn := NetConn(t.Context(), client, TextMessage)
 	sn := NetConn(t.Context(), server, TextMessage)
-	if _, err := cn.Write([]byte{0xff}); !errors.Is(err, ErrInvalidFrame) {
+	if _, err := cn.Write([]byte{0xff}); !errors.Is(err, errInvalidUTF8) {
 		t.Fatalf("invalid UTF-8 write = %v", err)
 	}
 	go func() { _, _ = cn.Write([]byte("ünïcode")) }()

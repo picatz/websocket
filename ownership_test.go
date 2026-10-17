@@ -104,7 +104,7 @@ func TestReadMessageOwnershipFragmentAndControlBoundaries(t *testing.T) {
 				wire := append(frame(byte(op), nil), limitHeader(server, 0x80|byte(op), len(payload))...)
 				raw := &headerOnlyConn{memoryConn: memoryConn{Reader: bytes.NewReader(wire)}}
 				c := newTestConn(raw, ConnConfig{Server: server})
-				if _, p, err := c.ReadMessage(); err != ErrUnexpectedFrame || p != nil || raw.bodyReads != 0 {
+				if _, p, err := c.ReadMessage(); err != errUnexpectedFrame || p != nil || raw.bodyReads != 0 {
 					t.Fatalf("read: len=%d err=%v body reads=%d", len(p), err, raw.bodyReads)
 				}
 				ownershipRequireTerminal(t, c, &raw.memoryConn, server, 1002)
@@ -242,7 +242,7 @@ func TestReadMessageOwnershipDecodedLimits(t *testing.T) {
 						t.Fatalf("decoded limit checked before all extensions: grow=%d trim=%d", grow.processCalls, trim.processCalls)
 					}
 					if size > limit {
-						if err != ErrPayloadTooLarge || got != nil {
+						if err != ErrMessageTooLarge || got != nil {
 							t.Fatalf("overflow: len=%d err=%v", len(got), err)
 						}
 						// Enabled custom extensions suppress automatic Close encoding.
@@ -309,18 +309,18 @@ func TestReadMessageOwnershipFailures(t *testing.T) {
 					case "transport error":
 						cause, tail = streamWithheld, streamWithheld
 					case "wire limit":
-						cause, closeCode, limit = ErrPayloadTooLarge, 1009, len(p)-1
+						cause, closeCode, limit = ErrMessageTooLarge, 1009, len(p)-1
 					case "extension error":
 						cause = fmt.Errorf("custom failure: %w", io.EOF)
 						extensions = []frameExtension{&ownershipExtension{enabled: true, process: func(*wireFrame) error { return cause }}}
 					case "invalid UTF-8":
 						p[len(p)-1] = 0xff
-						cause, closeCode = ErrInvalidFrame, 1007
+						cause, closeCode = errInvalidFrame, 1007
 					case "unfinished UTF-8":
 						// The complete 4096-byte frame reaches the ownership gate,
 						// but its unfinished final rune still must fail afterwards.
 						p[len(p)-1] = 0xc2
-						cause, closeCode = ErrInvalidFrame, 1007
+						cause, closeCode = errInvalidFrame, 1007
 					}
 					wire := limitWire(server, 0x80|byte(op), p)
 					if mode == "truncated" || mode == "transport error" {

@@ -143,7 +143,7 @@ func TestHighLevelDefaultPMDBoundaries(t *testing.T) {
 				}
 				op, p, err := c.ReadMessage()
 				if tc.overflow {
-					if !errors.Is(err, ErrPayloadTooLarge) || p != nil {
+					if !errors.Is(err, ErrMessageTooLarge) || p != nil {
 						t.Fatalf("payload %d, error %v; want terminal size failure", len(p), err)
 					}
 					requireDefaultExtensionTerminal(t, c, raw, 1009)
@@ -181,7 +181,7 @@ func TestHighLevelDefaultPMDIncompressibleBoundary(t *testing.T) {
 		t.Run(fmt.Sprintf("server=%v", server), func(t *testing.T) {
 			c, raw := highLevelReader(t, server, limitWire(server, 0xc2, encoded))
 			c.extensions = []frameExtension{defaultLimitPMD(t, server)}
-			if _, p, err := c.ReadMessage(); !errors.Is(err, ErrPayloadTooLarge) || p != nil {
+			if _, p, err := c.ReadMessage(); !errors.Is(err, ErrMessageTooLarge) || p != nil {
 				t.Fatalf("payload %d, error %v", len(p), err)
 			}
 			requireDefaultExtensionTerminal(t, c, raw, 1009)
@@ -207,7 +207,7 @@ func TestHighLevelDefaultPMDInvalidStreams(t *testing.T) {
 				c, raw := highLevelReader(t, server, limitWire(server, 0xc2, encoded))
 				c.extensions = []frameExtension{defaultLimitPMD(t, server)}
 				_, p, err := c.ReadMessage()
-				if p != nil || err == nil || errors.Is(err, ErrPayloadTooLarge) {
+				if p != nil || err == nil || errors.Is(err, ErrMessageTooLarge) {
 					t.Fatalf("payload %d, error %v", len(p), err)
 				}
 				if truncated {
@@ -261,7 +261,7 @@ func TestHighLevelDefaultExtensionHeaderLimit(t *testing.T) {
 					// including when an extension could shrink the payload.
 					input := &headerOnlyConn{memoryConn: memoryConn{Reader: bytes.NewReader(limitHeader(server, 0xc2, size))}}
 					c.br = bufio.NewReader(input)
-					if _, p, err := c.ReadMessage(); !errors.Is(err, ErrPayloadTooLarge) || p != nil || input.bodyReads != 0 || ext.incoming != 0 {
+					if _, p, err := c.ReadMessage(); !errors.Is(err, ErrMessageTooLarge) || p != nil || input.bodyReads != 0 || ext.incoming != 0 {
 						t.Fatalf("payload %d, error %v, body reads %d, transforms %d", len(p), err, input.bodyReads, ext.incoming)
 					}
 					requireDefaultExtensionTerminal(t, c, raw, code)
@@ -302,7 +302,7 @@ func TestHighLevelDefaultCustomExtensionOutput(t *testing.T) {
 						t.Fatalf("transformed output: opcode %v, payload %d, error %v, trims %d", op, len(p), err, trim.incoming)
 					}
 				} else {
-					if !errors.Is(err, ErrPayloadTooLarge) || p != nil {
+					if !errors.Is(err, ErrMessageTooLarge) || p != nil {
 						t.Fatalf("payload %d, error %v", len(p), err)
 					}
 					requireDefaultExtensionTerminal(t, c, raw, 0)
@@ -317,7 +317,7 @@ func TestHighLevelDefaultCustomExtensionOutput(t *testing.T) {
 
 func TestHighLevelDefaultCustomExtensionError(t *testing.T) {
 	for _, server := range []bool{false, true} {
-		for _, cause := range []error{io.EOF, ErrPayloadTooLarge} {
+		for _, cause := range []error{io.EOF, ErrMessageTooLarge} {
 			t.Run(fmt.Sprintf("server=%v/%v", server, cause), func(t *testing.T) {
 				ext := &defaultLimitExtension{process: func(*wireFrame) error { return fmt.Errorf("custom cause: %w", cause) }}
 				wire := limitWire(server, 0x82, []byte("first"))

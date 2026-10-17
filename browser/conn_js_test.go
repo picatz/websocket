@@ -64,8 +64,8 @@ func TestEcho(t *testing.T) {
 
 func TestWriteValidation(t *testing.T) {
 	conn := dial(t, "/echo", nil)
-	if err := conn.WriteMessage(websocket.TextMessage, []byte{0xff}); !errors.Is(err, websocket.ErrInvalidFrame) {
-		t.Fatalf("invalid UTF-8 text: err = %v, want ErrInvalidFrame", err)
+	if err := conn.WriteMessage(websocket.TextMessage, []byte{0xff}); err == nil {
+		t.Fatal("WriteMessage accepted invalid UTF-8 text")
 	}
 	if err := conn.WriteMessage(websocket.MessageType(9), nil); err == nil {
 		t.Fatal("WriteMessage accepted an invalid message type")
@@ -123,8 +123,8 @@ func TestMaxMessageSize(t *testing.T) {
 	if err := conn.WriteMessage(websocket.BinaryMessage, []byte("12345")); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := conn.ReadMessage(); !errors.Is(err, websocket.ErrPayloadTooLarge) {
-		t.Fatalf("err = %v, want ErrPayloadTooLarge", err)
+	if _, _, err := conn.ReadMessage(); !errors.Is(err, websocket.ErrMessageTooLarge) {
+		t.Fatalf("err = %v, want ErrMessageTooLarge", err)
 	}
 
 	// A negative limit means none.

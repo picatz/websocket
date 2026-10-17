@@ -79,22 +79,22 @@ func TestReadFailureStatusAndTerminalState(t *testing.T) {
 			code  uint16
 			exact bool
 		}{
-			{"text UTF8", prefix(0x81, []byte{255}), 0, ErrInvalidFrame, 1007, true},
-			{"fragment UTF8", append(prefix(0x01, []byte{0xc2}), prefix(0x80, []byte{'a'})...), 0, ErrInvalidFrame, 1007, true},
-			{"close reason", prefix(0x88, []byte{3, 232, 255}), 0, ErrInvalidFrame, 1007, true},
-			{"bad status before reason", prefix(0x88, []byte{3, 237, 255}), 0, ErrInvalidFrame, 1002, true},
-			{"one byte close", header(0x88, 1), 0, ErrInvalidFrame, 1002, true},
-			{"control oversize", header(0x89, 126), 0, ErrPayloadTooLarge, 1002, false},
-			{"control fragment", header(0x09, 0), 0, ErrControlFrameFragment, 1002, true},
-			{"opcode", header(0x83, 0), 0, ErrInvalidOpcode, 1002, true},
-			{"RSV", header(0xc2, 0), 0, ErrUnsupportedExtensions, 1002, true},
-			{"continuation", header(0x80, 0), 0, ErrUnexpectedContinuation, 1002, true},
-			{"new data", append(prefix(0x02, nil), header(0x81, 0)...), 0, ErrUnexpectedFrame, 1002, true},
-			{"nonminimal16", append(header(0x82, 126), 0, 125), 0, ErrInvalidFrame, 1002, true},
-			{"nonminimal64", append(header(0x82, 127), 0, 0, 0, 0, 0, 0, 255, 255), 0, ErrInvalidFrame, 1002, true},
-			{"highbit", append(header(0x82, 127), 128, 0, 0, 0, 0, 0, 0, 0), 0, ErrInvalidFrame, 1002, true},
-			{"frame limit", header(0x82, 2), 1, ErrPayloadTooLarge, 1009, true},
-			{"message limit", append(prefix(0x02, []byte{'a'}), header(0x80, 1)...), 1, ErrPayloadTooLarge, 1009, true},
+			{"text UTF8", prefix(0x81, []byte{255}), 0, errInvalidFrame, 1007, true},
+			{"fragment UTF8", append(prefix(0x01, []byte{0xc2}), prefix(0x80, []byte{'a'})...), 0, errInvalidFrame, 1007, true},
+			{"close reason", prefix(0x88, []byte{3, 232, 255}), 0, errInvalidFrame, 1007, true},
+			{"bad status before reason", prefix(0x88, []byte{3, 237, 255}), 0, errInvalidFrame, 1002, true},
+			{"one byte close", header(0x88, 1), 0, errInvalidFrame, 1002, true},
+			{"control oversize", header(0x89, 126), 0, errInvalidFrame, 1002, false},
+			{"control fragment", header(0x09, 0), 0, errControlFrameFragment, 1002, true},
+			{"opcode", header(0x83, 0), 0, errInvalidOpcode, 1002, true},
+			{"RSV", header(0xc2, 0), 0, errUnsupportedExtensions, 1002, true},
+			{"continuation", header(0x80, 0), 0, errUnexpectedContinuation, 1002, true},
+			{"new data", append(prefix(0x02, nil), header(0x81, 0)...), 0, errUnexpectedFrame, 1002, true},
+			{"nonminimal16", append(header(0x82, 126), 0, 125), 0, errInvalidFrame, 1002, true},
+			{"nonminimal64", append(header(0x82, 127), 0, 0, 0, 0, 0, 0, 255, 255), 0, errInvalidFrame, 1002, true},
+			{"highbit", append(header(0x82, 127), 128, 0, 0, 0, 0, 0, 0, 0), 0, errInvalidFrame, 1002, true},
+			{"frame limit", header(0x82, 2), 1, ErrMessageTooLarge, 1009, true},
+			{"message limit", append(prefix(0x02, []byte{'a'}), header(0x80, 1)...), 1, ErrMessageTooLarge, 1009, true},
 		} {
 			t.Run(strconv.FormatBool(server)+"/"+tc.name, func(t *testing.T) {
 				raw := &failureMemoryConn{memoryConn: memoryConn{Reader: bytes.NewReader(append(tc.wire, prefix(0x81, []byte("late"))...))}}
@@ -136,9 +136,9 @@ func TestReadFailureMaskingStatus(t *testing.T) {
 	for _, server := range []bool{false, true} {
 		raw := &failureMemoryConn{memoryConn: memoryConn{Reader: bytes.NewReader(failureWire(!server, 0x82, nil))}}
 		_, _, err := newTestConn(raw, ConnConfig{Server: server}).ReadMessage()
-		want := ErrMaskedFrame
+		want := errMaskedFrame
 		if server {
-			want = ErrUnmaskedFrame
+			want = errUnmaskedFrame
 		}
 		if err != want || binary.BigEndian.Uint16(failureClosePayload(t, raw.written.Bytes(), server)) != 1002 {
 			t.Fatal(err)
@@ -157,7 +157,7 @@ func TestIncomingCloseStatusBoundaries(t *testing.T) {
 				invalid := code < 1000 || code >= 5000 || code == 1004 || code == 1005 || code == 1006 || (code >= 1015 && code < 3000)
 				want := p
 				if invalid {
-					if err != ErrInvalidFrame {
+					if err != errInvalidFrame {
 						t.Fatal(err)
 					}
 					want = []byte{3, 234}
@@ -198,7 +198,7 @@ func (e *failureExtension) ProcessOutgoingFrame(*wireFrame) error {
 }
 
 func TestReadFailureCallbackProvenance(t *testing.T) {
-	for _, cause := range []error{io.EOF, ErrInvalidFrame, ErrPayloadTooLarge, os.ErrDeadlineExceeded} {
+	for _, cause := range []error{io.EOF, errInvalidFrame, ErrMessageTooLarge, os.ErrDeadlineExceeded} {
 		t.Run(cause.Error(), func(t *testing.T) {
 			ext := &failureExtension{enabled: true, cause: fmt.Errorf("custom: %w", cause)}
 			raw := &failureMemoryConn{memoryConn: memoryConn{Reader: bytes.NewReader([]byte{0x82, 0})}}
@@ -214,7 +214,7 @@ func TestReadFailureCallbackProvenance(t *testing.T) {
 		ext := &failureExtension{enabled: enabled}
 		raw := &failureMemoryConn{memoryConn: memoryConn{Reader: bytes.NewReader([]byte{0x81, 1, 255})}}
 		_, _, err := newTestConn(raw, ConnConfig{}, []frameExtension{ext}...).ReadMessage()
-		if err != ErrInvalidFrame || ext.outgoing != 0 {
+		if err != errInvalidFrame || ext.outgoing != 0 {
 			t.Fatal(err)
 		}
 		if enabled && raw.written.Len() != 0 {
@@ -237,7 +237,7 @@ func TestReadFailureBuiltInDecodedLimitDiagnostic(t *testing.T) {
 	raw := &failureMemoryConn{memoryConn: memoryConn{Reader: bytes.NewReader(failureWire(false, 0xc1, f.Payload))}}
 	c := newTestConn(raw, ConnConfig{MaxMessageSize: 128}, []frameExtension{pmd}...)
 	_, _, err := c.ReadMessage()
-	if !errors.Is(err, ErrPayloadTooLarge) || err.Error() != "extension permessage-deflate failed to process incoming frame: "+ErrPayloadTooLarge.Error() {
+	if !errors.Is(err, ErrMessageTooLarge) || err.Error() != "extension permessage-deflate failed to process incoming frame: "+ErrMessageTooLarge.Error() {
 		t.Fatal(err)
 	}
 	if binary.BigEndian.Uint16(failureClosePayload(t, raw.written.Bytes(), false)) != 1009 {
@@ -294,7 +294,7 @@ func TestReadFailurePreservesTransportDeadlines(t *testing.T) {
 			start := time.Now()
 			_, _, err := c.ReadMessage()
 			elapsed := time.Since(start)
-			if err != ErrInvalidFrame || raw.setters.Load() != 0 || raw.closes.Load() != 1 {
+			if err != errInvalidFrame || raw.setters.Load() != 0 || raw.closes.Load() != 1 {
 				t.Fatalf("error=%v setters=%d closes=%d", err, raw.setters.Load(), raw.closes.Load())
 			}
 			if elapsed > 2*time.Second || (delay > 0 && delay < time.Second && elapsed > 500*time.Millisecond) {
@@ -328,7 +328,7 @@ func TestConcurrentCloseCancelsFailureNotification(t *testing.T) {
 		if err := c.Close(); err != ErrAlreadyClosed {
 			t.Fatal(err)
 		}
-		if err := failureAwait(t, done); err != ErrInvalidFrame {
+		if err := failureAwait(t, done); err != errInvalidFrame {
 			t.Fatal(err)
 		}
 		if time.Since(start) > 500*time.Millisecond || raw.closes.Load() != 1 {
@@ -364,7 +364,7 @@ func TestReadFailureAbortsStalledDataWriter(t *testing.T) {
 		}
 		start := time.Now()
 		_, _, err := c.ReadMessage()
-		if err != ErrInvalidFrame || time.Since(start) > 500*time.Millisecond {
+		if err != errInvalidFrame || time.Since(start) > 500*time.Millisecond {
 			t.Fatalf("failure=%v", err)
 		}
 		if err := failureAwait(t, done); !errors.Is(err, ErrWriteFailed) || !errors.Is(err, io.ErrClosedPipe) {
@@ -409,7 +409,7 @@ func TestReadFailureNeverRetriesPoisonedWriter(t *testing.T) {
 					}
 					before := bytes.Clone(raw.written.Bytes())
 					calls := raw.writes
-					if _, _, err := c.ReadMessage(); err != ErrInvalidFrame {
+					if _, _, err := c.ReadMessage(); err != errInvalidFrame {
 						t.Fatal(err)
 					}
 					c.Close()
@@ -452,7 +452,7 @@ func TestReadFailureKeepsCauseWhenPeerCannotReceive(t *testing.T) {
 	defer transport.Close()
 	raw := &failurePipeConn{Conn: transport, input: bytes.NewReader([]byte{0x81, 1, 255}), started: make(chan struct{})}
 	c := newTestConn(raw, ConnConfig{})
-	if _, _, err := c.ReadMessage(); err != ErrInvalidFrame {
+	if _, _, err := c.ReadMessage(); err != errInvalidFrame {
 		t.Fatal(err)
 	}
 	if raw.closes.Load() != 1 || raw.setters.Load() != 0 {
@@ -468,7 +468,7 @@ func TestReadFailureAfterExplicitCloseDoesNotSendAnother(t *testing.T) {
 			t.Fatal(err)
 		}
 		before := bytes.Clone(raw.written.Bytes())
-		if _, _, err := c.ReadMessage(); err != ErrInvalidFrame {
+		if _, _, err := c.ReadMessage(); err != errInvalidFrame {
 			t.Fatal(err)
 		}
 		if raw.closes != 1 || !bytes.Equal(before, raw.written.Bytes()) {
@@ -483,7 +483,7 @@ func TestReadFailurePlatformLimitStatus(t *testing.T) {
 	}
 	wire := []byte{0x82, 127, 0, 0, 0, 0, 128, 0, 0, 0}
 	raw := &failureMemoryConn{memoryConn: memoryConn{Reader: bytes.NewReader(wire)}}
-	if _, _, err := newTestConn(raw, ConnConfig{}).ReadMessage(); err != ErrPayloadTooLarge {
+	if _, _, err := newTestConn(raw, ConnConfig{}).ReadMessage(); err != ErrMessageTooLarge {
 		t.Fatal(err)
 	}
 	if binary.BigEndian.Uint16(failureClosePayload(t, raw.written.Bytes(), false)) != 1009 {
@@ -504,7 +504,7 @@ func TestReadFailureDoesNotRequireDeadlineSupport(t *testing.T) {
 	defer transport.Close()
 	raw := &unsupportedDeadlineConn{&failurePipeConn{Conn: transport, input: bytes.NewReader([]byte{0x81, 1, 255}), started: make(chan struct{})}}
 	start := time.Now()
-	if _, _, err := newTestConn(raw, ConnConfig{}).ReadMessage(); err != ErrInvalidFrame {
+	if _, _, err := newTestConn(raw, ConnConfig{}).ReadMessage(); err != errInvalidFrame {
 		t.Fatal(err)
 	}
 	if elapsed := time.Since(start); elapsed < 800*time.Millisecond || elapsed > 2*time.Second {
@@ -551,7 +551,7 @@ func TestReadFailureJoinsRunningAbortWatchdog(t *testing.T) {
 	default:
 	}
 	release.Do(func() { close(raw.release) })
-	if err := failureAwait(t, done); err != ErrInvalidFrame {
+	if err := failureAwait(t, done); err != errInvalidFrame {
 		t.Fatal(err)
 	}
 	if !raw.returned.Load() || raw.closes.Load() != 1 || raw.setters.Load() != 0 {
@@ -564,7 +564,7 @@ func TestReadFailurePartialNotificationIsNeverRetried(t *testing.T) {
 		for _, n := range []int{0, 1, 2, 3, 4} {
 			raw := &failureFaultConn{failureMemoryConn: failureMemoryConn{memoryConn: memoryConn{Reader: bytes.NewReader(failureWire(server, 0x81, []byte{255}))}}, n: n, cause: io.ErrClosedPipe}
 			c := newTestConn(raw, ConnConfig{Server: server})
-			if _, _, err := c.ReadMessage(); err != ErrInvalidFrame {
+			if _, _, err := c.ReadMessage(); err != errInvalidFrame {
 				t.Fatal(err)
 			}
 			before := bytes.Clone(raw.written.Bytes())

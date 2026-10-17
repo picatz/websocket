@@ -45,27 +45,27 @@ func TestReadMessageRejectsHeaderBeforeBody(t *testing.T) {
 		limit  int
 		want   error
 	}{
-		{"frame limit", []byte{0x82, 3}, false, 2, ErrPayloadTooLarge},
-		{"message at limit", []byte{0x02, 2, 'a', 'b', 0x80, 1}, false, 2, ErrPayloadTooLarge},
-		{"message one remaining", []byte{0x02, 1, 'a', 0x80, 2}, false, 2, ErrPayloadTooLarge},
-		{"message after ping", []byte{0x02, 2, 'a', 'b', 0x89, 1, 'p', 0x80, 1}, false, 2, ErrPayloadTooLarge},
-		{"message after pong", []byte{0x02, 2, 'a', 'b', 0x8a, 0, 0x80, 1}, false, 2, ErrPayloadTooLarge},
-		{"masked continuation before key", []byte{0x02, 0x82, 0, 0, 0, 0, 'a', 'b', 0x80, 0x81}, true, 2, ErrPayloadTooLarge},
-		{"unexpected continuation", []byte{0x80, 125}, false, 0, ErrUnexpectedContinuation},
-		{"new text during fragmentation", []byte{0x02, 0, 0x81, 125}, false, 0, ErrUnexpectedFrame},
-		{"new binary during fragmentation", []byte{0x01, 0, 0x82, 125}, false, 0, ErrUnexpectedFrame},
-		{"RSV1", []byte{0xc2, 125}, false, 0, ErrUnsupportedExtensions},
-		{"RSV2", []byte{0xa2, 125}, false, 0, ErrUnsupportedExtensions},
-		{"RSV3", []byte{0x92, 125}, false, 0, ErrUnsupportedExtensions},
-		{"reserved opcode", []byte{0x83, 125}, false, 0, ErrInvalidOpcode},
-		{"masked server", []byte{0x82, 0x81}, false, 0, ErrMaskedFrame},
-		{"unmasked client", []byte{0x82, 1}, true, 0, ErrUnmaskedFrame},
-		{"fragmented control", []byte{0x09, 1}, false, 0, ErrControlFrameFragment},
-		{"oversized control", []byte{0x89, 126}, false, 0, ErrPayloadTooLarge},
-		{"one byte close", []byte{0x88, 1}, false, 0, ErrInvalidFrame},
-		{"nonminimal 16 bit", []byte{0x82, 126, 0, 125}, false, 0, ErrInvalidFrame},
-		{"nonminimal 64 bit", []byte{0x82, 127, 0, 0, 0, 0, 0, 0, 255, 255}, false, 0, ErrInvalidFrame},
-		{"high bit length", []byte{0x82, 127, 0x80, 0, 0, 0, 0, 0, 0, 0}, false, 0, ErrInvalidFrame},
+		{"frame limit", []byte{0x82, 3}, false, 2, ErrMessageTooLarge},
+		{"message at limit", []byte{0x02, 2, 'a', 'b', 0x80, 1}, false, 2, ErrMessageTooLarge},
+		{"message one remaining", []byte{0x02, 1, 'a', 0x80, 2}, false, 2, ErrMessageTooLarge},
+		{"message after ping", []byte{0x02, 2, 'a', 'b', 0x89, 1, 'p', 0x80, 1}, false, 2, ErrMessageTooLarge},
+		{"message after pong", []byte{0x02, 2, 'a', 'b', 0x8a, 0, 0x80, 1}, false, 2, ErrMessageTooLarge},
+		{"masked continuation before key", []byte{0x02, 0x82, 0, 0, 0, 0, 'a', 'b', 0x80, 0x81}, true, 2, ErrMessageTooLarge},
+		{"unexpected continuation", []byte{0x80, 125}, false, 0, errUnexpectedContinuation},
+		{"new text during fragmentation", []byte{0x02, 0, 0x81, 125}, false, 0, errUnexpectedFrame},
+		{"new binary during fragmentation", []byte{0x01, 0, 0x82, 125}, false, 0, errUnexpectedFrame},
+		{"RSV1", []byte{0xc2, 125}, false, 0, errUnsupportedExtensions},
+		{"RSV2", []byte{0xa2, 125}, false, 0, errUnsupportedExtensions},
+		{"RSV3", []byte{0x92, 125}, false, 0, errUnsupportedExtensions},
+		{"reserved opcode", []byte{0x83, 125}, false, 0, errInvalidOpcode},
+		{"masked server", []byte{0x82, 0x81}, false, 0, errMaskedFrame},
+		{"unmasked client", []byte{0x82, 1}, true, 0, errUnmaskedFrame},
+		{"fragmented control", []byte{0x09, 1}, false, 0, errControlFrameFragment},
+		{"oversized control", []byte{0x89, 126}, false, 0, errInvalidFrame},
+		{"one byte close", []byte{0x88, 1}, false, 0, errInvalidFrame},
+		{"nonminimal 16 bit", []byte{0x82, 126, 0, 125}, false, 0, errInvalidFrame},
+		{"nonminimal 64 bit", []byte{0x82, 127, 0, 0, 0, 0, 0, 0, 255, 255}, false, 0, errInvalidFrame},
+		{"high bit length", []byte{0x82, 127, 0x80, 0, 0, 0, 0, 0, 0, 0}, false, 0, errInvalidFrame},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			requireHeaderRejection(t, tc.wire, tc.server, tc.limit, nil, tc.want)
@@ -92,7 +92,7 @@ func TestReadMessageRemainingBudgetLengthBoundaries(t *testing.T) {
 			// Each frame fits the configured cap individually, but the second
 			// header proves that the reassembled message would exceed it.
 			wire := append([]byte{0x02, 1, 'a'}, header...)
-			requireHeaderRejection(t, wire, false, size, nil, ErrPayloadTooLarge)
+			requireHeaderRejection(t, wire, false, size, nil, ErrMessageTooLarge)
 			wire = append(wire, bytes.Repeat([]byte{'b'}, size)...)
 			for _, limit := range []int{0, size + 1, size + 2} {
 				_, data, err := frameConn(wire, false, limit).ReadMessage()
@@ -106,11 +106,11 @@ func TestReadMessageRemainingBudgetLengthBoundaries(t *testing.T) {
 	header := make([]byte, 10)
 	header[0], header[1] = 0x80, 127
 	binary.BigEndian.PutUint64(header[2:], maxInt)
-	requireHeaderRejection(t, append([]byte{0x02, 1, 'a'}, header...), false, int(maxInt), nil, ErrPayloadTooLarge)
+	requireHeaderRejection(t, append([]byte{0x02, 1, 'a'}, header...), false, int(maxInt), nil, ErrMessageTooLarge)
 	if strconv.IntSize == 32 {
 		header[0] = 0x82
 		binary.BigEndian.PutUint64(header[2:], maxInt+1)
-		requireHeaderRejection(t, header, false, 0, nil, ErrPayloadTooLarge)
+		requireHeaderRejection(t, header, false, 0, nil, ErrMessageTooLarge)
 	}
 }
 
@@ -194,7 +194,7 @@ func TestReadMessageCustomHeaderTransforms(t *testing.T) {
 			}
 			return nil
 		}, "x", nil},
-		{"noop new message", []byte{0x02, 0, 0x82, 1, 'x'}, func(*wireFrame) error { return nil }, "", ErrUnexpectedFrame},
+		{"noop new message", []byte{0x02, 0, 0x82, 1, 'x'}, func(*wireFrame) error { return nil }, "", errUnexpectedFrame},
 		{"reserved bits", []byte{0xf2, 1, 'x'}, func(f *wireFrame) error {
 			f.Rsv1, f.Rsv2, f.Rsv3 = false, false, false
 			return nil
@@ -210,10 +210,10 @@ func TestReadMessageCustomHeaderTransforms(t *testing.T) {
 		{"decoded overflow", []byte{0x82, 1, 'x'}, func(f *wireFrame) error {
 			f.Payload = []byte("abc")
 			return nil
-		}, "", ErrPayloadTooLarge},
-		{"noop overflow", []byte{0x02, 2, 'a', 'b', 0x80, 1, 'c'}, func(*wireFrame) error { return nil }, "", ErrPayloadTooLarge},
-		{"noop continuation", []byte{0x80, 1, 'x'}, func(*wireFrame) error { return nil }, "", ErrUnexpectedContinuation},
-		{"noop reserved bit", []byte{0xc2, 1, 'x'}, func(*wireFrame) error { return nil }, "", ErrUnsupportedExtensions},
+		}, "", ErrMessageTooLarge},
+		{"noop overflow", []byte{0x02, 2, 'a', 'b', 0x80, 1, 'c'}, func(*wireFrame) error { return nil }, "", ErrMessageTooLarge},
+		{"noop continuation", []byte{0x80, 1, 'x'}, func(*wireFrame) error { return nil }, "", errUnexpectedContinuation},
+		{"noop reserved bit", []byte{0xc2, 1, 'x'}, func(*wireFrame) error { return nil }, "", errUnsupportedExtensions},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := frameConn(tc.wire, false, 2)
@@ -225,8 +225,8 @@ func TestReadMessageCustomHeaderTransforms(t *testing.T) {
 		})
 	}
 	disabled := []frameExtension{&headerTransformExtension{process: func(*wireFrame) error { t.Fatal("disabled extension invoked"); return nil }}}
-	requireHeaderRejection(t, []byte{0xc2, 125}, false, 0, disabled, ErrUnsupportedExtensions)
-	requireHeaderRejection(t, []byte{0x02, 2, 'a', 'b', 0x80, 1}, false, 2, disabled, ErrPayloadTooLarge)
+	requireHeaderRejection(t, []byte{0xc2, 125}, false, 0, disabled, errUnsupportedExtensions)
+	requireHeaderRejection(t, []byte{0x02, 2, 'a', 'b', 0x80, 1}, false, 2, disabled, ErrMessageTooLarge)
 }
 
 func TestReadMessageBuiltinReservedBits(t *testing.T) {
@@ -235,7 +235,7 @@ func TestReadMessageBuiltinReservedBits(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, b0 := range []byte{0xa2, 0x92, 0xe2, 0xf2, 0xc0, 0xc8, 0xc9, 0xca} {
-		requireHeaderRejection(t, []byte{b0, 125}, false, 0, []frameExtension{pmd}, ErrUnsupportedExtensions)
+		requireHeaderRejection(t, []byte{b0, 125}, false, 0, []frameExtension{pmd}, errUnsupportedExtensions)
 	}
 	// A custom frame extension composed with PMD owns RSV2 in either order,
 	// for uncompressed and compressed (RSV1) messages alike.
@@ -259,7 +259,7 @@ func TestReadMessageBuiltinReservedBits(t *testing.T) {
 		}
 	}
 	// Uncompressed continuations still consume the aggregate message budget.
-	requireHeaderRejection(t, []byte{0x02, 2, 'a', 'b', 0x80, 1}, false, 2, []frameExtension{pmd}, ErrPayloadTooLarge)
+	requireHeaderRejection(t, []byte{0x02, 2, 'a', 'b', 0x80, 1}, false, 2, []frameExtension{pmd}, ErrMessageTooLarge)
 }
 
 func TestReadMessageAtLimitStillRequiresFinalFrame(t *testing.T) {
@@ -268,7 +268,7 @@ func TestReadMessageAtLimitStillRequiresFinalFrame(t *testing.T) {
 		_, _, err := frameConn(wire, false, 2).ReadMessage()
 		want := io.ErrUnexpectedEOF
 		if bytes.Equal(tail, []byte{0x80, 1}) {
-			want = ErrPayloadTooLarge
+			want = ErrMessageTooLarge
 		}
 		if !errors.Is(err, want) {
 			t.Fatalf("tail %x: %v, want %v", tail, err, want)

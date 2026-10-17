@@ -111,7 +111,7 @@ func TestDialResponseHeadLimits(t *testing.T) {
 			d.MaxMessageSize, d.MaxResponseHeaderBytes = tc.messageSize, tc.headLimit
 			c, resp, err := responseDial(t, url, d)
 			if tc.wantSizeError {
-				if c != nil || resp != nil || !errors.Is(err, ErrBadHandshake) || !errors.Is(err, ErrResponseHeaderTooLarge) || errors.Is(err, ErrPayloadTooLarge) {
+				if c != nil || resp != nil || !errors.Is(err, ErrBadHandshake) || !errors.Is(err, ErrResponseHeaderTooLarge) || errors.Is(err, ErrMessageTooLarge) {
 					t.Fatalf("connection=%v response=%v error=%v", c, resp, err)
 				}
 			} else {

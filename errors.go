@@ -80,40 +80,47 @@ var (
 	ErrInvalidSubprotocol = errors.New("websocket: invalid subprotocol negotiation")
 )
 
-// Errors returned by ReadMessage when the peer violates the protocol. The
-// connection is terminal after any of them; when it is safe, the peer is sent
-// the matching close status first.
+// Errors returned by ReadMessage and NextReader when a message cannot be
+// accepted. The connection is terminal after either; when it is safe, the
+// peer is sent the matching close status first.
 var (
-	// ErrInvalidFrame reports a malformed frame or close payload, or text that
-	// is not valid UTF-8. WriteMessage also returns it, before any I/O, for a
-	// text message that is not valid UTF-8.
-	ErrInvalidFrame = errors.New("websocket: invalid frame")
-	// ErrUnexpectedFrame reports a new data frame where a continuation of a
-	// fragmented message was required.
-	ErrUnexpectedFrame = errors.New("websocket: unexpected frame")
-	// ErrUnexpectedContinuation reports a continuation frame outside a
-	// fragmented message.
-	ErrUnexpectedContinuation = errors.New("websocket: unexpected continuation frame")
-	// ErrControlFrameFragment reports a fragmented control frame
-	// (RFC 6455 Section 5.5).
-	ErrControlFrameFragment = errors.New("websocket: control frames cannot be fragmented")
-	// ErrPayloadTooLarge reports a data frame or message larger than the
-	// connection's incoming limit, for which the peer is sent
-	// StatusMessageTooBig, or a control frame with more than 125 bytes of
-	// payload.
-	ErrPayloadTooLarge = errors.New("websocket: payload too large")
-	// ErrUnmaskedFrame reports an unmasked frame from a client
-	// (RFC 6455 Section 5.1).
-	ErrUnmaskedFrame = errors.New("websocket: received unmasked frame from client")
-	// ErrMaskedFrame reports a masked frame from a server
-	// (RFC 6455 Section 5.1).
-	ErrMaskedFrame = errors.New("websocket: received masked frame from server")
-	// ErrUnsupportedExtensions reports reserved bits that no negotiated
-	// extension defines.
-	ErrUnsupportedExtensions = errors.New("websocket: unsupported extensions (RSV bits are set)")
-	// ErrInvalidOpcode reports a frame with a reserved opcode.
-	ErrInvalidOpcode = errors.New("websocket: invalid opcode")
+	// ErrProtocol reports a peer that violated RFC 6455 or RFC 7692: a
+	// malformed, masked or unmasked, fragmented control or reserved frame, an
+	// unexpected continuation, text that is not valid UTF-8, or compressed
+	// data that does not inflate. The error's text names the violation.
+	ErrProtocol = errors.New("websocket: protocol error")
+	// ErrMessageTooLarge reports an incoming frame or message larger than the
+	// connection's MaxMessageSize, for which the peer is sent
+	// StatusMessageTooBig. It matches ErrProtocol, so one check covers every
+	// message the connection refused.
+	ErrMessageTooLarge error = &protocolError{"websocket: message too large"}
 )
+
+// Peer protocol violations, all matching ErrProtocol. Callers cannot act on
+// which one occurred, so they stay unexported; their text says which.
+var (
+	errInvalidFrame           error = &protocolError{"websocket: invalid frame"}
+	errUnexpectedFrame        error = &protocolError{"websocket: unexpected frame"}
+	errUnexpectedContinuation error = &protocolError{"websocket: unexpected continuation frame"}
+	errControlFrameFragment   error = &protocolError{"websocket: control frames cannot be fragmented"}
+	errUnmaskedFrame          error = &protocolError{"websocket: received unmasked frame from client"}
+	errMaskedFrame            error = &protocolError{"websocket: received masked frame from server"}
+	errUnsupportedExtensions  error = &protocolError{"websocket: unsupported extensions (RSV bits are set)"}
+	errInvalidOpcode          error = &protocolError{"websocket: invalid opcode"}
+)
+
+// protocolError is the type of the errors that match ErrProtocol.
+type protocolError struct{ msg string }
+
+func (e *protocolError) Error() string { return e.msg }
+
+// Is reports whether target is ErrProtocol.
+func (e *protocolError) Is(target error) bool { return target == ErrProtocol }
+
+// errInvalidUTF8 is returned by WriteMessage and NextWriter, before any I/O,
+// for text that is not valid UTF-8. The caller made the mistake, so it does
+// not match ErrProtocol.
+var errInvalidUTF8 = errors.New("websocket: text message is not valid UTF-8")
 
 // errInvalidMessageType is returned by WriteMessage for a MessageType other
 // than TextMessage or BinaryMessage.

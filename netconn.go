@@ -18,7 +18,7 @@ import (
 //
 // messageType must be BinaryMessage or TextMessage; NetConn panics otherwise.
 // Prefer BinaryMessage. With TextMessage every Write must be valid UTF-8 on its
-// own, so arbitrary byte streams fail with ErrInvalidFrame.
+// own, so a Write of arbitrary bytes fails.
 //
 // When ctx ends, the connection is aborted as described for ReadMessageContext
 // and blocked calls return. Close stops watching ctx and closes c.
@@ -73,7 +73,7 @@ func (nc *netConn) Read(p []byte) (int, error) {
 			return 0, nc.readErr
 		case typ != nc.messageType:
 			// https://datatracker.ietf.org/doc/html/rfc6455#section-7.4.1
-			nc.readErr = fmt.Errorf("%w: NetConn got %v, want %v", ErrUnexpectedFrame, typ, nc.messageType)
+			nc.readErr = fmt.Errorf("%w: NetConn got %v, want %v", errUnexpectedFrame, typ, nc.messageType)
 			_ = nc.c.CloseWithStatus(StatusUnsupportedData, "")
 			return 0, nc.readErr
 		}

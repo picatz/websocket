@@ -116,7 +116,7 @@ func TestNextWriterValidatesTextAcrossWrites(t *testing.T) {
 			if err == nil {
 				err = w.Close()
 			}
-			if tt.valid != (err == nil) || (!tt.valid && !errors.Is(err, ErrInvalidFrame)) {
+			if tt.valid != (err == nil) || (!tt.valid && !errors.Is(err, errInvalidUTF8)) {
 				t.Fatalf("error = %v, valid = %v", err, tt.valid)
 			}
 			if !tt.valid {

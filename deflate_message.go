@@ -17,18 +17,22 @@ var (
 	// errFragmentedCompression identifies direct PMD frame callbacks that do
 	// not contain one complete message. Conn handles fragmentation internally.
 	errFragmentedCompression = errors.New("websocket: direct compression callbacks require a complete message")
-	// ErrInvalidCompressedPayload identifies malformed DEFLATE message data.
-	ErrInvalidCompressedPayload = errors.New("websocket: invalid compressed payload")
+	// errInvalidCompressedPayload identifies malformed DEFLATE message data.
+	errInvalidCompressedPayload error = &protocolError{"websocket: invalid compressed payload"}
 )
 
 // compressedPayloadError preserves both the classification and inflater cause.
 type compressedPayloadError struct{ cause error }
 
 func (e *compressedPayloadError) Error() string {
-	return fmt.Sprintf("%v: %v", ErrInvalidCompressedPayload, e.cause)
+	return fmt.Sprintf("%v: %v", errInvalidCompressedPayload, e.cause)
 }
-func (e *compressedPayloadError) Unwrap() error        { return e.cause }
-func (e *compressedPayloadError) Is(target error) bool { return target == ErrInvalidCompressedPayload }
+func (e *compressedPayloadError) Unwrap() error { return e.cause }
+
+// Is reports whether target is errInvalidCompressedPayload or ErrProtocol.
+func (e *compressedPayloadError) Is(target error) bool {
+	return target == errInvalidCompressedPayload || target == ErrProtocol
+}
 
 // messageCompression returns the enabled built-in PMD extension, if any. It
 // calls IsEnabled once per extension and rejects multiple built-in instances.
@@ -244,12 +248,12 @@ func (r *deflateFrameReader) startBuffered(frame *wireFrame, n uint64) error {
 	}
 	switch {
 	case frame.Opcode != opcode:
-		return failWith(StatusProtocolError, ErrUnexpectedFrame)
+		return failWith(StatusProtocolError, errUnexpectedFrame)
 	case frame.Rsv1 != rsv1:
 		return fmt.Errorf("%w: an extension changed RSV1 owned by permessage-deflate", errUnsupportedExtensionComposition)
 	case frame.Rsv1 != r.first || frame.Rsv2 || frame.Rsv3:
 		// RFC 7692 section 6.1: RSV1 only on a message's first frame.
-		return failWith(StatusProtocolError, ErrUnsupportedExtensions)
+		return failWith(StatusProtocolError, errUnsupportedExtensions)
 	}
 	r.first = false
 	r.buf, r.remaining = frame.Payload, uint64(len(frame.Payload))
@@ -290,7 +294,7 @@ func (r *deflateFrameReader) advance() error {
 			continue
 		}
 		if f.Opcode != opContinuation {
-			return failWith(StatusProtocolError, ErrUnexpectedFrame)
+			return failWith(StatusProtocolError, errUnexpectedFrame)
 		}
 		// readFrameHeader already rejects RSV1 on continuations and bounds each
 		// encoded frame. Its length must not spend the remaining decoded budget.
@@ -497,7 +501,7 @@ func (p *perMessageDeflate) decodeMessage(input *deflateMessageInput, limit int,
 			return nil, errDeflatePeerClose
 		}
 		if n > remaining {
-			return nil, failWith(StatusMessageTooBig, fmt.Errorf("extension permessage-deflate failed to process incoming frame: %w", ErrPayloadTooLarge))
+			return nil, failWith(StatusMessageTooBig, fmt.Errorf("extension permessage-deflate failed to process incoming frame: %w", ErrMessageTooLarge))
 		}
 		if n > 0 {
 			// Check new bytes plus at most three pending bytes before growth.
@@ -511,7 +515,7 @@ func (p *perMessageDeflate) decodeMessage(input *deflateMessageInput, limit int,
 					copy(carry[pending:], f.buffer[:used])
 					complete, valid := validUTF8Prefix(carry[:pending+used])
 					if !valid {
-						return nil, failWith(StatusInvalidFramePayloadData, ErrInvalidFrame)
+						return nil, failWith(StatusInvalidFramePayloadData, errInvalidFrame)
 					}
 					validated += complete
 					if complete == 0 {
@@ -522,7 +526,7 @@ func (p *perMessageDeflate) decodeMessage(input *deflateMessageInput, limit int,
 				}
 				complete, valid := validUTF8Prefix(f.buffer[offset:n])
 				if !valid {
-					return nil, failWith(StatusInvalidFramePayloadData, ErrInvalidFrame)
+					return nil, failWith(StatusInvalidFramePayloadData, errInvalidFrame)
 				}
 				validated += complete
 			}
@@ -557,7 +561,7 @@ func (p *perMessageDeflate) decodeMessage(input *deflateMessageInput, limit int,
 		}
 	}
 	if text && validated != len(out) {
-		return nil, failWith(StatusInvalidFramePayloadData, ErrInvalidFrame)
+		return nil, failWith(StatusInvalidFramePayloadData, errInvalidFrame)
 	}
 	return out, nil
 }
@@ -606,5 +610,5 @@ func (c *Conn) handleControl(frame *wireFrame) (peerClosed bool, err error) {
 		c.completePing(frame.Payload)
 		return false, nil
 	}
-	return false, failWith(StatusProtocolError, ErrInvalidOpcode)
+	return false, failWith(StatusProtocolError, errInvalidOpcode)
 }

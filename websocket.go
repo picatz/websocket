@@ -720,14 +720,14 @@ func (c *Conn) readMessageLocked() (messageType opcode, data []byte, err error) 
 		switch frame.Opcode {
 		case opText, opBinary:
 			if messageTypeSet {
-				return 0, nil, failWith(StatusProtocolError, ErrUnexpectedFrame)
+				return 0, nil, failWith(StatusProtocolError, errUnexpectedFrame)
 			}
 			messageType = frame.Opcode
 			messageTypeSet = true
 
 			if !inPlace {
 				if c.maxBytes > 0 && len(frame.Payload) > c.maxBytes-len(message) {
-					return 0, nil, failWith(StatusMessageTooBig, ErrPayloadTooLarge)
+					return 0, nil, failWith(StatusMessageTooBig, ErrMessageTooLarge)
 				}
 				message = append(message, frame.Payload...)
 			}
@@ -741,7 +741,7 @@ func (c *Conn) readMessageLocked() (messageType opcode, data []byte, err error) 
 					validated += n
 				}
 				if !valid || (frame.Final && validated != len(message)) {
-					return 0, nil, failWith(StatusInvalidFramePayloadData, ErrInvalidFrame)
+					return 0, nil, failWith(StatusInvalidFramePayloadData, errInvalidFrame)
 				}
 			}
 			if frame.Final {
@@ -750,11 +750,11 @@ func (c *Conn) readMessageLocked() (messageType opcode, data []byte, err error) 
 
 		case opContinuation:
 			if !messageTypeSet {
-				return 0, nil, failWith(StatusProtocolError, ErrUnexpectedContinuation)
+				return 0, nil, failWith(StatusProtocolError, errUnexpectedContinuation)
 			}
 			if !inPlace {
 				if c.maxBytes > 0 && len(frame.Payload) > c.maxBytes-len(message) {
-					return 0, nil, failWith(StatusMessageTooBig, ErrPayloadTooLarge)
+					return 0, nil, failWith(StatusMessageTooBig, ErrMessageTooLarge)
 				}
 				message = append(message, frame.Payload...)
 			}
@@ -768,7 +768,7 @@ func (c *Conn) readMessageLocked() (messageType opcode, data []byte, err error) 
 					validated += n
 				}
 				if !valid || (frame.Final && validated != len(message)) {
-					return 0, nil, failWith(StatusInvalidFramePayloadData, ErrInvalidFrame)
+					return 0, nil, failWith(StatusInvalidFramePayloadData, errInvalidFrame)
 				}
 			}
 			if frame.Final {
@@ -842,7 +842,7 @@ func (c *Conn) WriteMessage(messageType MessageType, data []byte) error {
 		return errInvalidMessageType
 	}
 	if messageType == TextMessage && !utf8.Valid(data) {
-		return ErrInvalidFrame
+		return errInvalidUTF8
 	}
 	if c.closed.Load() {
 		return errClosed
@@ -900,7 +900,7 @@ func (c *Conn) WriteMessage(messageType MessageType, data []byte) error {
 // I/O do not poison writes.
 func (c *Conn) writeControlFrame(opcode opcode, data []byte) error {
 	if opcode != opClose && opcode != opPing && opcode != opPong {
-		return ErrInvalidOpcode
+		return errInvalidOpcode
 	}
 	if opcode == opClose {
 		if err := validateClosePayload(data); err != nil {
@@ -908,7 +908,7 @@ func (c *Conn) writeControlFrame(opcode opcode, data []byte) error {
 		}
 	}
 	if len(data) > 125 {
-		return fmt.Errorf("%w: control frame payload too large: %d", ErrPayloadTooLarge, len(data))
+		return fmt.Errorf("%w: control frame payload too large: %d", errInvalidFrame, len(data))
 	}
 	if c.closed.Load() {
 		return errClosed
@@ -966,18 +966,18 @@ func (c *Conn) readFrameHeader(frame *wireFrame) (uint64, error) {
 	switch frame.Opcode {
 	case opContinuation, opText, opBinary, opClose, opPing, opPong:
 	default:
-		return 0, failWith(StatusProtocolError, ErrInvalidOpcode)
+		return 0, failWith(StatusProtocolError, errInvalidOpcode)
 	}
 	if frame.Masked && !c.isServer {
-		return 0, failWith(StatusProtocolError, ErrMaskedFrame)
+		return 0, failWith(StatusProtocolError, errMaskedFrame)
 	}
 	if !frame.Masked && c.isServer {
-		return 0, failWith(StatusProtocolError, ErrUnmaskedFrame)
+		return 0, failWith(StatusProtocolError, errUnmaskedFrame)
 	}
 
 	// Control frames must not be fragmented
 	if !frame.Final && frame.Opcode >= 0x8 {
-		return 0, failWith(StatusProtocolError, ErrControlFrameFragment)
+		return 0, failWith(StatusProtocolError, errControlFrameFragment)
 	}
 
 	// Control frames must have payload length <= 125
@@ -1001,7 +1001,7 @@ func (c *Conn) readFrameHeader(frame *wireFrame) (uint64, error) {
 			}
 		}
 		if !consumable {
-			return 0, failWith(StatusProtocolError, ErrUnsupportedExtensions)
+			return 0, failWith(StatusProtocolError, errUnsupportedExtensions)
 		}
 	}
 
@@ -1014,7 +1014,7 @@ func (c *Conn) readFrameHeader(frame *wireFrame) (uint64, error) {
 		}
 		extLen := binary.BigEndian.Uint16(ext[:])
 		if extLen < 126 {
-			return 0, failWith(StatusProtocolError, ErrInvalidFrame)
+			return 0, failWith(StatusProtocolError, errInvalidFrame)
 		}
 		payloadLen = uint64(extLen)
 	case 127:
@@ -1024,14 +1024,14 @@ func (c *Conn) readFrameHeader(frame *wireFrame) (uint64, error) {
 		}
 		extLen := binary.BigEndian.Uint64(ext[:])
 		if extLen >= (1<<63) || extLen < 65536 {
-			return 0, failWith(StatusProtocolError, ErrInvalidFrame)
+			return 0, failWith(StatusProtocolError, errInvalidFrame)
 		}
 		payloadLen = extLen
 	}
 	// Validate lengths before converting to int or allocating payload storage.
 	if payloadLen > uint64(^uint(0)>>1) ||
 		(c.maxBytes > 0 && frame.Opcode < opClose && payloadLen > uint64(c.maxBytes)) {
-		return 0, failWith(StatusMessageTooBig, ErrPayloadTooLarge)
+		return 0, failWith(StatusMessageTooBig, ErrMessageTooLarge)
 	}
 
 	return payloadLen, nil
@@ -1050,15 +1050,15 @@ func (c *Conn) validateMessageHeader(frame *wireFrame, payloadLen uint64, starte
 	switch frame.Opcode {
 	case opText, opBinary:
 		if started {
-			return failWith(StatusProtocolError, ErrUnexpectedFrame)
+			return failWith(StatusProtocolError, errUnexpectedFrame)
 		}
 	case opContinuation:
 		if !started {
-			return failWith(StatusProtocolError, ErrUnexpectedContinuation)
+			return failWith(StatusProtocolError, errUnexpectedContinuation)
 		}
 	case opClose:
 		if payloadLen == 1 {
-			return failWith(StatusProtocolError, ErrInvalidFrame)
+			return failWith(StatusProtocolError, errInvalidFrame)
 		}
 	}
 	// Compressed data may shrink after decoding. Continuations are not
@@ -1066,7 +1066,7 @@ func (c *Conn) validateMessageHeader(frame *wireFrame, payloadLen uint64, starte
 	// and neither consume nor reset a fragmented message's remaining budget.
 	if c.maxBytes > 0 && frame.Opcode < opClose && !frame.Rsv1 &&
 		payloadLen > uint64(c.maxBytes-messageBytes) {
-		return failWith(StatusMessageTooBig, ErrPayloadTooLarge)
+		return failWith(StatusMessageTooBig, ErrMessageTooLarge)
 	}
 	return nil
 }
@@ -1192,12 +1192,12 @@ func readError(name string, err error) error {
 
 //go:noinline
 func controlTooLarge(n uint64) error {
-	return fmt.Errorf("%w: control frame payload too large: %d", ErrPayloadTooLarge, n)
+	return fmt.Errorf("%w: control frame payload too large: %d", errInvalidFrame, n)
 }
 
 //go:noinline
 func invalidOpcode(op opcode) error {
-	return fmt.Errorf("%w: %d", ErrInvalidOpcode, op)
+	return fmt.Errorf("%w: %d", errInvalidOpcode, op)
 }
 
 // processIncomingFrame passes a complete frame through the enabled extensions
@@ -1215,7 +1215,7 @@ func (c *Conn) processIncomingFrame(frame *wireFrame) error {
 			}
 			if err != nil {
 				cause := fmt.Errorf("extension %s failed to process incoming frame: %w", ext.Name(), err)
-				if _, builtin := ext.(*perMessageDeflate); builtin && err == ErrPayloadTooLarge {
+				if _, builtin := ext.(*perMessageDeflate); builtin && err == ErrMessageTooLarge {
 					return failWith(StatusMessageTooBig, cause)
 				}
 				return cause
@@ -1224,7 +1224,7 @@ func (c *Conn) processIncomingFrame(frame *wireFrame) error {
 	}
 	// Extensions consume the reserved bits whose semantics they implement.
 	if frame.Rsv1 || frame.Rsv2 || frame.Rsv3 {
-		return failWith(StatusProtocolError, ErrUnsupportedExtensions)
+		return failWith(StatusProtocolError, errUnsupportedExtensions)
 	}
 	return nil
 }
@@ -1310,7 +1310,7 @@ func (r *payloadReader) Read(p []byte) (int, error) {
 		// Invalid bytes prove a protocol failure even if this read also
 		// delivered a transport error. Otherwise preserve that error.
 		if r.text && !r.check(p[:n]) {
-			return n, failWith(StatusInvalidFramePayloadData, ErrInvalidFrame)
+			return n, failWith(StatusInvalidFramePayloadData, errInvalidFrame)
 		}
 	}
 	return n, err
@@ -1342,7 +1342,7 @@ func (r *payloadReader) check(p []byte) bool {
 
 func validateClosePayload(payload []byte) error {
 	if err := validateIncomingClosePayload(payload); err != nil {
-		return ErrInvalidFrame
+		return errInvalidFrame
 	}
 	return nil
 }
@@ -1352,14 +1352,14 @@ func validateIncomingClosePayload(payload []byte) error {
 		return nil
 	}
 	if len(payload) == 1 {
-		return failWith(StatusProtocolError, ErrInvalidFrame)
+		return failWith(StatusProtocolError, errInvalidFrame)
 	}
 	code := binary.BigEndian.Uint16(payload)
 	if code < 1000 || code >= 5000 || code == 1004 || code == 1005 || code == 1006 || (code >= 1015 && code < 3000) {
-		return failWith(StatusProtocolError, ErrInvalidFrame)
+		return failWith(StatusProtocolError, errInvalidFrame)
 	}
 	if !utf8.Valid(payload[2:]) {
-		return failWith(StatusInvalidFramePayloadData, ErrInvalidFrame)
+		return failWith(StatusInvalidFramePayloadData, errInvalidFrame)
 	}
 	return nil
 }

@@ -44,16 +44,16 @@ func TestReadFrameRejectsMalformedHeaders(t *testing.T) {
 		limit  int
 		want   error
 	}{
-		{"high bit length", []byte{0x82, 127, 0x80, 0, 0, 0, 0, 0, 0, 0}, false, 0, ErrInvalidFrame},
-		{"nonminimal 16 bit", []byte{0x82, 126, 0, 0}, false, 0, ErrInvalidFrame},
-		{"nonminimal 64 bit", []byte{0x82, 127, 0, 0, 0, 0, 0, 0, 0, 126}, false, 0, ErrInvalidFrame},
-		{"limit before payload", []byte{0x82, 126, 0x10, 0}, false, 32, ErrPayloadTooLarge},
-		{"masked server", []byte{0x82, 0x80, 0, 0, 0, 0}, false, 0, ErrMaskedFrame},
-		{"unmasked client", []byte{0x82, 0}, true, 0, ErrUnmaskedFrame},
-		{"reserved opcode", []byte{0x83, 0}, false, 0, ErrInvalidOpcode},
-		{"rsv without extension", []byte{0xC2, 0}, false, 0, ErrUnsupportedExtensions},
-		{"fragmented ping", []byte{0x09, 0}, false, 0, ErrControlFrameFragment},
-		{"oversized ping", []byte{0x89, 126}, false, 0, ErrPayloadTooLarge},
+		{"high bit length", []byte{0x82, 127, 0x80, 0, 0, 0, 0, 0, 0, 0}, false, 0, errInvalidFrame},
+		{"nonminimal 16 bit", []byte{0x82, 126, 0, 0}, false, 0, errInvalidFrame},
+		{"nonminimal 64 bit", []byte{0x82, 127, 0, 0, 0, 0, 0, 0, 0, 126}, false, 0, errInvalidFrame},
+		{"limit before payload", []byte{0x82, 126, 0x10, 0}, false, 32, ErrMessageTooLarge},
+		{"masked server", []byte{0x82, 0x80, 0, 0, 0, 0}, false, 0, errMaskedFrame},
+		{"unmasked client", []byte{0x82, 0}, true, 0, errUnmaskedFrame},
+		{"reserved opcode", []byte{0x83, 0}, false, 0, errInvalidOpcode},
+		{"rsv without extension", []byte{0xC2, 0}, false, 0, errUnsupportedExtensions},
+		{"fragmented ping", []byte{0x09, 0}, false, 0, errControlFrameFragment},
+		{"oversized ping", []byte{0x89, 126}, false, 0, errInvalidFrame},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -79,11 +79,11 @@ func TestReadMessageFragmentation(t *testing.T) {
 		wantErr error
 	}{
 		{"valid", []byte{0x01, 1, 'a', 0x80, 1, 'b'}, 2, "ab", nil},
-		{"unexpected continuation", []byte{0x80, 1, 'a'}, 2, "", ErrUnexpectedContinuation},
-		{"new message during fragmentation", []byte{0x01, 1, 'a', 0x81, 1, 'b'}, 2, "", ErrUnexpectedFrame},
-		{"continuation exceeds limit", []byte{0x01, 1, 'a', 0x80, 2, 'b', 'c'}, 2, "", ErrPayloadTooLarge},
+		{"unexpected continuation", []byte{0x80, 1, 'a'}, 2, "", errUnexpectedContinuation},
+		{"new message during fragmentation", []byte{0x01, 1, 'a', 0x81, 1, 'b'}, 2, "", errUnexpectedFrame},
+		{"continuation exceeds limit", []byte{0x01, 1, 'a', 0x80, 2, 'b', 'c'}, 2, "", ErrMessageTooLarge},
 		{"split utf8", []byte{0x01, 1, 0xC2, 0x80, 1, 0xA2}, 2, "¢", nil},
-		{"invalid utf8", []byte{0x81, 1, 0xFF}, 2, "", ErrInvalidFrame},
+		{"invalid utf8", []byte{0x81, 1, 0xFF}, 2, "", errInvalidFrame},
 		{"interleaved ping", []byte{0x01, 1, 'a', 0x89, 1, 'p', 0x80, 1, 'b'}, 2, "ab", nil},
 	}
 	for _, tt := range tests {
@@ -128,8 +128,8 @@ func TestReadFrameArchitectureLimit(t *testing.T) {
 	wire[0], wire[1] = 0x82, 127
 	binary.BigEndian.PutUint64(wire[2:], 1<<32)
 	_, err := frameConn(wire, false, 0).readFrame()
-	if !errors.Is(err, ErrPayloadTooLarge) {
-		t.Fatalf("error = %v, want ErrPayloadTooLarge", err)
+	if !errors.Is(err, ErrMessageTooLarge) {
+		t.Fatalf("error = %v, want ErrMessageTooLarge", err)
 	}
 }
 
@@ -171,8 +171,8 @@ func TestClosePayloadValidation(t *testing.T) {
 				if !errors.Is(err, io.EOF) {
 					t.Fatalf("error = %v, want EOF", err)
 				}
-			} else if !errors.Is(err, ErrInvalidFrame) {
-				t.Fatalf("error = %v, want ErrInvalidFrame", err)
+			} else if !errors.Is(err, errInvalidFrame) {
+				t.Fatalf("error = %v, want errInvalidFrame", err)
 			}
 			c = frameConn(nil, true, 0)
 			err = c.writeControlFrame(opClose, tt.payload)
@@ -191,14 +191,14 @@ func TestWriteRejectsInvalidOpcodesAndPayload(t *testing.T) {
 		}
 	}
 	for _, opcode := range []opcode{opContinuation, opText, opBinary, 3, 16} {
-		if !errors.Is(c.writeControlFrame(opcode, nil), ErrInvalidOpcode) {
+		if !errors.Is(c.writeControlFrame(opcode, nil), errInvalidOpcode) {
 			t.Fatalf("writeControlFrame accepted %v", opcode)
 		}
 	}
-	if !errors.Is(c.WriteMessage(TextMessage, []byte{0xff}), ErrInvalidFrame) {
+	if !errors.Is(c.WriteMessage(TextMessage, []byte{0xff}), errInvalidUTF8) {
 		t.Fatal("accepted invalid UTF-8")
 	}
-	if !errors.Is(c.writeControlFrame(opPing, make([]byte, 126)), ErrPayloadTooLarge) {
+	if !errors.Is(c.writeControlFrame(opPing, make([]byte, 126)), errInvalidFrame) {
 		t.Fatal("accepted oversized ping")
 	}
 }
@@ -235,8 +235,8 @@ func TestPerMessageDeflateBoundsDecodedSize(t *testing.T) {
 			c.extensions = []frameExtension{pmd}
 			_, data, err := c.ReadMessage()
 			if limit < 129 {
-				if !errors.Is(err, ErrPayloadTooLarge) {
-					t.Fatalf("error = %v, want ErrPayloadTooLarge", err)
+				if !errors.Is(err, ErrMessageTooLarge) {
+					t.Fatalf("error = %v, want ErrMessageTooLarge", err)
 				}
 			} else if err != nil || len(data) != 129 {
 				t.Fatalf("message length = %d, error = %v", len(data), err)

@@ -97,7 +97,7 @@ func highLevelReader(t *testing.T, server bool, wire []byte, limit ...int) (*Con
 func requireLimitFailure(t *testing.T, c *Conn, raw *memoryConn) {
 	t.Helper()
 	_, p, err := c.ReadMessage()
-	if !errors.Is(err, ErrPayloadTooLarge) || p != nil {
+	if !errors.Is(err, ErrMessageTooLarge) || p != nil {
 		t.Fatalf("payload %d error %v", len(p), err)
 	}
 	if _, _, err := c.ReadMessage(); !errors.Is(err, net.ErrClosed) {
@@ -160,7 +160,7 @@ func TestHighLevelDefaultHeaderLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := c.ReadMessage(); !errors.Is(err, ErrPayloadTooLarge) || raw.bodyReads != 0 {
+	if _, _, err := c.ReadMessage(); !errors.Is(err, ErrMessageTooLarge) || raw.bodyReads != 0 {
 		t.Fatalf("error %v body reads %d", err, raw.bodyReads)
 	}
 }
@@ -342,7 +342,7 @@ func TestHighLevelDefaultLoopbackServer(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-			} else if !errors.Is(err, ErrPayloadTooLarge) {
+			} else if !errors.Is(err, ErrMessageTooLarge) {
 				t.Fatalf("oversize: %v", err)
 			}
 		})
