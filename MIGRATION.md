@@ -150,9 +150,34 @@ errors also leave the response untouched. Use the executable examples for a
 minimal 403/426/400 mapping (and 500 for missing hijacking support); after `ErrHandshakeFailed`, a failed hijack or 101 write
 may already own the transport, so do not write another HTTP response.
 
+## Compression negotiation and composition
+
+`permessage-deflate` now sends with context takeover, fragments large compressed
+messages into 64 KiB frames, and supports every window from 8 to 15 bits. Peers
+that follow RFC 7692 need no change; these are the observable differences:
+
+- A client's default offer is `permessage-deflate; client_max_window_bits`,
+  declaring that the server may select any client window. Previously the offer
+  had no parameters.
+- `WithClientMaxWindowBits(8..14)` for `Dial` and `WithServerMaxWindowBits(8..14)`
+  for `Upgrade` are honored instead of being rejected before connecting. A server
+  accepts an offered `server_max_window_bits` below 15 instead of declining it,
+  and includes a configured server window even when the client offered none
+  (RFC 7692, Section 7.1.2.1).
+- Built-in compression combined with an enabled custom extension is supported
+  instead of failing with `ErrUnsupportedExtensionComposition`. That error now
+  means more than one enabled built-in instance, or an extension changing RSV1.
+- With context takeover, a failure part-way through sending a compressed
+  message poisons later writes on that connection.
+- Each connection keeps at most `DefaultCompressionMemoryLimit` (64 KiB) of
+  compression state between messages by default: its send and receive history,
+  not a whole compressor. Negotiated parameters are unchanged. Pass
+  `WithCompressionMemoryLimit(0)` to keep a compressor per connection instead,
+  which is faster per message and uses about 0.5–1 MiB.
+
 ## Verification scope
 
 Default-policy tests exercise omitted options separately from configured protocol
 tests. The unchanged Autobahn testee explicitly chooses 64 MiB; its results do
-not demonstrate default-policy behavior. Compression remains opt-in and
-experimental, and existing conformance failures must remain visible.
+not demonstrate default-policy behavior. Compression remains opt-in, and any
+conformance failures must remain visible.

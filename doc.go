@@ -78,6 +78,8 @@
 // competing updates to the shared transport deadlines. WriteMessage does not
 // modify the caller's payload. Ping and pong
 // handlers run synchronously from ReadMessage and must not call it recursively.
+// Conn.Ping waits for the matching Pong, which only a concurrent ReadMessage
+// loop can deliver.
 // An extension instance must not be shared between connections.
 //
 // # Extension negotiation
@@ -90,18 +92,65 @@
 // comma-joined peer header and must validate their own parameter and repetition
 // semantics. Multiple offers for the same extension remain valid alternatives.
 //
+// # Compression
+//
+// NewPerMessageDeflateExtension opts into permessage-deflate ([RFC 7692]).
+// Messages are compressed as one DEFLATE stream across any number of frames,
+// with context takeover in both directions unless a no_context_takeover
+// parameter is negotiated, and with any window from 8 to 15 bits. Options set
+// the level, a size threshold below which messages are sent uncompressed, and
+// WithCompressionMemoryLimit, which bounds the state a connection keeps between
+// messages by negotiating smaller windows or no context takeover. The default
+// limit, DefaultCompressionMemoryLimit, keeps only the 32 KiB histories in
+// each direction; a limit of 0 keeps a whole compressor per connection, which
+// is faster but uses up to about 1 MiB. Compressors and decompressors are
+// pooled across connections while idle.
+//
+// Custom frame extensions compose with compression: a message is compressed and
+// then each frame passes through the custom extensions in registration order,
+// and on receive each frame passes through them before it is decompressed.
+// Built-in compression owns RSV1; changing it, or enabling a second built-in
+// instance, fails with ErrUnsupportedExtensionComposition.
+//
+// # Common patterns
+//
+// Read each connection from one goroutine, calling Conn.ReadMessage in a loop
+// until it returns an error. When the peer closes, the error is a *CloseError,
+// which matches errors.Is(err, io.EOF); CloseStatus(err) gives its status
+// code. Control frames are handled inside that loop: ReadMessage answers Pings
+// and delivers Pongs, so a connection nobody reads cannot answer a keepalive
+// and Conn.Ping cannot complete.
+//
+// Writes may run on another goroutine, concurrently with the read loop. When
+// several goroutines produce messages for one connection, as in a chat room or
+// a pub/sub broker, give the connection a bounded queue drained by a single
+// writer goroutine, and disconnect a peer whose queue is full instead of
+// blocking every other sender on it. Bound each write with
+// Conn.WriteMessageContext and a timeout, so a stalled peer cannot hold the
+// writer forever.
+//
+// To detect dead peers, call Conn.Ping on a ticker with a context timeout, and
+// close the connection when it fails. Ping waits for the matching Pong, which
+// the read loop delivers; a timeout leaves the connection open, so the decision
+// to close stays with the caller.
+//
+// Conn.Close may be called from any goroutine, for example a writer that hit
+// an error, and interrupts a blocked ReadMessage. Return from the read loop on
+// any error: the connection is unusable after one.
+//
+// The examples directory has a runnable, tested program for each pattern:
+// [github.com/picatz/websocket/examples/keepalive] for pings and dead peer
+// detection, [github.com/picatz/websocket/examples/chat] for broadcast to every
+// client, and [github.com/picatz/websocket/examples/pubsub] for topic
+// subscriptions.
+//
 // # Limitations
 //
-// The optional permessage-deflate extension is experimental. Compressed message
-// receive fragmentation, incoming context takeover, and consecutive finalized
-// DEFLATE streams are supported. Go's inflater may buffer up to 32 KiB of decoded
-// output before exposing it, delaying UTF-8/size rejection while input is withheld.
-// Decoded limits do not bound CPU time; use transport deadlines. Outgoing history
-// reuse is not optimized. Enabled PMD cannot be combined with enabled custom
-// extensions or another PMD instance (ErrUnsupportedExtensionComposition).
-// Direct built-in frame callbacks require complete messages; use Conn for wire
-// fragmentation. Do not run those callbacks concurrently with Conn I/O.
-// Full compression parameter compatibility remains experimental. Subprotocol offers are unique
+// Go's inflater may buffer up to 32 KiB of decoded permessage-deflate output
+// before exposing it, delaying UTF-8/size rejection while input is withheld.
+// Decoded limits do not bound CPU time; use transport deadlines. Direct built-in
+// frame callbacks require complete messages; use Conn for wire fragmentation.
+// Do not run those callbacks concurrently with Conn I/O. Subprotocol offers are unique
 // HTTP tokens; any selected protocol must be exactly one case-sensitive offered
 // token. Omitting selection is allowed. WithSubprotocols offers protocols from
 // Dial, WithUpgradeSubprotocols selects the server's most preferred offered
@@ -118,6 +167,7 @@
 //
 // See the executable examples for local client/server usage.
 //
-// [RFC 6455]: https://www.rfc-editor.org/rfc/rfc6455.html
 // [RFC 7692]: https://www.rfc-editor.org/rfc/rfc7692.html
+//
+// [RFC 6455]: https://www.rfc-editor.org/rfc/rfc6455.html
 package websocket

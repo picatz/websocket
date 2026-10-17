@@ -1,8 +1,8 @@
 # websocket
  
 This package provides a small, standard-library-only [WebSocket] client and server implementation for Go 1.27 and later.
-It supports text and binary messages, ping/pong/close frames, and uncompressed message fragmentation.
-The optional `permessage-deflate` implementation is experimental; see the limitations below.
+It supports text and binary messages, ping/pong/close frames, message fragmentation, and
+optional [`permessage-deflate`](#compression) compression with context takeover and every window size.
 
 [WebSocket]: https://en.wikipedia.org/wiki/WebSocket
 [RFC 6455]: https://tools.ietf.org/html/rfc6455
@@ -151,6 +151,69 @@ conn.SetPongHandler(func(appData string) error {
 })
 ```
 
+`Ping` sends a Ping and waits for the matching Pong, for keepalives and
+liveness checks. Pongs are processed by `ReadMessage`, so keep a read loop
+running; custom pong handlers still see every Pong:
+
+```go
+go func() {
+	for {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+	}
+}()
+
+ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+defer cancel()
+if err := conn.Ping(ctx); err != nil {
+	conn.Close() // the peer did not answer in time
+}
+```
+
+Each call uses a distinct payload, so concurrent pings are matched
+independently. A context that ends while the Ping frame is being written aborts
+the connection, like `WriteMessageContext`; one that ends while waiting for the
+Pong only returns its error, leaving the decision to close to the caller. A
+connection that closes first makes `Ping` return an error matching
+`io.ErrClosedPipe`.
+
+### Examples
+
+Each directory under [`examples`](examples) is a small program with tests:
+
+- [`echo`](examples/echo) echoes every message back.
+- [`keepalive`](examples/keepalive) pings clients on an interval and drops
+  those that stop answering.
+- [`chat`](examples/chat) broadcasts messages to every connected client, with a
+  bounded send queue per client.
+- [`pubsub`](examples/pubsub) delivers messages by topic over a small JSON
+  protocol.
+- [`rpc`](examples/rpc) answers JSON requests sent as binary messages.
+
+### Browser and WebAssembly clients
+
+Programs compiled with `GOOS=js GOARCH=wasm` cannot open TCP connections, so
+`Dial` is not available to them. The [`browser`](browser) subpackage drives the
+host's own `WebSocket` object instead. Its methods are a subset of
+`*websocket.Conn`'s with identical signatures, and a peer close is a
+`*websocket.CloseError`. The intended direction is for `websocket.Dial` itself
+to work under `GOOS=js`:
+
+```go
+conn, err := browser.Dial(ctx, "wss://example.com/socket", browser.WithSubprotocols("chat"))
+if err != nil {
+	return err
+}
+defer conn.Close()
+```
+
+The browser handles the handshake, framing, Ping/Pong and compression, so
+headers, TLS, proxies and control frames are out of the program's hands, and
+dial failures carry no detail. See the package documentation for the full list.
+Its tests run in Node.js 22 or later against a native Go server as part of
+`go test ./...`, and are skipped when Node is not installed.
+
 ## Limits and connection lifetime
 
 `Dial` and `Upgrade` default to `DefaultMaxMessageSize`, 1 MiB (1,048,576 bytes).
@@ -162,10 +225,11 @@ Non-positive `WithMaxBytes` options are ignored, including after a positive opti
 
 Limits apply to each incoming data-frame wire payload and the reassembled decoded
 message. Headers, masking keys and interleaved controls do not consume the message
-budget; outgoing messages are not capped. Supported unfragmented built-in
-compression bounds both encoded and decoded bytes. Incompressible data can fit
-the decoded budget but exceed the encoded budget, so allow headroom when choosing
-a compression limit. The wire limit is per frame, not aggregate compressed input.
+budget; outgoing messages are not capped. Built-in compression bounds each
+encoded frame and the decoded message. Incompressible data can fit the decoded
+budget but exceed the encoded budget in a single frame, so allow headroom when
+choosing a compression limit. The wire limit is per frame, not aggregate
+compressed input.
 Custom extensions must bound their own intermediate allocations; their final
 results are checked but extension code is trusted.
 
@@ -261,6 +325,71 @@ Protocols are case-sensitive HTTP tokens and must be unique. Setting
 `Sec-WebSocket-Protocol` through `WithHeader` or `WithResponseHeader` still
 works, but combining it with the matching option is an error.
 
+## Compression
+
+`permessage-deflate` ([RFC 7692]) is opt-in. Create one extension per connection;
+it holds that connection's compression state.
+
+```go
+conn, _, err := websocket.Dial(ctx, "wss://example.com/ws",
+	websocket.WithExtensions(websocket.NewPerMessageDeflateExtension()))
+
+conn, err := websocket.Upgrade(w, r,
+	websocket.WithUpgradeExtensions(websocket.NewPerMessageDeflateExtension(
+		websocket.WithCompressionMemoryLimit(16<<10),
+	)))
+```
+
+- **Fragmentation.** Messages are compressed and decompressed as one DEFLATE
+  stream across any number of frames ([Section 6]). Large outgoing messages are
+  sent as 64 KiB frames, so the encoded message is never buffered whole.
+- **Context takeover.** Both directions reuse history between messages
+  ([Section 7.1.1]) unless a `*_no_context_takeover` parameter is negotiated, so
+  repetitive traffic compresses to a few bytes per message.
+- **Window sizes.** Every window from 8 to 15 bits ([Section 7.1.2]) is supported
+  for sending and receiving. A client offers a bare `client_max_window_bits` by
+  default so the server may choose; `WithClientMaxWindowBits` and
+  `WithServerMaxWindowBits` set explicit bounds in either role.
+- **Level and threshold.** `WithCompressionLevel` takes a `compress/flate` level.
+  `WithCompressionThreshold(n)` sends messages shorter than `n` bytes uncompressed,
+  which [Section 6] allows per message.
+- **Memory.** The state a connection keeps between messages depends on the mode.
+  Buffers used while a message is encoded or decoded come from pools shared by
+  all connections and are not part of this.
+
+  | Mode | Kept per idle connection |
+  | --- | --- |
+  | Default (`WithCompressionMemoryLimit(64<<10)`) | Up to 64 KiB: 32 KiB of send and 32 KiB of receive history |
+  | `WithCompressionMemoryLimit(n)` | At most `n` bytes of send and receive history |
+  | `WithCompressionMemoryLimit(0)` (unlimited) | A whole compressor (about 0.5–1 MiB, by level) plus up to 32 KiB of receive history |
+  | `no_context_takeover` in both directions | Nothing |
+
+  A memory limit is enforced through negotiation: each direction gets half and
+  uses the largest window that fits, or no context takeover when none does. The
+  default limit fits full 32 KiB windows, so it changes nothing on the wire.
+  With a limit, the sender borrows a pooled encoder for each message and
+  re-indexes its retained history first. That costs CPU per message: tens of
+  microseconds for a small message, and about twice the time of the unlimited
+  mode for large ones, in exchange for a much smaller footprint per connection
+  and usually a better ratio. `WithCompressionMemoryLimit(0)` selects the
+  faster mode for clients or servers with few connections.
+- **Other extensions.** Custom frame extensions compose with compression. On
+  send, a message is compressed first, then each frame passes through the custom
+  extensions in registration order. On receive, each frame passes through them
+  first and is then decompressed. Built-in compression owns RSV1 ([Section 5]):
+  an extension that changes it fails with `ErrUnsupportedExtensionComposition`,
+  as does enabling more than one built-in instance.
+
+Received data is checked as it decodes, but Go's inflater can hold up to 32 KiB of
+output before exposing it, so invalid UTF-8 or an exceeded small limit may be
+detected only once more compressed input arrives. A size limit does not bound CPU
+time; use transport deadlines for untrusted peers.
+
+[Section 5]: https://www.rfc-editor.org/rfc/rfc7692#section-5
+[Section 6]: https://www.rfc-editor.org/rfc/rfc7692#section-6
+[Section 7.1.1]: https://www.rfc-editor.org/rfc/rfc7692#section-7.1.1
+[Section 7.1.2]: https://www.rfc-editor.org/rfc/rfc7692#section-7.1.2
+
 ## Client proxies and custom dialers
 
 `Dial` connects directly by default. `WithProxy` takes the same function type as
@@ -329,32 +458,14 @@ write another HTTP response.
   case-insensitively; see `WithHeader` and `WithResponseHeader` for the lists.
   Ordinary repeated fields (including `Set-Cookie`) are preserved. Callers still
   own ordinary field-specific semantics
-- `permessage-deflate` is experimental. The receive path streams fragmented
-  messages, supports incoming context takeover and consecutive finalized DEFLATE
-  streams, and bounds decoded output with the configured limit. It uses Go's
-  inflater, which can retain up to a 32 KiB output window before exposing data;
-  invalid UTF-8 or an exceeded small decoded limit may therefore remain hidden
-  while waiting for more compressed input. A size limit is not a CPU/time limit;
-  use transport deadlines for untrusted peers. Outgoing compression still resets
-  its history for each message and is not optimized for takeover
-- This experimental slice rejects actually enabled built-in compression combined
-  with another enabled extension, including multiple built-in instances, with
-  `ErrUnsupportedExtensionComposition`. Disabled registrations and custom-only
-  chains remain supported. General composition needs an explicit future contract
-  for message/frame transforms, ordering, and reserved-bit ownership
 - Direct built-in `ProcessIncomingFrame` and `ProcessOutgoingFrame` callbacks
   accept complete Text/Binary messages only; nonfinal data and Continuation
   callbacks return `ErrFragmentedCompression`. Controls and disabled callbacks
   remain no-ops. Use `Conn` for fragmented wire messages. Do not use direct
   callbacks concurrently with Conn I/O or share an instance between connections
-- The experimental compressor supports only a 15-bit (32 KiB) send window.
-  `Dial` rejects `WithClientMaxWindowBits(8..14)` before connecting; `Upgrade`
-  rejects `WithServerMaxWindowBits(8..14)` before hijacking. A server declines
-  individual offers requiring a smaller server send window and may select a
-  supported alternative. A client rejects unsupported selected send windows.
-  Peer send windows of 8–15 are accepted, but do not reduce decoder allocation.
-  Window size is independent of compression level. Values outside 8–15 retain
-  the legacy option behavior of being ignored
+- Once a compressed message has started, a failure while sending it (a
+  transport error, or a custom extension rejecting a frame) poisons later
+  writes, because the frame stream and compression context cannot be resumed
 - Any `ReadMessage` error terminates the connection. The detecting call preserves
   its original error; later reads and valid writes fail with `io.ErrClosedPipe`.
   Known protocol, invalid UTF-8, and configured size violations make a single
