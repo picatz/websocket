@@ -119,6 +119,8 @@
 //     protocol.
 //   - [github.com/picatz/websocket/examples/rpc]: JSON-RPC 2.0 with concurrent
 //     calls.
+//   - [github.com/picatz/websocket/examples/tunnel]: forwarding TCP
+//     connections with NetConn.
 //   - [github.com/picatz/websocket/examples/browser]: a Go WebAssembly page.
 //
 // [RFC 6455]: https://www.rfc-editor.org/rfc/rfc6455.html
