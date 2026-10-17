@@ -1032,11 +1032,35 @@ func (c *Conn) readFrameHeader(frame *wireFrame) (uint64, error) {
 	}
 	// Validate lengths before converting to int or allocating payload storage.
 	if payloadLen > uint64(^uint(0)>>1) ||
-		(c.maxBytes > 0 && frame.Opcode < opClose && payloadLen > uint64(c.maxBytes)) {
+		(c.maxBytes > 0 && frame.Opcode < opClose && payloadLen > c.frameLimit()) {
 		return 0, failWith(StatusMessageTooBig, ErrMessageTooLarge)
 	}
 
 	return payloadLen, nil
+}
+
+// frameLimit returns the largest data frame payload readFrameHeader accepts
+// when maxBytes is positive. Without compression it is maxBytes itself.
+//
+// With permessage-deflate any frame may belong to a compressed message, whose
+// decoded size is checked against maxBytes as it inflates, so the encoded
+// frame may be larger than the message it carries: deflate expands data it
+// cannot compress, such as media or encrypted payloads, and browsers compress
+// every message. The limit allows for the bound zlib's deflateBound gives for
+// any settings, about 13% over maxBytes, plus the flush that ends each
+// message, so that no message of at most maxBytes is refused for its encoded
+// size. Uncompressed messages are still held to maxBytes exactly by
+// validateMessageHeader.
+//
+// https://github.com/madler/zlib/blob/v1.3.1/deflate.c#L838-L842
+func (c *Conn) frameLimit() uint64 {
+	n := uint64(c.maxBytes)
+	for _, ext := range c.extensions {
+		if _, ok := ext.(*perMessageDeflate); ok && ext.IsEnabled() {
+			return n + n>>3 + n>>8 + n>>9 + 4 + 6
+		}
+	}
+	return n
 }
 
 // validateMessageHeader rejects a frame before its payload is read whenever

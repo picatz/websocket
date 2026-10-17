@@ -79,9 +79,10 @@ type Dialer struct {
 	// settings. Each connection gets its own compression state.
 	Compression *Compression
 
-	// MaxMessageSize bounds each incoming frame and reassembled message in
-	// bytes, including data decompressed by Compression. Zero means
-	// DefaultMaxMessageSize; a negative value means no limit.
+	// MaxMessageSize bounds each incoming message in bytes, counted after
+	// decompression: a message one byte over it ends the connection with
+	// StatusMessageTooBig. Zero means DefaultMaxMessageSize; a negative value
+	// means no limit.
 	MaxMessageSize int
 
 	// MaxResponseHeaderBytes bounds the HTTP response head: the status line,
@@ -193,9 +194,10 @@ type Upgrader struct {
 	// compression state.
 	Compression *Compression
 
-	// MaxMessageSize bounds each incoming frame and reassembled message in
-	// bytes, including data decompressed by Compression. Zero means
-	// DefaultMaxMessageSize; a negative value means no limit.
+	// MaxMessageSize bounds each incoming message in bytes, counted after
+	// decompression: a message one byte over it ends the connection with
+	// StatusMessageTooBig. Zero means DefaultMaxMessageSize; a negative value
+	// means no limit.
 	MaxMessageSize int
 
 	// Error, if non-nil, writes the HTTP error response when the handshake
@@ -315,9 +317,10 @@ type ConnConfig struct {
 	// valid. If nil, the zero Compression is used.
 	Compression *Compression
 
-	// MaxMessageSize bounds each incoming frame and reassembled message in
-	// bytes, including decompressed data. Zero means DefaultMaxMessageSize; a
-	// negative value means no limit.
+	// MaxMessageSize bounds each incoming message in bytes, counted after
+	// decompression: a message one byte over it ends the connection with
+	// StatusMessageTooBig. Zero means DefaultMaxMessageSize; a negative value
+	// means no limit.
 	MaxMessageSize int
 }
 
