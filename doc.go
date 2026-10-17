@@ -61,7 +61,8 @@
 // waiting for the peer's reply. Conn.CloseWithStatus sends another code and an
 // optional reason. When the
 // peer closes, ReadMessage returns a *CloseError, which matches io.EOF with
-// errors.Is; CloseStatus extracts its code from any error.
+// errors.Is; CloseStatus extracts its code from any error. After either side
+// closes, operations return errors matching net.ErrClosed.
 //
 // # Limits and security
 //

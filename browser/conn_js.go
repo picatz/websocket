@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"slices"
 	"sync"
 	"syscall/js"
@@ -20,6 +21,17 @@ import (
 // deliberately does not say why: a refused connection, a TLS failure and a
 // rejected handshake look the same to the program.
 var ErrDialFailed = errors.New("browser: websocket dial failed")
+
+// errClosed is returned by operations on a closed or closing connection. Like
+// websocket.Conn's, it matches net.ErrClosed.
+var errClosed error = closedError{}
+
+type closedError struct{}
+
+func (closedError) Error() string { return "browser: use of closed connection" }
+
+// Is reports whether target is net.ErrClosed.
+func (closedError) Is(target error) bool { return target == net.ErrClosed }
 
 // readyState values of the host WebSocket object.
 //
@@ -227,7 +239,7 @@ func (c *Conn) onClose(ev js.Value) {
 }
 
 // closeEventError converts a close event into ReadMessage's terminal error.
-// After a local Close it is io.ErrClosedPipe. A clean close from the peer is a
+// After a local Close it matches net.ErrClosed. A clean close from the peer is a
 // *websocket.CloseError carrying the peer's code and reason, which matches
 // io.EOF like websocket.Conn's. A close without a closing handshake, which the
 // host reports as code 1006 (Abnormal Closure), matches io.ErrUnexpectedEOF.
@@ -235,7 +247,7 @@ func (c *Conn) onClose(ev js.Value) {
 // https://websockets.spec.whatwg.org/#the-closeevent-interface
 func closeEventError(ev js.Value, closedLocally bool) error {
 	if closedLocally {
-		return io.ErrClosedPipe
+		return errClosed
 	}
 	code := websocket.StatusCode(ev.Get("code").Int())
 	if !ev.Get("wasClean").Bool() || code == websocket.StatusAbnormalClosure {
@@ -277,7 +289,7 @@ func (c *Conn) signal() {
 // ReadMessage returns the next data message. Messages that arrived before the
 // connection ended are returned first. Then ReadMessage returns a
 // *websocket.CloseError carrying the peer's code and reason if the peer closed
-// the connection, which matches io.EOF with errors.Is; io.ErrClosedPipe after
+// the connection, which matches io.EOF with errors.Is; an error matching net.ErrClosed after
 // Close; an error matching websocket.ErrPayloadTooLarge if a message exceeded
 // the limit; or one matching io.ErrUnexpectedEOF if the host reported a
 // failure or the connection closed without a closing handshake.
@@ -304,7 +316,7 @@ func (c *Conn) ReadMessageContext(ctx context.Context) (messageType websocket.Op
 			err := c.err
 			if c.closed {
 				// After Close, do not wait for the host's close event.
-				err = io.ErrClosedPipe
+				err = errClosed
 			}
 			c.mu.Unlock()
 			return 0, nil, err
@@ -350,8 +362,8 @@ func (c *Conn) WriteMessage(messageType websocket.Opcode, data []byte) error {
 // websocket.Conn.WriteMessageContext the connection stays open. Writes are
 // serialized, so concurrent writers keep their order and share the wait.
 //
-// It returns io.ErrClosedPipe once the connection is closing or closed, where
-// the host would silently discard the message.
+// It returns an error matching net.ErrClosed once the connection is closing
+// or closed, where the host would silently discard the message.
 func (c *Conn) WriteMessageContext(ctx context.Context, messageType websocket.Opcode, data []byte) error {
 	var payload any
 	switch messageType {
@@ -388,7 +400,7 @@ func (c *Conn) waitForBuffer(ctx context.Context) error {
 		ended := c.closed || c.err != nil
 		c.mu.Unlock()
 		if ended || c.ws.Get("readyState").Int() != stateOpen {
-			return io.ErrClosedPipe
+			return errClosed
 		}
 		if c.ws.Get("bufferedAmount").Int() <= writeHighWaterMark {
 			return nil

@@ -69,10 +69,10 @@ func TestReadMessageRejectsUnfinishedTextFrame(t *testing.T) {
 						t.Fatalf("close code %d", code)
 					}
 					before := bytes.Clone(c.written.Bytes())
-					if _, _, err := ws.ReadMessage(); err != io.ErrClosedPipe {
+					if _, _, err := ws.ReadMessage(); !errors.Is(err, net.ErrClosed) {
 						t.Fatal(err)
 					}
-					if err := ws.WriteMessage(TextMessage, []byte("later")); err != io.ErrClosedPipe {
+					if err := ws.WriteMessage(TextMessage, []byte("later")); !errors.Is(err, net.ErrClosed) {
 						t.Fatal(err)
 					}
 					if c.closes != 1 || !bytes.Equal(before, c.written.Bytes()) {
@@ -154,10 +154,10 @@ func TestReadMessagePartialTextDeadlineTerminal(t *testing.T) {
 		if !errors.As(err, &ne) || !ne.Timeout() {
 			t.Fatalf("timeout type lost: %v", err)
 		}
-		if _, _, err := c.ReadMessage(); err != io.ErrClosedPipe {
+		if _, _, err := c.ReadMessage(); !errors.Is(err, net.ErrClosed) {
 			t.Fatalf("retry not terminal: %v", err)
 		}
-		if err := c.WriteMessage(TextMessage, []byte("later")); err != io.ErrClosedPipe {
+		if err := c.WriteMessage(TextMessage, []byte("later")); !errors.Is(err, net.ErrClosed) {
 			t.Fatalf("write not terminal: %v", err)
 		}
 		raw.Close()

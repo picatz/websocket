@@ -23,45 +23,15 @@ import (
 	"unicode/utf8"
 )
 
-var (
-	ErrInvalidExtension        = errors.New("websocket: invalid extension negotiation")
-	ErrInvalidSubprotocol      = errors.New("websocket: invalid subprotocol negotiation")
-	ErrBadHandshake            = errors.New("websocket: bad handshake")
-	ErrResponseHeaderTooLarge  = errors.New("websocket: response header too large")
-	ErrOriginNotAllowed        = errors.New("websocket: origin not allowed")
-	ErrUnsupportedVersion      = errors.New("websocket: unsupported WebSocket version")
-	ErrInvalidHandshakeHeader  = errors.New("websocket: invalid custom handshake header")
-	ErrInvalidUpgradeHeader    = errors.New("websocket: invalid Upgrade header")
-	ErrInvalidConnectionHeader = errors.New("websocket: invalid Connection header")
-	ErrMissingSecKey           = errors.New("websocket: missing Sec-WebSocket-Key header")
-	ErrInvalidSecKey           = errors.New("websocket: invalid Sec-WebSocket-Key header")
-	ErrInvalidSecAccept        = errors.New("websocket: invalid Sec-WebSocket-Accept header")
-	ErrNotHijacker             = errors.New("websocket: response does not implement http.Hijacker")
-	ErrInvalidMethod           = errors.New("websocket: invalid request method")
-	ErrHandshakeFailed         = errors.New("websocket: handshake failed")
-	ErrFailedToGenerateKey     = errors.New("websocket: failed to generate key")
-	ErrInvalidFrame            = errors.New("websocket: invalid frame")
-	ErrUnexpectedFrame         = errors.New("websocket: unexpected frame")
-	ErrControlFrameFragment    = errors.New("websocket: control frames cannot be fragmented")
-	ErrPayloadTooLarge         = errors.New("websocket: payload too large")
-	ErrUnexpectedContinuation  = errors.New("websocket: unexpected continuation frame")
-	ErrUnmaskedFrame           = errors.New("websocket: received unmasked frame from client")
-	ErrMaskedFrame             = errors.New("websocket: received masked frame from server")
-	ErrUnsupportedExtensions   = errors.New("websocket: unsupported extensions (RSV bits are set)")
-	ErrInvalidOpcode           = errors.New("websocket: invalid opcode")
-	ErrWriteFailed             = errors.New("websocket: write failed")
-	ErrAlreadyClosed           = errors.New("websocket: connection already closed")
-	ErrProxy                   = errors.New("websocket: proxy tunnel failed")
-)
-
 // DefaultMaxMessageSize is the incoming payload limit used when a Dialer,
-// Upgrader or ConnConfig leaves MaxMessageSize zero. It bounds each data frame and the reassembled
-// decoded message, not total memory, connection lifetime, or outgoing messages.
+// Upgrader or ConnConfig leaves MaxMessageSize zero. It bounds each data frame
+// and the reassembled decoded message, not total memory, connection lifetime,
+// or outgoing messages.
 const DefaultMaxMessageSize = 1 << 20
 
 // DefaultMaxResponseHeaderBytes is Dial's HTTP response-head byte limit when
-// Dialer.MaxResponseHeaderBytes is zero. It includes the status line,
-// all header lines and their separators, and the final empty line.
+// Dialer.MaxResponseHeaderBytes is zero. It includes the status line, all
+// header lines and their separators, and the final empty line.
 const DefaultMaxResponseHeaderBytes = 1 << 20
 
 // Opcode is a WebSocket frame opcode. ReadMessage returns, and WriteMessage
@@ -465,7 +435,9 @@ func (c *Conn) SetWriteDeadline(t time.Time) error {
 // Close closes the transport, making a best-effort StatusNormalClosure notification
 // with a one-second write deadline when no other writer is active, replacing
 // any write deadline set by the caller. It does not wait for the peer's closing
-// handshake. Repeated calls return ErrAlreadyClosed. Custom transport Close
+// handshake. Reads, writes and Pings after Close, including calls it
+// interrupts, return errors matching net.ErrClosed; repeated calls to Close
+// return ErrAlreadyClosed, which matches it too. Custom transport Close
 // implementations can still block.
 //
 // Use CloseWithStatus to send another status code or a reason.
@@ -645,13 +617,13 @@ func (c *Conn) SetPongHandler(handler func(appData string) error) {
 // Arbitrary callbacks and custom transport Close implementations can still block.
 func (c *Conn) ReadMessage() (messageType Opcode, data []byte, err error) {
 	if c.closed.Load() {
-		return 0, nil, io.ErrClosedPipe
+		return 0, nil, errClosed
 	}
 
 	c.readMu.Lock()
 	defer c.readMu.Unlock()
 	if c.closed.Load() {
-		return 0, nil, io.ErrClosedPipe
+		return 0, nil, errClosed
 	}
 
 	pmd, compositionErr := messageCompression(c.extensions)
@@ -831,12 +803,12 @@ func (c *Conn) WriteMessage(messageType Opcode, data []byte) error {
 		return ErrInvalidFrame
 	}
 	if c.closed.Load() {
-		return io.ErrClosedPipe
+		return errClosed
 	}
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 	if c.closed.Load() || c.closeSent {
-		return io.ErrClosedPipe
+		return errClosed
 	}
 
 	if c.writeErr != nil {
@@ -867,7 +839,7 @@ func (c *Conn) WriteMessage(messageType Opcode, data []byte) error {
 
 // WriteControlFrame writes a control frame to the connection. A successful Close
 // frame starts the closing handshake: subsequent data and Close frames return
-// io.ErrClosedPipe. Reads and ping/pong frames remain available until the peer
+// an error matching net.ErrClosed. Reads and ping/pong frames remain available until the peer
 // closes or Close is called. Call Close to release the transport if the peer
 // does not respond; this method does not impose a handshake timeout.
 //
@@ -891,12 +863,12 @@ func (c *Conn) WriteControlFrame(opcode Opcode, data []byte) error {
 		return fmt.Errorf("%w: control frame payload too large: %d", ErrPayloadTooLarge, len(data))
 	}
 	if c.closed.Load() {
-		return io.ErrClosedPipe
+		return errClosed
 	}
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 	if c.closed.Load() || (opcode == CloseMessage && c.closeSent) {
-		return io.ErrClosedPipe
+		return errClosed
 	}
 
 	frame := &Frame{
@@ -1349,7 +1321,7 @@ func (c *Conn) writeFrameExtensions(frame *Frame, enabled []Extension) error {
 	f := *frame
 	for _, ext := range enabled {
 		if err := ext.ProcessOutgoingFrame(&f); err != nil {
-			return fmt.Errorf("extension %s failed to process outgoing frame: %v", ext.Name(), err)
+			return fmt.Errorf("extension %s failed to process outgoing frame: %w", ext.Name(), err)
 		}
 	}
 	return c.writeFrameRaw(&f)
@@ -1617,7 +1589,7 @@ func dial(ctx context.Context, urlStr string, opts *dialOptions) (ws *Conn, resp
 	key, err := generateKey()
 	if err != nil {
 		conn.Close()
-		return nil, nil, fmt.Errorf("%w: %v", ErrFailedToGenerateKey, err)
+		return nil, nil, fmt.Errorf("%w: %w", ErrFailedToGenerateKey, err)
 	}
 
 	// Build the request
@@ -2027,7 +1999,7 @@ func computeAcceptKey(challengeKey string) string {
 func generateKey() (string, error) {
 	key := make([]byte, 16)
 	if _, err := io.ReadFull(rand.Reader, key); err != nil {
-		return "", fmt.Errorf("%w: %v", ErrFailedToGenerateKey, err)
+		return "", fmt.Errorf("%w: %w", ErrFailedToGenerateKey, err)
 	}
 	return base64.StdEncoding.EncodeToString(key), nil
 }

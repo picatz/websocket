@@ -4,17 +4,10 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
-	"errors"
 	"net"
 	"net/http"
 	"net/url"
 )
-
-// ErrInvalidConfig reports a Dialer, Upgrader or Compression field outside
-// its documented range. Dial returns it before connecting; Upgrade returns it
-// before hijacking and answers 500 Internal Server Error, as it is the
-// server's programming error.
-var ErrInvalidConfig = errors.New("websocket: invalid configuration")
 
 // A Dialer contains options for connecting to a WebSocket server. Its zero
 // value dials directly with TLS defaults, no compression, and the default

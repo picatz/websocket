@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"net"
 	"testing"
 )
 
@@ -16,7 +17,7 @@ func TestCloseControlPreventsLaterData(t *testing.T) {
 		}
 		before := bytes.Clone(raw.written.Bytes())
 		for _, opcode := range []Opcode{TextMessage, BinaryMessage} {
-			if err := c.WriteMessage(opcode, []byte("late")); !errors.Is(err, io.ErrClosedPipe) {
+			if err := c.WriteMessage(opcode, []byte("late")); !errors.Is(err, net.ErrClosed) {
 				t.Errorf("server=%v opcode=%v: error %v, want closed pipe", server, opcode, err)
 			}
 		}
@@ -39,14 +40,14 @@ func TestCloseControlCompletesHandshakeOnce(t *testing.T) {
 				t.Fatal(err)
 			}
 			before := bytes.Clone(raw.written.Bytes())
-			if err := c.WriteControlFrame(CloseMessage, nil); !errors.Is(err, io.ErrClosedPipe) {
+			if err := c.WriteControlFrame(CloseMessage, nil); !errors.Is(err, net.ErrClosed) {
 				t.Fatalf("duplicate close: %v", err)
 			}
 			if peerClose {
 				if _, data, err := c.ReadMessage(); !errors.Is(err, io.EOF) || data != nil {
 					t.Fatalf("peer close: %x %v", data, err)
 				}
-				if _, _, err := c.ReadMessage(); !errors.Is(err, io.ErrClosedPipe) {
+				if _, _, err := c.ReadMessage(); !errors.Is(err, net.ErrClosed) {
 					t.Fatalf("read after close: %v", err)
 				}
 				if err := c.Close(); !errors.Is(err, ErrAlreadyClosed) {
@@ -152,7 +153,7 @@ func TestConcurrentCloseControlOrdering(t *testing.T) {
 		}
 		close(start)
 		for range 3 {
-			if err := <-results; err != nil && !errors.Is(err, io.ErrClosedPipe) {
+			if err := <-results; err != nil && !errors.Is(err, net.ErrClosed) {
 				t.Fatal(err)
 			}
 		}

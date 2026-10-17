@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"io"
 )
 
 // Ping sends a Ping frame and waits for the peer's matching Pong
@@ -22,7 +21,7 @@ import (
 // while waiting for the Pong, Ping returns ctx's cause and the connection is
 // left open: deciding that a missing Pong means the peer is gone, and closing,
 // is up to the caller. If the connection closes first, Ping returns an error
-// matching io.ErrClosedPipe.
+// matching net.ErrClosed.
 //
 // [RFC 6455, Section 5.5.2]: https://www.rfc-editor.org/rfc/rfc6455.html#section-5.5.2
 func (c *Conn) Ping(ctx context.Context) error {
@@ -67,7 +66,7 @@ func (c *Conn) Ping(ctx context.Context) error {
 			return nil
 		default:
 		}
-		return fmt.Errorf("websocket: connection closed before pong: %w", io.ErrClosedPipe)
+		return fmt.Errorf("websocket: connection closed before pong: %w", errClosed)
 	}
 }
 
