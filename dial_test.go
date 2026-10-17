@@ -136,9 +136,9 @@ func fixedProxy(u *url.URL) func(*http.Request) (*url.URL, error) {
 	return func(*http.Request) (*url.URL, error) { return u, nil }
 }
 
-func dialEcho(t *testing.T, target *echoTarget, rawURL string, options ...websocket.DialOption) {
+func dialEcho(t *testing.T, target *echoTarget, rawURL string, d websocket.Dialer) {
 	t.Helper()
-	c, _, err := websocket.Dial(t.Context(), rawURL, options...)
+	c, _, err := d.Dial(t.Context(), rawURL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +158,7 @@ func TestDialThroughHTTPProxyWithCredentials(t *testing.T) {
 	targetHost := strings.TrimPrefix(target.URL, "http://")
 
 	dialEcho(t, target, target.wsURL()+"/chat?room=1",
-		websocket.WithProxy(fixedProxy(proxy.url("http", url.UserPassword("alice", "s3cret")))))
+		websocket.Dialer{Proxy: fixedProxy(proxy.url("http", url.UserPassword("alice", "s3cret")))})
 
 	req := <-proxy.requests
 	if req.Method != http.MethodConnect || req.Host != targetHost || req.RequestURI != targetHost {
@@ -176,9 +176,10 @@ func TestDialThroughHTTPProxyWithCredentials(t *testing.T) {
 func TestDialWSSThroughHTTPProxy(t *testing.T) {
 	target := newEchoTarget(t, true)
 	proxy := newConnectProxy(t, nil, nil)
-	dialEcho(t, target, target.wsURL(),
-		websocket.WithTLSConfig(target.rootsConfig()),
-		websocket.WithProxy(fixedProxy(proxy.url("http", nil))))
+	dialEcho(t, target, target.wsURL(), websocket.Dialer{
+		TLSClientConfig: target.rootsConfig(),
+		Proxy:           fixedProxy(proxy.url("http", nil)),
+	})
 	if req := <-proxy.requests; req.Header.Get("Proxy-Authorization") != "" {
 		t.Fatal("unexpected proxy credentials")
 	}
@@ -190,9 +191,10 @@ func TestDialWSSThroughHTTPSProxy(t *testing.T) {
 	// and the client verifies both hops against the same roots.
 	proxyTLS := &tls.Config{Certificates: target.TLS.Certificates}
 	proxy := newConnectProxy(t, proxyTLS, nil)
-	dialEcho(t, target, target.wsURL(),
-		websocket.WithTLSConfig(target.rootsConfig()),
-		websocket.WithProxy(fixedProxy(proxy.url("https", nil))))
+	dialEcho(t, target, target.wsURL(), websocket.Dialer{
+		TLSClientConfig: target.rootsConfig(),
+		Proxy:           fixedProxy(proxy.url("https", nil)),
+	})
 	if proxy.accepted.Load() != 1 {
 		t.Fatalf("proxy accepted %d connections", proxy.accepted.Load())
 	}
@@ -202,7 +204,7 @@ func TestDialHTTPSProxyVerifiesCertificate(t *testing.T) {
 	target := newEchoTarget(t, true)
 	proxy := newConnectProxy(t, &tls.Config{Certificates: target.TLS.Certificates}, nil)
 	// No roots for the self-signed proxy certificate: verification must fail.
-	_, _, err := websocket.Dial(t.Context(), target.wsURL(), websocket.WithProxy(fixedProxy(proxy.url("https", nil))))
+	_, _, err := (&websocket.Dialer{Proxy: fixedProxy(proxy.url("https", nil))}).Dial(t.Context(), target.wsURL())
 	if !errors.Is(err, websocket.ErrBadHandshake) || !errors.Is(err, websocket.ErrProxy) {
 		t.Fatalf("err = %v, want ErrBadHandshake and ErrProxy", err)
 	}
@@ -218,7 +220,7 @@ func TestDialProxyRejection(t *testing.T) {
 		io.WriteString(conn, "HTTP/1.1 407 Proxy Authentication Required\r\nContent-Length: 0\r\n\r\n")
 		return false
 	})
-	c, resp, err := websocket.Dial(t.Context(), target.wsURL(), websocket.WithProxy(fixedProxy(proxy.url("http", nil))))
+	c, resp, err := (&websocket.Dialer{Proxy: fixedProxy(proxy.url("http", nil))}).Dial(t.Context(), target.wsURL())
 	if c != nil || resp != nil {
 		t.Fatal("rejected tunnel returned a connection or target response")
 	}
@@ -233,7 +235,7 @@ func TestDialProxyEarlyDataRejected(t *testing.T) {
 		io.WriteString(conn, "HTTP/1.1 200 OK\r\n\r\nHTTP/1.1 101 Switching Protocols\r\n\r\n")
 		return false
 	})
-	_, _, err := websocket.Dial(t.Context(), target.wsURL(), websocket.WithProxy(fixedProxy(proxy.url("http", nil))))
+	_, _, err := (&websocket.Dialer{Proxy: fixedProxy(proxy.url("http", nil))}).Dial(t.Context(), target.wsURL())
 	if !errors.Is(err, websocket.ErrProxy) {
 		t.Fatalf("err = %v, want ErrProxy", err)
 	}
@@ -245,9 +247,7 @@ func TestDialProxyResponseHeadBudget(t *testing.T) {
 		io.WriteString(conn, "HTTP/1.1 200 OK\r\nX-Padding: "+strings.Repeat("a", 256)+"\r\n\r\n")
 		return false
 	})
-	_, _, err := websocket.Dial(t.Context(), target.wsURL(),
-		websocket.WithMaxResponseHeaderBytes(64),
-		websocket.WithProxy(fixedProxy(proxy.url("http", nil))))
+	_, _, err := (&websocket.Dialer{MaxResponseHeaderBytes: 64, Proxy: fixedProxy(proxy.url("http", nil))}).Dial(t.Context(), target.wsURL())
 	if !errors.Is(err, websocket.ErrProxy) || !errors.Is(err, websocket.ErrResponseHeaderTooLarge) {
 		t.Fatalf("err = %v, want ErrProxy and ErrResponseHeaderTooLarge", err)
 	}
@@ -264,7 +264,7 @@ func TestDialProxyCancellation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	_, _, err := websocket.Dial(ctx, target.wsURL(), websocket.WithProxy(fixedProxy(proxy.url("http", nil))))
+	_, _, err := (&websocket.Dialer{Proxy: fixedProxy(proxy.url("http", nil))}).Dial(ctx, target.wsURL())
 	if !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, websocket.ErrBadHandshake) {
 		t.Fatalf("err = %v, want ErrBadHandshake and DeadlineExceeded", err)
 	}
@@ -276,12 +276,10 @@ func TestDialProxyCancellation(t *testing.T) {
 func TestDialProxySelection(t *testing.T) {
 	target := newEchoTarget(t, true)
 	var got *http.Request
-	_, _, err := websocket.Dial(t.Context(), target.wsURL()+"/a%2Fb?x=1",
-		websocket.WithTLSConfig(target.rootsConfig()),
-		websocket.WithProxy(func(r *http.Request) (*url.URL, error) {
-			got = r
-			return nil, nil // nil selects a direct connection
-		}))
+	_, _, err := (&websocket.Dialer{TLSClientConfig: target.rootsConfig(), Proxy: func(r *http.Request) (*url.URL, error) {
+		got = r
+		return nil, nil // nil selects a direct connection
+	}}).Dial(t.Context(), target.wsURL()+"/a%2Fb?x=1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,12 +290,12 @@ func TestDialProxySelection(t *testing.T) {
 	}
 
 	ws := newEchoTarget(t, false)
-	if _, _, err := websocket.Dial(t.Context(), ws.wsURL(), websocket.WithProxy(func(r *http.Request) (*url.URL, error) {
+	if _, _, err := (&websocket.Dialer{Proxy: func(r *http.Request) (*url.URL, error) {
 		if r.URL.Scheme != "http" {
 			t.Errorf("ws scheme mapped to %q", r.URL.Scheme)
 		}
 		return nil, nil
-	})); err != nil {
+	}}).Dial(t.Context(), ws.wsURL()); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -308,7 +306,7 @@ func TestDialProxyFromEnvironment(t *testing.T) {
 	// ProxyFromEnvironment caches the environment for the process, and always
 	// bypasses loopback targets, so check only that its signature composes and
 	// that it leaves this loopback dial direct.
-	dialEcho(t, target, target.wsURL(), websocket.WithProxy(http.ProxyFromEnvironment))
+	dialEcho(t, target, target.wsURL(), websocket.Dialer{Proxy: http.ProxyFromEnvironment})
 	if proxy.accepted.Load() != 0 {
 		t.Fatal("loopback dial used a proxy")
 	}
@@ -327,7 +325,7 @@ func TestDialProxyErrors(t *testing.T) {
 		"unreachable host": {fixedProxy(&url.URL{Scheme: "http", Host: "127.0.0.1:1"}), websocket.ErrProxy},
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, _, err := websocket.Dial(t.Context(), target.wsURL(), websocket.WithProxy(tc.proxy))
+			_, _, err := (&websocket.Dialer{Proxy: tc.proxy}).Dial(t.Context(), target.wsURL())
 			if !errors.Is(err, websocket.ErrBadHandshake) || !errors.Is(err, tc.want) {
 				t.Fatalf("err = %v, want ErrBadHandshake and %v", err, tc.want)
 			}
@@ -347,7 +345,7 @@ func TestDialWithNetDialContext(t *testing.T) {
 		var d net.Dialer
 		return d.DialContext(ctx, network, addr)
 	}
-	dialEcho(t, target, target.wsURL(), websocket.WithNetDialContext(dial))
+	dialEcho(t, target, target.wsURL(), websocket.Dialer{NetDialContext: dial})
 	if len(calls) != 1 || calls[0] != "tcp "+targetHost {
 		t.Fatalf("calls = %q", calls)
 	}
@@ -355,22 +353,22 @@ func TestDialWithNetDialContext(t *testing.T) {
 	// With a proxy, the dialer reaches the proxy rather than the target.
 	proxy := newConnectProxy(t, nil, nil)
 	calls = nil
-	dialEcho(t, target, target.wsURL(), websocket.WithNetDialContext(dial), websocket.WithProxy(fixedProxy(proxy.url("http", nil))))
+	dialEcho(t, target, target.wsURL(), websocket.Dialer{NetDialContext: dial, Proxy: fixedProxy(proxy.url("http", nil))})
 	if len(calls) != 1 || calls[0] != "tcp "+proxy.ln.Addr().String() {
 		t.Fatalf("calls = %q", calls)
 	}
 
 	// Dialer failures keep their cause; a nil connection is rejected.
 	dialErr := errors.New("synthetic dial failure")
-	_, _, err := websocket.Dial(t.Context(), target.wsURL(), websocket.WithNetDialContext(func(context.Context, string, string) (net.Conn, error) {
+	_, _, err := (&websocket.Dialer{NetDialContext: func(context.Context, string, string) (net.Conn, error) {
 		return nil, dialErr
-	}))
+	}}).Dial(t.Context(), target.wsURL())
 	if !errors.Is(err, websocket.ErrBadHandshake) || !errors.Is(err, dialErr) {
 		t.Fatalf("err = %v", err)
 	}
-	_, _, err = websocket.Dial(t.Context(), target.wsURL(), websocket.WithNetDialContext(func(context.Context, string, string) (net.Conn, error) {
+	_, _, err = (&websocket.Dialer{NetDialContext: func(context.Context, string, string) (net.Conn, error) {
 		return nil, nil
-	}))
+	}}).Dial(t.Context(), target.wsURL())
 	if !errors.Is(err, websocket.ErrBadHandshake) {
 		t.Fatalf("err = %v", err)
 	}

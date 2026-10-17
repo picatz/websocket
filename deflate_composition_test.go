@@ -105,7 +105,7 @@ func TestPMDEntryUpgradeComposition(t *testing.T) {
 					if wrapped {
 						response = &entryUnwrapper{response}
 					}
-					conn, err := Upgrade(response, r, WithUpgradeExtensions(exts...))
+					conn, err := (&Upgrader{NewExtensions: func() []Extension { return exts }}).Upgrade(response, r)
 					if tc.reject {
 						if conn != nil || !errors.Is(err, ErrUnsupportedExtensionComposition) {
 							t.Fatalf("Upgrade = %v, %v; want composition rejection", conn, err)
@@ -212,7 +212,7 @@ func TestPMDEntryDialComposition(t *testing.T) {
 				defer srv.Close()
 				ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 				defer cancel()
-				conn, resp, err := Dial(ctx, "ws"+srv.URL[4:], WithExtensions(exts...))
+				conn, resp, err := (&Dialer{NewExtensions: func() []Extension { return exts }}).Dial(ctx, "ws"+srv.URL[4:])
 				if conn != nil {
 					defer conn.conn.Close()
 				}
@@ -298,7 +298,7 @@ func TestPMDEntryManualCompositionBeforeIO(t *testing.T) {
 						enable()
 					}
 					raw := newEntryConn([]byte{0x82, 1, 'x'})
-					conn := NewConn(raw, false, exts)
+					conn := NewConn(raw, ConnConfig{Extensions: exts})
 					if afterConstruction {
 						enable()
 					}
@@ -352,7 +352,7 @@ func TestPMDEntryManualPermittedCompositions(t *testing.T) {
 				want = "Hello"
 			}
 			raw := newEntryConn(wire)
-			conn := NewConn(raw, false, []Extension{pmd, custom})
+			conn := NewConn(raw, ConnConfig{Extensions: []Extension{pmd, custom}})
 			if tc.pmd {
 				if err := pmd.Negotiate("permessage-deflate"); err != nil {
 					t.Fatal(err)
@@ -394,7 +394,7 @@ func TestPMDEntryCompositionUsesBuiltinIdentity(t *testing.T) {
 				exts = append(exts, pmd)
 			}
 			raw := newEntryConn(nil)
-			err := NewConn(raw, true, exts).WriteMessage(BinaryMessage, []byte("x"))
+			err := NewConn(raw, ConnConfig{Server: true, Extensions: exts}).WriteMessage(BinaryMessage, []byte("x"))
 			// Only the built-in type owns permessage-deflate semantics; a custom
 			// extension with the same name is an ordinary frame extension.
 			if err != nil || custom.outgoing != 1 || raw.writes == 0 {
@@ -487,7 +487,7 @@ func TestPMDEntryDirectIncomingHistory(t *testing.T) {
 			for _, interleave := range []bool{false, true} {
 				t.Run(fmt.Sprintf("server=%t/no-context=%t/interleave=%t", server, noContext, interleave), func(t *testing.T) {
 					pmd := NewPerMessageDeflateExtension()
-					_ = NewConn(newEntryConn(nil), server, []Extension{pmd})
+					_ = NewConn(newEntryConn(nil), ConnConfig{Server: server, Extensions: []Extension{pmd}})
 					selection := "permessage-deflate"
 					if noContext {
 						if server {
@@ -568,7 +568,7 @@ func TestPMDEntryManualCompositionRevalidated(t *testing.T) {
 			pmd, second := NewPerMessageDeflateExtension(), NewPerMessageDeflateExtension()
 			custom := &entryExtension{name: "entry-custom"}
 			raw := newEntryConn([]byte{0x82, 1, 'x'})
-			conn := NewConn(raw, false, []Extension{pmd, second, custom})
+			conn := NewConn(raw, ConnConfig{Extensions: []Extension{pmd, second, custom}})
 			if err := conn.WriteControlFrame(PongMessage, nil); err != nil {
 				t.Fatal(err)
 			}

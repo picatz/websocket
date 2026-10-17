@@ -91,7 +91,7 @@ func (h *hub) handler(w http.ResponseWriter, r *http.Request) {
 	if name == "" {
 		name = r.RemoteAddr
 	}
-	conn, err := websocket.Upgrade(w, r, websocket.WithUpgradeMaxMessageSize(maxMessage))
+	conn, err := (&websocket.Upgrader{MaxMessageSize: maxMessage}).Upgrade(w, r)
 	if err != nil {
 		// Upgrade has already written the HTTP error response.
 		return

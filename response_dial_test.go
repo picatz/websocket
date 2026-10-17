@@ -28,7 +28,7 @@ type responsePeerResult struct {
 	readBytes         int
 }
 
-func responsePeer(t *testing.T, tls bool, wire func(*http.Request) []byte, sent ...chan struct{}) (string, []DialOption, <-chan responsePeerResult) {
+func responsePeer(t *testing.T, tls bool, wire func(*http.Request) []byte, sent ...chan struct{}) (string, Dialer, <-chan responsePeerResult) {
 	t.Helper()
 	done := make(chan responsePeerResult, 1)
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -50,15 +50,15 @@ func responsePeer(t *testing.T, tls bool, wire func(*http.Request) []byte, sent 
 		n, readErr := raw.Read(b[:])
 		done <- responsePeerResult{writeErr, readErr, n}
 	}))
-	var opts []DialOption
+	var d Dialer
 	if tls {
 		srv.StartTLS()
-		opts = append(opts, WithTLSConfig(srv.Client().Transport.(*http.Transport).TLSClientConfig.Clone()))
+		d.TLSClientConfig = srv.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
 	} else {
 		srv.Start()
 	}
 	t.Cleanup(srv.Close)
-	return "ws" + strings.TrimPrefix(srv.URL, "http"), opts, done
+	return "ws" + strings.TrimPrefix(srv.URL, "http"), d, done
 }
 func responseWait[T any](t *testing.T, ch <-chan T) T {
 	t.Helper()
@@ -82,36 +82,34 @@ func responsePeerClosed(t *testing.T, ch <-chan responsePeerResult, writeOK bool
 		t.Fatalf("transport not closed: %+v", result)
 	}
 }
-func responseDial(t *testing.T, url string, opts ...DialOption) (*Conn, *http.Response, error) {
+func responseDial(t *testing.T, url string, d Dialer) (*Conn, *http.Response, error) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	return Dial(ctx, url, opts...)
+	return d.Dial(ctx, url)
 }
 
-func TestDialResponseHeadLimitOptions(t *testing.T) {
+func TestDialResponseHeadLimits(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
 		size          int
-		opts          []DialOption
+		messageSize   int
+		headLimit     int64
 		wantSizeError bool
 	}{
-		{"default_exact", DefaultMaxResponseHeaderBytes, nil, false},
-		{"default_plus_one", DefaultMaxResponseHeaderBytes + 1, nil, true},
-		{"nil_retains_default", DefaultMaxResponseHeaderBytes + 1, []DialOption{nil}, true},
-		{"positive_exact", 4096, []DialOption{WithMaxResponseHeaderBytes(4096)}, false},
-		{"positive_plus_one", 4097, []DialOption{WithMaxResponseHeaderBytes(4096)}, true},
-		{"larger_positive", DefaultMaxResponseHeaderBytes + 1, []DialOption{WithMaxResponseHeaderBytes(DefaultMaxResponseHeaderBytes + 1)}, false},
-		{"zero_unlimited", DefaultMaxResponseHeaderBytes + 1, []DialOption{WithMaxResponseHeaderBytes(0)}, false},
-		{"negative_unlimited", DefaultMaxResponseHeaderBytes + 1, []DialOption{WithMaxResponseHeaderBytes(-1)}, false},
-		{"last_unlimited", 4097, []DialOption{WithMaxResponseHeaderBytes(1), nil, WithMaxResponseHeaderBytes(0)}, false},
-		{"last_positive", 4097, []DialOption{WithMaxResponseHeaderBytes(0), WithMaxResponseHeaderBytes(4096), nil}, true},
-		{"independent_tiny_message", 65536, []DialOption{WithMaxMessageSize(1)}, false},
-		{"independent_unlimited_message", 4097, []DialOption{WithMaxMessageSize(0), WithMaxResponseHeaderBytes(4096)}, true},
+		{"default_exact", DefaultMaxResponseHeaderBytes, 0, 0, false},
+		{"default_plus_one", DefaultMaxResponseHeaderBytes + 1, 0, 0, true},
+		{"positive_exact", 4096, 0, 4096, false},
+		{"positive_plus_one", 4097, 0, 4096, true},
+		{"larger_positive", DefaultMaxResponseHeaderBytes + 1, 0, DefaultMaxResponseHeaderBytes + 1, false},
+		{"negative_unlimited", DefaultMaxResponseHeaderBytes + 1, 0, -1, false},
+		{"independent_tiny_message", 65536, 1, -1, false},
+		{"independent_unlimited_message", 4097, -1, 4096, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			url, opts, closed := responsePeer(t, false, func(r *http.Request) []byte { return append([]byte(responseHeadOfSize(r, tc.size)), 0x82, 1, 'x') })
-			c, resp, err := responseDial(t, url, append(opts, tc.opts...)...)
+			url, d, closed := responsePeer(t, false, func(r *http.Request) []byte { return append([]byte(responseHeadOfSize(r, tc.size)), 0x82, 1, 'x') })
+			d.MaxMessageSize, d.MaxResponseHeaderBytes = tc.messageSize, tc.headLimit
+			c, resp, err := responseDial(t, url, d)
 			if tc.wantSizeError {
 				if c != nil || resp != nil || !errors.Is(err, ErrBadHandshake) || !errors.Is(err, ErrResponseHeaderTooLarge) || errors.Is(err, ErrPayloadTooLarge) {
 					t.Fatalf("connection=%v response=%v error=%v", c, resp, err)
@@ -148,8 +146,9 @@ func TestDialResponseHeadTCPAndTLSBoundaries(t *testing.T) {
 					frame := []byte{0x82, 127, 0, 0, 0, 0, 0, 0, 0, 0}
 					binary.BigEndian.PutUint64(frame[2:], uint64(len(payload)))
 					frame = append(frame, payload...)
-					url, opts, closed := responsePeer(t, tls, func(r *http.Request) []byte { return append([]byte(responseHeadOfSize(r, size)), frame...) })
-					c, resp, err := responseDial(t, url, append(opts, WithMaxResponseHeaderBytes(int64(size+offset)))...)
+					url, d, closed := responsePeer(t, tls, func(r *http.Request) []byte { return append([]byte(responseHeadOfSize(r, size)), frame...) })
+					d.MaxResponseHeaderBytes = int64(size + offset)
+					c, resp, err := responseDial(t, url, d)
 					if offset < 0 {
 						if c != nil || resp != nil || !errors.Is(err, ErrBadHandshake) || !errors.Is(err, ErrResponseHeaderTooLarge) {
 							t.Fatalf("connection=%v response=%v error=%v", c, resp, err)
@@ -202,8 +201,9 @@ func TestDialResponseHeadCountsStatusAndFields(t *testing.T) {
 		for _, offset := range []int{-1, 0} {
 			t.Run(fmt.Sprintf("%s/%d", tc.name, offset), func(t *testing.T) {
 				sample := responseHeadFor(&http.Request{Header: http.Header{}}, tc.reason, tc.fields)
-				url, opts, closed := responsePeer(t, false, func(r *http.Request) []byte { return []byte(responseHeadFor(r, tc.reason, tc.fields)) })
-				c, resp, err := responseDial(t, url, append(opts, WithMaxResponseHeaderBytes(int64(len(sample)+offset)), WithMaxMessageSize(1))...)
+				url, d, closed := responsePeer(t, false, func(r *http.Request) []byte { return []byte(responseHeadFor(r, tc.reason, tc.fields)) })
+				d.MaxResponseHeaderBytes, d.MaxMessageSize = int64(len(sample)+offset), 1
+				c, resp, err := responseDial(t, url, d)
 				if offset < 0 {
 					if c != nil || resp != nil || !errors.Is(err, ErrResponseHeaderTooLarge) {
 						t.Fatalf("response=%v error=%v", resp, err)
@@ -250,8 +250,9 @@ func TestDialResponseHeadValidationAndOwnership(t *testing.T) {
 		for _, offset := range []int{-1, 0, 8} {
 			t.Run(fmt.Sprintf("%s/%d", tc.name, offset), func(t *testing.T) {
 				sample := tc.change(responseHeadFor(&http.Request{Header: http.Header{}}, "x", ""))
-				url, opts, closed := responsePeer(t, false, func(r *http.Request) []byte { return []byte(tc.change(responseHeadFor(r, "x", "")) + "denied") })
-				c, resp, err := responseDial(t, url, append(opts, WithMaxResponseHeaderBytes(int64(len(sample)+offset)))...)
+				url, d, closed := responsePeer(t, false, func(r *http.Request) []byte { return []byte(tc.change(responseHeadFor(r, "x", "")) + "denied") })
+				d.MaxResponseHeaderBytes = int64(len(sample) + offset)
+				c, resp, err := responseDial(t, url, d)
 				if c != nil {
 					c.conn.Close()
 					t.Fatal("rejected handshake returned connection")
@@ -291,7 +292,7 @@ func TestDialResponseHeadCancellation(t *testing.T) {
 		for _, prefix := range []string{"HTTP/1.1 101 " + strings.Repeat("s", 8192), "HTTP/1.1 101 x\r\n" + strings.Repeat("X: x\r\n", 1024)} {
 			t.Run(fmt.Sprintf("tls=%v/length=%d", tls, len(prefix)), func(t *testing.T) {
 				sent := make(chan struct{})
-				url, opts, closed := responsePeer(t, tls, func(r *http.Request) []byte { return []byte(prefix) }, sent)
+				url, d, closed := responsePeer(t, tls, func(r *http.Request) []byte { return []byte(prefix) }, sent)
 				ctx, cancel := context.WithCancel(t.Context())
 				defer cancel()
 				type result struct {
@@ -301,7 +302,8 @@ func TestDialResponseHeadCancellation(t *testing.T) {
 				}
 				done := make(chan result, 1)
 				go func() {
-					c, r, err := Dial(ctx, url, append(opts, WithMaxResponseHeaderBytes(int64(len(prefix)+1)))...)
+					d.MaxResponseHeaderBytes = int64(len(prefix) + 1)
+					c, r, err := d.Dial(ctx, url)
 					done <- result{c, r, err}
 				}()
 				responseWait(t, sent)

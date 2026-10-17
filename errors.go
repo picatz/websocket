@@ -2,11 +2,12 @@ package websocket
 
 import (
 	"errors"
+	"fmt"
 	"net"
 )
 
-// Errors returned by Dial and Upgrade and by the options they validate. They
-// are often wrapped with detail, so test for them with errors.Is.
+// Errors returned by Dial and Upgrade and by the configuration they validate.
+// They are often wrapped with detail, so test for them with errors.Is.
 var (
 	// ErrBadHandshake reports an opening handshake that failed because of the
 	// other side. From Dial, the request could not be sent, the response could
@@ -16,10 +17,10 @@ var (
 	// has already replied with a 4xx status.
 	ErrBadHandshake = errors.New("websocket: bad handshake")
 	// ErrResponseHeaderTooLarge reports a handshake response head longer than
-	// the WithMaxResponseHeaderBytes limit. It is returned together with
+	// the Dialer.MaxResponseHeaderBytes limit. It is returned together with
 	// ErrBadHandshake.
 	ErrResponseHeaderTooLarge = errors.New("websocket: response header too large")
-	// ErrProxy reports that the proxy chosen by WithProxy refused or failed
+	// ErrProxy reports that the proxy chosen by Dialer.Proxy refused or failed
 	// the CONNECT tunnel. It is returned together with ErrBadHandshake.
 	ErrProxy = errors.New("websocket: proxy tunnel failed")
 	// ErrInvalidSecAccept reports a server response whose
@@ -62,10 +63,15 @@ var (
 	// the server.
 	ErrHandshakeFailed = errors.New("websocket: handshake failed")
 
-	// ErrInvalidHandshakeHeader reports a custom header given to WithHeader or
-	// WithResponseHeader that is malformed or that the handshake manages
-	// itself. Upgrade replies 500 Internal Server Error for it.
-	ErrInvalidHandshakeHeader = errors.New("websocket: invalid custom handshake header")
+	// ErrInvalidConfig reports a misconfigured Dialer, Upgrader or
+	// Compression: the caller's mistake, not the peer's. Dial returns it
+	// before connecting. Upgrade returns it before hijacking, after replying
+	// 500 Internal Server Error.
+	ErrInvalidConfig = errors.New("websocket: invalid configuration")
+	// ErrInvalidHandshakeHeader reports a Header or Subprotocols field of a
+	// Dialer or Upgrader that is malformed, conflicts with the other, or sets
+	// a field the handshake manages. It matches ErrInvalidConfig.
+	ErrInvalidHandshakeHeader = fmt.Errorf("%w: invalid custom handshake header", ErrInvalidConfig)
 	// ErrInvalidExtension reports a malformed or unoffered
 	// Sec-WebSocket-Extensions negotiation, or an extension that rejected it.
 	ErrInvalidExtension = errors.New("websocket: invalid extension negotiation")

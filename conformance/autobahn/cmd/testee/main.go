@@ -84,12 +84,7 @@ func waitReady(address string, timeout time.Duration) error {
 func serve(address string, cfg settings) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		opts := []websocket.UpgradeOption{websocket.WithUpgradeMaxMessageSize(cfg.maxBytes)}
-		if cfg.compression {
-			// Extensions are stateful. Never share one across connections.
-			opts = append(opts, websocket.WithUpgradeExtensions(websocket.NewPerMessageDeflateExtension()))
-		}
-		conn, err := websocket.Upgrade(w, r, opts...)
+		conn, err := upgrader(cfg).Upgrade(w, r)
 		if err != nil {
 			log.Printf("upgrade: %v", err)
 			return
@@ -103,15 +98,25 @@ func serve(address string, cfg settings) error {
 	return server.ListenAndServe()
 }
 
+// upgrader returns the server configuration for cfg. A Compression value
+// builds a fresh extension for every connection.
+func upgrader(cfg settings) *websocket.Upgrader {
+	u := &websocket.Upgrader{MaxMessageSize: cfg.maxBytes}
+	if cfg.compression {
+		u.Compression = &websocket.Compression{}
+	}
+	return u
+}
+
 func dial(address, path string, query url.Values, cfg settings) (*websocket.Conn, error) {
 	u := url.URL{Scheme: "ws", Host: address, Path: path, RawQuery: query.Encode()}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	opts := []websocket.DialOption{websocket.WithMaxMessageSize(cfg.maxBytes)}
+	d := websocket.Dialer{MaxMessageSize: cfg.maxBytes}
 	if cfg.compression {
-		opts = append(opts, websocket.WithExtensions(websocket.NewPerMessageDeflateExtension()))
+		d.Compression = &websocket.Compression{}
 	}
-	conn, _, err := websocket.Dial(ctx, u.String(), opts...)
+	conn, _, err := d.Dial(ctx, u.String())
 	return conn, err
 }
 

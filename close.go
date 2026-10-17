@@ -1,10 +1,12 @@
 package websocket
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"strconv"
 	"unicode/utf8"
 )
@@ -168,4 +170,86 @@ func (c *Conn) CloseWithStatus(code StatusCode, reason string) error {
 		return err
 	}
 	return c.closeWithPayload(payload)
+}
+
+// Shutdown closes the connection with the closing handshake: it sends a Close
+// frame with code and reason, waits for the peer's Close frame, and then
+// closes the transport. It returns nil once the peer has answered.
+//
+// Unlike Close, Shutdown does not hang up while the peer may still be sending.
+// Closing a TCP connection with unread data makes the operating system reset
+// it, so the peer can see a connection reset instead of the status code and
+// lose frames it had already sent. Shutdown keeps reading until the peer's
+// Close frame arrives, which also lets the server be the first to close the
+// TCP connection, as RFC 6455 Section 7.1.1 recommends.
+//
+// After the Close frame is sent, writes fail with an error matching
+// net.ErrClosed. If another goroutine is blocked in ReadMessage when Shutdown
+// starts, it keeps receiving the messages that arrive before the peer's Close
+// frame, and then the *CloseError. Otherwise Shutdown reads and discards them
+// itself, so a read loop that is between calls may lose them to Shutdown.
+//
+// ctx bounds the whole call, including any wait for a concurrent writer, so
+// give it a deadline. Shutdown always leaves the connection closed. If ctx
+// ends before the peer answers, or the peer drops the connection without a
+// Close frame, Shutdown closes the connection without finishing the handshake
+// and returns an error, matching ctx's cause in the first case; a ctx that is
+// already done closes it at once. An invalid status returns an error matching
+// ErrInvalidCloseStatus before any I/O and leaves the connection open, as for
+// CloseWithStatus. On a connection that is already closed, Shutdown returns
+// ErrAlreadyClosed.
+//
+// https://www.rfc-editor.org/rfc/rfc6455#section-7.1.2
+func (c *Conn) Shutdown(ctx context.Context, code StatusCode, reason string) error {
+	payload, err := closePayload(code, reason)
+	if err != nil {
+		return err
+	}
+	if c.closed.Load() {
+		return ErrAlreadyClosed
+	}
+	if err := ctx.Err(); err != nil {
+		c.cancelIO()
+		return fmt.Errorf("websocket: closing handshake not completed: %w", context.Cause(ctx))
+	}
+	stop := context.AfterFunc(ctx, c.cancelIO)
+	defer stop()
+
+	if err := c.WriteControlFrame(CloseMessage, payload); err != nil {
+		switch {
+		case ctx.Err() != nil, errors.Is(err, ErrWriteFailed), !errors.Is(err, net.ErrClosed):
+			c.cancelIO()
+			return c.shutdownError(ctx, err)
+		case c.closed.Load():
+			return ErrAlreadyClosed
+		}
+		// An earlier WriteControlFrame already sent a Close frame, so the
+		// handshake is under way: wait for the peer's answer.
+	}
+
+	// Leave the reading to a concurrent read loop when there is one, so it
+	// keeps the messages that arrive before the peer's Close frame.
+	if c.readMu.TryLock() {
+		c.readMu.Unlock()
+		for {
+			if _, _, err := c.ReadMessage(); err != nil {
+				break
+			}
+		}
+	}
+	<-c.doneChan()
+	if c.peerClosed.Load() {
+		return nil
+	}
+	c.cancelIO()
+	return c.shutdownError(ctx, io.ErrUnexpectedEOF)
+}
+
+// shutdownError reports an unfinished closing handshake, preferring ctx's
+// cause when ctx is what ended it.
+func (c *Conn) shutdownError(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return fmt.Errorf("websocket: closing handshake not completed: %w: %w", context.Cause(ctx), err)
+	}
+	return fmt.Errorf("websocket: closing handshake not completed: %w", err)
 }
