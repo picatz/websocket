@@ -82,7 +82,7 @@ func TestDialHonorsTLSConfig(t *testing.T) {
 	}))
 	defer srv.Close()
 	config := srv.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
-	conn, _, err := (&Dialer{TLSConfig: config}).Dial(t.Context(), "wss"+srv.URL[5:])
+	conn, _, err := (&Dialer{TLSClientConfig: config}).Dial(t.Context(), "wss"+srv.URL[5:])
 	if err != nil {
 		t.Fatal(err)
 	}

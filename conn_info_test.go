@@ -37,7 +37,7 @@ func TestConnInfo(t *testing.T) {
 			url := ""
 			if secure {
 				srv = httptest.NewTLSServer(handler)
-				d.TLSConfig = srv.Client().Transport.(*http.Transport).TLSClientConfig
+				d.TLSClientConfig = srv.Client().Transport.(*http.Transport).TLSClientConfig
 				url = "wss" + srv.URL[5:]
 			} else {
 				srv = httptest.NewServer(handler)

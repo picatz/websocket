@@ -2,11 +2,12 @@ package websocket
 
 import (
 	"errors"
+	"fmt"
 	"net"
 )
 
-// Errors returned by Dial and Upgrade and by the configuration they validate. They
-// are often wrapped with detail, so test for them with errors.Is.
+// Errors returned by Dial and Upgrade and by the configuration they validate.
+// They are often wrapped with detail, so test for them with errors.Is.
 var (
 	// ErrBadHandshake reports an opening handshake that failed because of the
 	// other side. From Dial, the request could not be sent, the response could
@@ -62,15 +63,15 @@ var (
 	// the server.
 	ErrHandshakeFailed = errors.New("websocket: handshake failed")
 
-	// ErrInvalidConfig reports a Dialer, Upgrader or Compression field
-	// outside its documented range. Dial returns it before connecting, and
-	// Upgrade before hijacking, after replying 500 Internal Server Error: it
-	// is the server's programming error.
+	// ErrInvalidConfig reports a misconfigured Dialer, Upgrader or
+	// Compression: the caller's mistake, not the peer's. Dial returns it
+	// before connecting. Upgrade returns it before hijacking, after replying
+	// 500 Internal Server Error.
 	ErrInvalidConfig = errors.New("websocket: invalid configuration")
-	// ErrInvalidHandshakeHeader reports a custom Dialer.Header or
-	// Upgrader.Header field that is malformed or that the handshake manages
-	// itself. Upgrade replies 500 Internal Server Error for it.
-	ErrInvalidHandshakeHeader = errors.New("websocket: invalid custom handshake header")
+	// ErrInvalidHandshakeHeader reports a Header or Subprotocols field of a
+	// Dialer or Upgrader that is malformed, conflicts with the other, or sets
+	// a field the handshake manages. It matches ErrInvalidConfig.
+	ErrInvalidHandshakeHeader = fmt.Errorf("%w: invalid custom handshake header", ErrInvalidConfig)
 	// ErrInvalidExtension reports a malformed or unoffered
 	// Sec-WebSocket-Extensions negotiation, or an extension that rejected it.
 	ErrInvalidExtension = errors.New("websocket: invalid extension negotiation")

@@ -177,8 +177,8 @@ func TestDialWSSThroughHTTPProxy(t *testing.T) {
 	target := newEchoTarget(t, true)
 	proxy := newConnectProxy(t, nil, nil)
 	dialEcho(t, target, target.wsURL(), websocket.Dialer{
-		TLSConfig: target.rootsConfig(),
-		Proxy:     fixedProxy(proxy.url("http", nil)),
+		TLSClientConfig: target.rootsConfig(),
+		Proxy:           fixedProxy(proxy.url("http", nil)),
 	})
 	if req := <-proxy.requests; req.Header.Get("Proxy-Authorization") != "" {
 		t.Fatal("unexpected proxy credentials")
@@ -192,8 +192,8 @@ func TestDialWSSThroughHTTPSProxy(t *testing.T) {
 	proxyTLS := &tls.Config{Certificates: target.TLS.Certificates}
 	proxy := newConnectProxy(t, proxyTLS, nil)
 	dialEcho(t, target, target.wsURL(), websocket.Dialer{
-		TLSConfig: target.rootsConfig(),
-		Proxy:     fixedProxy(proxy.url("https", nil)),
+		TLSClientConfig: target.rootsConfig(),
+		Proxy:           fixedProxy(proxy.url("https", nil)),
 	})
 	if proxy.accepted.Load() != 1 {
 		t.Fatalf("proxy accepted %d connections", proxy.accepted.Load())
@@ -276,7 +276,7 @@ func TestDialProxyCancellation(t *testing.T) {
 func TestDialProxySelection(t *testing.T) {
 	target := newEchoTarget(t, true)
 	var got *http.Request
-	_, _, err := (&websocket.Dialer{TLSConfig: target.rootsConfig(), Proxy: func(r *http.Request) (*url.URL, error) {
+	_, _, err := (&websocket.Dialer{TLSClientConfig: target.rootsConfig(), Proxy: func(r *http.Request) (*url.URL, error) {
 		got = r
 		return nil, nil // nil selects a direct connection
 	}}).Dial(t.Context(), target.wsURL()+"/a%2Fb?x=1")

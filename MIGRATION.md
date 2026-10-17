@@ -167,7 +167,7 @@ handler mapped them to an HTTP status. It now writes the response itself:
 | `ErrOriginNotAllowed` | 403 |
 | `ErrInvalidMethod` | 405, with `Allow: GET` |
 | `ErrUnsupportedVersion` | 426, with `Sec-WebSocket-Version: 13` |
-| `ErrNotHijacker`, or an invalid `Upgrader`: `ErrInvalidConfig`, or `ErrInvalidHandshakeHeader` for a reserved `Header` field | 500 |
+| `ErrNotHijacker`, or an invalid `Upgrader` (`ErrInvalidConfig`, which `ErrInvalidHandshakeHeader` also matches) | 500 |
 | `ErrHandshakeFailed` | nothing: the transport may already be hijacked |
 | any other malformed handshake | 400 |
 
@@ -207,9 +207,11 @@ Dial, Upgrade and NewConn used to take functional options. Settings now live in
 plain structs whose zero values are the defaults: `Dialer` for clients,
 `Upgrader` for servers and `ConnConfig` for `NewConn`. One field names each
 concept on both sides, a struct can be built once and shared, and the
-package-level `Dial(ctx, url)` and `Upgrade(w, r)` use the zero value. Every
-`DialOption`, `UpgradeOption` and `ConnOption`, and their `With*` constructors,
-are removed. The `PerMessageDeflateOption`s remain for custom extension use.
+package-level `Dial(ctx, url)` and `Upgrade(w, r)` use the zero value. In the
+`websocket` package, every `DialOption`, `UpgradeOption` and `ConnOption`, and
+their `With*` constructors, are removed. The `PerMessageDeflateOption`s remain
+for now, and the `browser` package keeps its options until it gets a matching
+`Dialer`.
 
 | Before | After |
 |---|---|
@@ -221,7 +223,7 @@ are removed. The `PerMessageDeflateOption`s remain for custom extension use.
 | `WithUpgradeMaxMessageSize(n)` | `Upgrader.MaxMessageSize` |
 | `WithMaxBytes(n)` on `NewConn` | `ConnConfig.MaxMessageSize` |
 | `WithMaxResponseHeaderBytes(n)` | `Dialer.MaxResponseHeaderBytes` |
-| `WithTLSConfig(c)` | `Dialer.TLSConfig` |
+| `WithTLSConfig(c)` | `Dialer.TLSClientConfig` |
 | `WithProxy(f)` | `Dialer.Proxy` |
 | `WithNetDialContext(f)` | `Dialer.NetDialContext` |
 | `WithUpgradeOriginCheck(f)` | `Upgrader.CheckOrigin` |

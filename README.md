@@ -437,7 +437,7 @@ conn, _, err := dialer.Dial(ctx, "wss://example.com/socket")
 
 `http` and `https` proxies are supported through an HTTP/1.1 `CONNECT` tunnel; the
 WebSocket handshake and `wss` TLS then run end to end inside it. An `https` proxy
-is verified with a clone of `Dialer.TLSConfig` whose `ServerName` is the proxy host.
+is verified with a clone of `Dialer.TLSClientConfig` whose `ServerName` is the proxy host.
 Proxy URL credentials are sent only to the proxy as Basic `Proxy-Authorization`
 and are never included in errors. The `CONNECT` response head shares the
 `Dialer.MaxResponseHeaderBytes` budget; a non-200 status, or data sent before the

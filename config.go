@@ -37,7 +37,7 @@ type Dialer struct {
 	// proxy never sees the WebSocket request headers of a wss connection.
 	//
 	// Proxy URLs must use the http or https scheme; https proxies are reached
-	// over TLS using a clone of TLSConfig with ServerName set to the proxy
+	// over TLS using a clone of TLSClientConfig with ServerName set to the proxy
 	// host, matching [http.Transport]. User info in the proxy URL is sent only
 	// to the proxy as Basic Proxy-Authorization. The CONNECT response head
 	// counts against MaxResponseHeaderBytes, and any status other than 200
@@ -47,10 +47,10 @@ type Dialer struct {
 	// [RFC 9110, Section 9.3.6]: https://www.rfc-editor.org/rfc/rfc9110.html#section-9.3.6
 	Proxy func(*http.Request) (*url.URL, error)
 
-	// TLSConfig configures TLS for wss URLs and HTTPS proxies. Dial uses a
+	// TLSClientConfig configures TLS for wss URLs and HTTPS proxies. Dial uses a
 	// clone, setting ServerName from the URL when it is empty. If nil, the
 	// zero configuration is used.
-	TLSConfig *tls.Config
+	TLSClientConfig *tls.Config
 
 	// Header holds additional request header fields for the handshake. Dial
 	// rejects invalid field names and values and fields managed by the
@@ -111,7 +111,7 @@ func (d *Dialer) Dial(ctx context.Context, urlStr string) (*Conn, *http.Response
 	return dial(ctx, urlStr, &dialOptions{
 		extensions:             extensions,
 		header:                 d.Header,
-		tlsConfig:              d.TLSConfig,
+		tlsConfig:              d.TLSClientConfig,
 		maxBytes:               messageLimit(d.MaxMessageSize),
 		maxResponseHeaderBytes: headLimit(d.MaxResponseHeaderBytes),
 		netDialContext:         d.NetDialContext,
@@ -204,8 +204,8 @@ type Upgrader struct {
 //     unsupported version (ErrUnsupportedVersion) 426 Upgrade Required with
 //     Sec-WebSocket-Version: 13 (RFC 6455 section 4.4), and any other
 //     malformed request 400 Bad Request.
-//   - ErrNotHijacker, or an invalid Upgrader (ErrInvalidConfig, or
-//     ErrInvalidHandshakeHeader for Header): 500 Internal Server Error.
+//   - ErrNotHijacker, or an invalid Upgrader (ErrInvalidConfig):
+//     500 Internal Server Error.
 //   - ErrHandshakeFailed: nothing, as the transport may already be hijacked.
 //
 // Upgrade requires an HTTP/1.1 connection with hijacking support. Middleware

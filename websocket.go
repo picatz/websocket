@@ -88,8 +88,8 @@ type Frame struct {
 
 // Extension is a WebSocket extension negotiated during the opening handshake
 // and applied to each frame. NewPerMessageDeflateExtension returns the
-// built-in compression extension. Each connection needs its own instance;
-// pass a new one to every Dial or Upgrade.
+// built-in compression extension. Each connection needs its own instance: a
+// Dialer's or Upgrader's NewExtensions must return new ones on every call.
 //
 // https://www.rfc-editor.org/rfc/rfc6455#section-9
 type Extension interface {
@@ -308,10 +308,11 @@ const DefaultCompressionMemoryLimit = 64 << 10
 // another extension changed fails with [ErrUnsupportedExtensionComposition],
 // as does enabling more than one permessage-deflate instance.
 //
-// Each connection needs its own instance; pass a new one to every Dial or
-// Upgrade. Direct callbacks require complete messages; do not mix them
-// concurrently with Conn I/O. Configuration and negotiation must finish
-// before I/O; concurrent reconfiguration is not supported.
+// Each connection needs its own instance; most programs set Compression on a
+// Dialer or Upgrader instead, which creates one per connection. Direct
+// callbacks require complete messages; do not mix them concurrently with Conn
+// I/O. Configuration and negotiation must finish before I/O; concurrent
+// reconfiguration is not supported.
 //
 // https://www.rfc-editor.org/rfc/rfc7692
 func NewPerMessageDeflateExtension(options ...PerMessageDeflateOption) Extension {

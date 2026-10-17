@@ -53,7 +53,7 @@ func responsePeer(t *testing.T, tls bool, wire func(*http.Request) []byte, sent 
 	var d Dialer
 	if tls {
 		srv.StartTLS()
-		d.TLSConfig = srv.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
+		d.TLSClientConfig = srv.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
 	} else {
 		srv.Start()
 	}

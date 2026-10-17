@@ -376,7 +376,7 @@ func TestFailureTLSDialRetainsRawAbortTransport(t *testing.T) {
 	}))
 	defer srv.Close()
 	config := srv.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
-	c, _, err := (&Dialer{TLSConfig: config}).Dial(t.Context(), "wss"+srv.URL[5:])
+	c, _, err := (&Dialer{TLSClientConfig: config}).Dial(t.Context(), "wss"+srv.URL[5:])
 	if err != nil {
 		t.Fatal(err)
 	}

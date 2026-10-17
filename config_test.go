@@ -206,3 +206,43 @@ func TestNilConfigIsZero(t *testing.T) {
 	}
 	c.Close()
 }
+
+// Every caller misconfiguration matches ErrInvalidConfig, from Dial before
+// connecting and from Upgrade with a 500.
+func TestMisconfigurationMatchesErrInvalidConfig(t *testing.T) {
+	noDial := func(context.Context, string, string) (net.Conn, error) {
+		t.Error("dialed with an invalid Dialer")
+		return nil, errors.New("unexpected dial")
+	}
+	for name, d := range map[string]*Dialer{
+		"subprotocol":     {Subprotocols: []string{"a b"}},
+		"header conflict": {Subprotocols: []string{"a"}, Header: http.Header{"Sec-WebSocket-Protocol": {"a"}}},
+		"reserved header": {Header: http.Header{"Sec-WebSocket-Key": {"x"}}},
+		"compression":     {Compression: &Compression{Level: 42}},
+	} {
+		t.Run("Dial/"+name, func(t *testing.T) {
+			d.NetDialContext = noDial
+			if _, _, err := d.Dial(t.Context(), "ws://example.test/"); !errors.Is(err, ErrInvalidConfig) || errors.Is(err, ErrBadHandshake) {
+				t.Fatalf("Dial error = %v, want ErrInvalidConfig", err)
+			}
+		})
+	}
+	for name, u := range map[string]*Upgrader{
+		"subprotocol":     {Subprotocols: []string{"a b"}},
+		"header conflict": {Subprotocols: []string{"chat"}, Header: http.Header{"Sec-WebSocket-Protocol": {"chat"}}},
+		"reserved header": {Header: http.Header{"Upgrade": {"h2c"}}},
+		"compression":     {Compression: &Compression{Threshold: -1}},
+	} {
+		t.Run("Upgrade/"+name, func(t *testing.T) {
+			r := upgradeRequest()
+			r.Header.Set("Sec-WebSocket-Protocol", "chat")
+			w := &countingHijacker{ResponseRecorder: httptest.NewRecorder()}
+			if _, err := u.Upgrade(w, r); !errors.Is(err, ErrInvalidConfig) || errors.Is(err, ErrBadHandshake) {
+				t.Fatalf("Upgrade error = %v, want ErrInvalidConfig", err)
+			}
+			if w.calls != 0 || w.Code != http.StatusInternalServerError {
+				t.Fatalf("hijacks = %d, status = %d; want 0 and 500", w.calls, w.Code)
+			}
+		})
+	}
+}

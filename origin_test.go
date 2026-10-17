@@ -279,7 +279,7 @@ func TestUpgradeOriginRealLoopback(t *testing.T) {
 					d.Header = nil
 				}
 				if secure {
-					d.TLSConfig = srv.Client().Transport.(*http.Transport).TLSClientConfig
+					d.TLSClientConfig = srv.Client().Transport.(*http.Transport).TLSClientConfig
 				}
 				ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 				defer cancel()

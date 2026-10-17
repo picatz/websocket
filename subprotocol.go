@@ -8,7 +8,7 @@ import (
 
 // Subprotocol returns the subprotocol negotiated during Dial or Upgrade, or ""
 // if none was selected. It is fixed after the handshake and safe to call
-// concurrently. A Conn from NewConn reports "".
+// concurrently. A Conn from NewConn reports ConnConfig.Subprotocol.
 func (c *Conn) Subprotocol() string {
 	return c.subprotocol
 }
