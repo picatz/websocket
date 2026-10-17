@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"sync/atomic"
 	"testing"
 )
 
@@ -123,17 +122,10 @@ func TestCompressionExtension(t *testing.T) {
 	}
 }
 
-// A shared Upgrader gives every connection its own extensions: a fresh
-// permessage-deflate instance and a fresh call to newExtensions.
+// A shared Upgrader gives every connection a fresh permessage-deflate
+// instance.
 func TestUpgraderBuildsExtensionsPerConnection(t *testing.T) {
-	var calls atomic.Int32
-	u := &Upgrader{
-		Compression: &Compression{},
-		newExtensions: func() []frameExtension {
-			calls.Add(1)
-			return nil
-		},
-	}
+	u := &Upgrader{Compression: &Compression{}}
 	conns := make(chan *Conn, 2)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c, err := u.Upgrade(w, r)
@@ -162,15 +154,12 @@ func TestUpgraderBuildsExtensionsPerConnection(t *testing.T) {
 	if len(a.extensions) != 1 || len(b.extensions) != 1 || a.extensions[0] == b.extensions[0] {
 		t.Fatalf("extensions %v and %v, want one distinct instance each", a.extensions, b.extensions)
 	}
-	if got := calls.Load(); got != 2 {
-		t.Fatalf("newExtensions called %d times, want 2", got)
-	}
 }
 
-// Compression is negotiated before the newExtensions extensions.
+// Compression is negotiated before any other extension.
 func TestBuildExtensionsOrder(t *testing.T) {
 	custom := &xorExtension{}
-	exts, err := buildExtensions(&Compression{}, func() []frameExtension { return []frameExtension{custom} })
+	exts, err := buildExtensions(&Compression{}, []frameExtension{custom})
 	if err != nil {
 		t.Fatal(err)
 	}

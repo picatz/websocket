@@ -76,11 +76,6 @@ type Dialer struct {
 	// settings. Each connection gets its own compression state.
 	Compression *Compression
 
-	// newExtensions, if non-nil, returns further extensions to offer, after
-	// Compression. Only tests set it. It is called once per Dial and must
-	// return new instances.
-	newExtensions func() []frameExtension
-
 	// MaxMessageSize bounds each incoming frame and reassembled message in
 	// bytes, including data decompressed by Compression. Zero means
 	// DefaultMaxMessageSize; a negative value means no limit.
@@ -102,10 +97,16 @@ type Dialer struct {
 // message I/O. On a failed handshake the returned response, when non-nil, is
 // the server's reply with its body closed.
 func (d *Dialer) Dial(ctx context.Context, urlStr string) (*Conn, *http.Response, error) {
+	return d.dial(ctx, urlStr, nil)
+}
+
+// dial is Dial with extra extensions negotiated after Compression's, which
+// only tests supply.
+func (d *Dialer) dial(ctx context.Context, urlStr string, extra []frameExtension) (*Conn, *http.Response, error) {
 	if d == nil {
 		d = &Dialer{}
 	}
-	extensions, err := buildExtensions(d.Compression, d.newExtensions)
+	extensions, err := buildExtensions(d.Compression, extra)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -174,11 +175,6 @@ type Upgrader struct {
 	// compression state.
 	Compression *Compression
 
-	// newExtensions, if non-nil, returns further extensions to negotiate,
-	// after Compression. Only tests set it. It is called once per Upgrade and
-	// must return new instances.
-	newExtensions func() []frameExtension
-
 	// MaxMessageSize bounds each incoming frame and reassembled message in
 	// bytes, including data decompressed by Compression. Zero means
 	// DefaultMaxMessageSize; a negative value means no limit.
@@ -223,15 +219,21 @@ func (u *Upgrader) Upgrade(w http.ResponseWriter, r *http.Request) (*Conn, error
 	if u == nil {
 		u = &Upgrader{}
 	}
-	conn, err := u.upgrade(w, r)
+	return u.upgrade(w, r, nil)
+}
+
+// upgrade is Upgrade with extra extensions negotiated after Compression's,
+// which only tests supply.
+func (u *Upgrader) upgrade(w http.ResponseWriter, r *http.Request, extra []frameExtension) (*Conn, error) {
+	conn, err := u.handshake(w, r, extra)
 	if err != nil {
 		return nil, writeUpgradeError(w, r, err, u.Error)
 	}
 	return conn, nil
 }
 
-func (u *Upgrader) upgrade(w http.ResponseWriter, r *http.Request) (*Conn, error) {
-	extensions, err := buildExtensions(u.Compression, u.newExtensions)
+func (u *Upgrader) handshake(w http.ResponseWriter, r *http.Request, extra []frameExtension) (*Conn, error) {
+	extensions, err := buildExtensions(u.Compression, extra)
 	if err != nil {
 		return nil, err
 	}
@@ -281,10 +283,6 @@ type ConnConfig struct {
 	// bytes, including decompressed data. Zero means DefaultMaxMessageSize; a
 	// negative value means no limit.
 	MaxMessageSize int
-
-	// extensions are further negotiated extensions, after Extensions'. Only
-	// tests set them.
-	extensions []frameExtension
 }
 
 // NewConn creates a WebSocket connection over conn, whose opening handshake
@@ -296,7 +294,12 @@ type ConnConfig struct {
 // names an extension other than permessage-deflate, and with ErrInvalidConfig
 // for an invalid cfg.Compression.
 func NewConn(conn net.Conn, cfg ConnConfig) (*Conn, error) {
-	extensions := cfg.extensions
+	return newConfiguredConn(conn, cfg, nil)
+}
+
+// newConfiguredConn is NewConn with extra negotiated extensions after
+// cfg.Extensions', which only tests supply.
+func newConfiguredConn(conn net.Conn, cfg ConnConfig, extensions []frameExtension) (*Conn, error) {
 	if cfg.Extensions != "" {
 		pmd, err := agreedCompression(cfg.Extensions, cfg.Compression, cfg.Server)
 		if err != nil {
@@ -363,8 +366,8 @@ func headLimit(n int64) int64 {
 }
 
 // buildExtensions creates one connection's extensions: permessage-deflate
-// from compression, if any, then the factory's.
-func buildExtensions(compression *Compression, factory func() []frameExtension) ([]frameExtension, error) {
+// from compression, if any, then extra.
+func buildExtensions(compression *Compression, extra []frameExtension) ([]frameExtension, error) {
 	var extensions []frameExtension
 	if compression != nil {
 		pmd, err := compression.extension()
@@ -373,8 +376,5 @@ func buildExtensions(compression *Compression, factory func() []frameExtension) 
 		}
 		extensions = append(extensions, pmd)
 	}
-	if factory != nil {
-		extensions = append(extensions, factory()...)
-	}
-	return extensions, nil
+	return append(extensions, extra...), nil
 }

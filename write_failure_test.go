@@ -86,7 +86,7 @@ func TestWriteFailureWritePoisonPreventsWireReuse(t *testing.T) {
 					cause := &failedWriteError{"synthetic write error"}
 					raw := &failedWriteRecorder{reader: bytes.NewReader(failureWire(server, 0x82, []byte("inbound"))), prefix: prefix, cause: cause}
 					ext := &failedWriteExtension{}
-					c := newTestConn(raw, ConnConfig{Server: server, extensions: []frameExtension{ext}})
+					c := newTestConn(raw, ConnConfig{Server: server}, []frameExtension{ext}...)
 					data := []byte("outbound")
 					if stage == "header" {
 						c.rw.Writer = bufio.NewWriterSize(raw, 1)
@@ -155,7 +155,7 @@ func TestWriteFailureWritePreflightRemainsUsable(t *testing.T) {
 	for _, server := range []bool{false, true} {
 		raw := &failedWriteRecorder{reader: bytes.NewReader(nil)}
 		ext := &failedWriteExtension{}
-		c := newTestConn(raw, ConnConfig{Server: server, extensions: []frameExtension{ext}})
+		c := newTestConn(raw, ConnConfig{Server: server}, []frameExtension{ext}...)
 		for _, write := range []func() error{
 			func() error { return c.WriteMessage(PingMessage, nil) },
 			func() error { return c.WriteMessage(TextMessage, []byte{255}) },
@@ -390,7 +390,7 @@ func TestWriteFailureRetrySkipsMutatingAndFailingExtension(t *testing.T) {
 		}
 		return nil
 	}
-	c := newTestConn(raw, ConnConfig{Server: true, extensions: []frameExtension{ext}})
+	c := newTestConn(raw, ConnConfig{Server: true}, []frameExtension{ext}...)
 	requireWriteCause(t, c.WriteMessage(BinaryMessage, []byte("first")), cause)
 	retry := []byte("retry")
 	err := c.WriteMessage(BinaryMessage, retry)
@@ -431,7 +431,7 @@ func TestWriteFailureQueuedWriteSkipsExtensions(t *testing.T) {
 	var once sync.Once
 	defer once.Do(func() { close(raw.release) })
 	ext := &failedWriteExtension{}
-	c := newTestConn(raw, ConnConfig{Server: true, extensions: []frameExtension{ext}})
+	c := newTestConn(raw, ConnConfig{Server: true}, []frameExtension{ext}...)
 	results := make(chan error, 2)
 	go func() { results <- c.WriteMessage(BinaryMessage, []byte("one")) }()
 	failedWriteAwait(t, raw.entered)
@@ -454,7 +454,7 @@ func TestWriteFailureValidationPrecedence(t *testing.T) {
 	cause := &failedWriteError{"transport failure"}
 	raw := &failedWriteRecorder{reader: bytes.NewReader(nil), cause: cause}
 	ext := &failedWriteExtension{}
-	c := newTestConn(raw, ConnConfig{Server: true, extensions: []frameExtension{ext}})
+	c := newTestConn(raw, ConnConfig{Server: true}, []frameExtension{ext}...)
 	requireWriteCause(t, c.WriteMessage(BinaryMessage, nil), cause)
 	for _, closed := range []bool{false, true} {
 		if closed {
@@ -502,7 +502,7 @@ func TestWriteFailureAfterSuccessfulClose(t *testing.T) {
 	cause := &failedWriteError{"pong transport failure"}
 	raw := &failedWriteRecorder{reader: bytes.NewReader(failureWire(true, 0x82, []byte("inbound"))), failAt: 2, cause: cause}
 	ext := &failedWriteExtension{}
-	c := newTestConn(raw, ConnConfig{Server: true, extensions: []frameExtension{ext}})
+	c := newTestConn(raw, ConnConfig{Server: true}, []frameExtension{ext}...)
 	if err := c.WriteControlFrame(CloseMessage, nil); err != nil {
 		t.Fatal(err)
 	}

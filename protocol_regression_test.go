@@ -3,10 +3,12 @@ package websocket
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"io"
 	"net"
+	"net/http"
 	"strconv"
 	"testing"
 	"time"
@@ -254,11 +256,23 @@ func TestReadFrameHugeDeclarationDoesNotAllocate(t *testing.T) {
 	}
 }
 
-// newTestConn is NewConn for configurations that cannot fail.
-func newTestConn(conn net.Conn, cfg ConnConfig) *Conn {
-	c, err := NewConn(conn, cfg)
+// newTestConn is NewConn for configurations that cannot fail, with
+// extensions negotiated after cfg.Extensions'.
+func newTestConn(conn net.Conn, cfg ConnConfig, extensions ...frameExtension) *Conn {
+	c, err := newConfiguredConn(conn, cfg, extensions)
 	if err != nil {
 		panic(err)
 	}
 	return c
+}
+
+// dialExtensions is d.Dial with extensions offered after Compression's.
+func dialExtensions(ctx context.Context, d *Dialer, urlStr string, extensions []frameExtension) (*Conn, *http.Response, error) {
+	return d.dial(ctx, urlStr, extensions)
+}
+
+// upgradeExtensions is u.Upgrade with extensions negotiated after
+// Compression's.
+func upgradeExtensions(w http.ResponseWriter, r *http.Request, u *Upgrader, extensions []frameExtension) (*Conn, error) {
+	return u.upgrade(w, r, extensions)
 }

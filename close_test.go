@@ -133,7 +133,7 @@ func TestReadMessageReturnsPeerCloseError(t *testing.T) {
 func TestReadMessageReturnsPeerCloseErrorDuringCompression(t *testing.T) {
 	compressed := defaultStoredDeflate([]byte("partial"))
 	wire := append(failureWire(false, 0x42, compressed), failureWire(false, 0x88, append([]byte{3, 233}, "away"...))...)
-	c := newTestConn(&memoryConn{Reader: bytes.NewReader(wire)}, ConnConfig{extensions: []frameExtension{defaultLimitPMD(t, false)}})
+	c := newTestConn(&memoryConn{Reader: bytes.NewReader(wire)}, ConnConfig{}, []frameExtension{defaultLimitPMD(t, false)}...)
 	_, _, err := c.ReadMessage()
 	if ce, ok := errors.AsType[*CloseError](err); !ok || ce.Code != StatusGoingAway || ce.Reason != "away" {
 		t.Fatalf("ReadMessage = %v, want StatusGoingAway close", err)

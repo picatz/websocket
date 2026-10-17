@@ -61,7 +61,7 @@ func checkPMDUpgrade(t *testing.T, offer, want string, options ...pmdOption) {
 	w := &hijackResponse{httptest.NewRecorder(), raw, bufio.NewReadWriter(bufio.NewReader(raw), bufio.NewWriter(raw))}
 	pmd := newPerMessageDeflate(options...).(*perMessageDeflate)
 	configured := pmd.configured
-	c, err := (&Upgrader{newExtensions: func() []frameExtension { return []frameExtension{pmd} }}).Upgrade(w, r)
+	c, err := upgradeExtensions(w, r, &Upgrader{}, []frameExtension{pmd})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +132,7 @@ func TestPMDDialDirectionalWindows(t *testing.T) {
 				closed <- err
 			}))
 			defer srv.Close()
-			c, response, err := (&Dialer{newExtensions: func() []frameExtension { return []frameExtension{pmd} }}).Dial(t.Context(), "ws"+srv.URL[4:])
+			c, response, err := dialExtensions(t.Context(), &Dialer{}, "ws"+srv.URL[4:], []frameExtension{pmd})
 			if c != nil {
 				c.conn.Close()
 			}
@@ -161,7 +161,7 @@ func TestPMDSmallLocalWindowsRoundTrip(t *testing.T) {
 			server := newPerMessageDeflate(withServerMaxWindowBits(bits))
 			client := newPerMessageDeflate(withClientMaxWindowBits(bits))
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				c, err := (&Upgrader{newExtensions: func() []frameExtension { return []frameExtension{server} }}).Upgrade(w, r)
+				c, err := upgradeExtensions(w, r, &Upgrader{}, []frameExtension{server})
 				if err != nil {
 					t.Error(err)
 					return
@@ -179,7 +179,7 @@ func TestPMDSmallLocalWindowsRoundTrip(t *testing.T) {
 				}
 			}))
 			defer srv.Close()
-			c, resp, err := (&Dialer{newExtensions: func() []frameExtension { return []frameExtension{client} }}).Dial(t.Context(), "ws"+srv.URL[4:])
+			c, resp, err := dialExtensions(t.Context(), &Dialer{}, "ws"+srv.URL[4:], []frameExtension{client})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -328,7 +328,7 @@ func TestPMDDirectConnRoleSwitchHonorsWindow(t *testing.T) {
 	// Direct Negotiate is the client response path. If subsequently used as a
 	// server, NewConn binds that role and the 9-bit promise applies to sending.
 	raw := &memoryConn{Reader: bytes.NewReader(nil)}
-	c := newTestConn(raw, ConnConfig{Server: true, extensions: []frameExtension{p}})
+	c := newTestConn(raw, ConnConfig{Server: true}, []frameExtension{p}...)
 	defer c.conn.Close()
 	if got := p.(*perMessageDeflate).localWindowBits(); got != 9 {
 		t.Fatalf("server send window = %d, want 9", got)
@@ -341,7 +341,7 @@ func TestPMDDirectConnRoleSwitchHonorsWindow(t *testing.T) {
 func TestPMDDirectServerNegotiation(t *testing.T) {
 	p := newPerMessageDeflate(withClientMaxWindowBits(9), withClientNoContextTakeover())
 	raw := &memoryConn{Reader: bytes.NewReader(nil)}
-	c := newTestConn(raw, ConnConfig{Server: true, extensions: []frameExtension{p}})
+	c := newTestConn(raw, ConnConfig{Server: true}, []frameExtension{p}...)
 	defer c.conn.Close()
 	if err := p.Negotiate("permessage-deflate; client_max_window_bits"); err != nil || !p.IsEnabled() {
 		t.Fatalf("direct server peer-window negotiation = %v, enabled %t", err, p.IsEnabled())
@@ -366,7 +366,7 @@ func TestPMDDirectServerWindowParameters(t *testing.T) {
 		}
 		p := newPerMessageDeflate(option)
 		raw := &memoryConn{Reader: bytes.NewReader(nil)}
-		c := newTestConn(raw, ConnConfig{Server: true, extensions: []frameExtension{p}})
+		c := newTestConn(raw, ConnConfig{Server: true}, []frameExtension{p}...)
 		err := p.Negotiate("permessage-deflate")
 		c.conn.Close()
 		// A server may always bound its own window (RFC 7692 section 7.1.2.1),
@@ -413,7 +413,7 @@ func TestPMDIndependentZlibWindow(t *testing.T) {
 				}
 				p := newPerMessageDeflate(options...).(*perMessageDeflate)
 				if server {
-					c := newTestConn(&memoryConn{Reader: bytes.NewReader(nil)}, ConnConfig{Server: true, extensions: []frameExtension{p}})
+					c := newTestConn(&memoryConn{Reader: bytes.NewReader(nil)}, ConnConfig{Server: true}, []frameExtension{p}...)
 					defer c.conn.Close()
 				}
 				if err := p.Negotiate(params.String()); err != nil || !p.IsEnabled() {

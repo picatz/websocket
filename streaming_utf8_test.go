@@ -291,7 +291,7 @@ func TestReadMessagePreservesExtensionOwnership(t *testing.T) {
 	shared := []byte("alpha")
 	ext := &headerTransformExtension{enabled: true, process: func(f *wireFrame) error { f.Payload = shared; return nil }}
 	raw := &memoryConn{Reader: bytes.NewReader([]byte{0x81, 1, 'x', 0x81, 1, 'y'})}
-	c := newTestConn(raw, ConnConfig{extensions: []frameExtension{ext}})
+	c := newTestConn(raw, ConnConfig{}, []frameExtension{ext}...)
 	_, got, err := c.ReadMessage()
 	if err != nil {
 		t.Fatal(err)
@@ -424,7 +424,7 @@ func TestReadMessageRegisteredExtensionsKeepCompleteFramePath(t *testing.T) {
 			ext := &headerTransformExtension{enabled: enabled, process: func(f *wireFrame) error { calls++; f.Payload = []byte("valid"); return nil }}
 			payload := []byte{0xff, 'a', 'b', 'c'}
 			raw := &streamChoppedConn{chunks: streamParts(server, payload, 1), tailErr: streamWithheld}
-			_, _, err := newTestConn(raw, ConnConfig{Server: server, extensions: []frameExtension{ext}}).ReadMessage()
+			_, _, err := newTestConn(raw, ConnConfig{Server: server}, []frameExtension{ext}...).ReadMessage()
 			if !errors.Is(err, streamWithheld) || raw.tailReads != 1 || calls != 0 || raw.written.Len() != 0 {
 				t.Fatalf("server=%v enabled=%v err=%v tail=%d calls=%d", server, enabled, err, raw.tailReads, calls)
 			}

@@ -203,7 +203,7 @@ func TestReadFailureCallbackProvenance(t *testing.T) {
 		t.Run(cause.Error(), func(t *testing.T) {
 			ext := &failureExtension{enabled: true, cause: fmt.Errorf("custom: %w", cause)}
 			raw := &failureMemoryConn{memoryConn: memoryConn{Reader: bytes.NewReader([]byte{0x82, 0})}}
-			c := newTestConn(raw, ConnConfig{extensions: []frameExtension{ext}})
+			c := newTestConn(raw, ConnConfig{}, []frameExtension{ext}...)
 			_, _, err := c.ReadMessage()
 			want := "extension failure-test failed to process incoming frame: " + ext.cause.Error()
 			if !errors.Is(err, cause) || err.Error() != want || raw.closes != 1 || raw.written.Len() != 0 || ext.outgoing != 0 {
@@ -214,7 +214,7 @@ func TestReadFailureCallbackProvenance(t *testing.T) {
 	for _, enabled := range []bool{false, true} {
 		ext := &failureExtension{enabled: enabled}
 		raw := &failureMemoryConn{memoryConn: memoryConn{Reader: bytes.NewReader([]byte{0x81, 1, 255})}}
-		_, _, err := newTestConn(raw, ConnConfig{extensions: []frameExtension{ext}}).ReadMessage()
+		_, _, err := newTestConn(raw, ConnConfig{}, []frameExtension{ext}...).ReadMessage()
 		if err != ErrInvalidFrame || ext.outgoing != 0 {
 			t.Fatal(err)
 		}
@@ -245,7 +245,7 @@ func TestReadFailureBuiltInDecodedLimitDiagnostic(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw := &failureMemoryConn{memoryConn: memoryConn{Reader: bytes.NewReader(failureWire(false, 0xc1, f.Payload))}}
-	c := newTestConn(raw, ConnConfig{extensions: []frameExtension{pmd}, MaxMessageSize: 128})
+	c := newTestConn(raw, ConnConfig{MaxMessageSize: 128}, []frameExtension{pmd}...)
 	_, _, err := c.ReadMessage()
 	if !errors.Is(err, ErrPayloadTooLarge) || err.Error() != "extension permessage-deflate failed to process incoming frame: "+ErrPayloadTooLarge.Error() {
 		t.Fatal(err)

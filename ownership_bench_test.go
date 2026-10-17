@@ -55,7 +55,7 @@ func ownershipBenchmarkRead(b *testing.B, op Opcode, payload []byte, masked bool
 	wire := benchmarkWire(payload, masked, fragments)
 	wire[0] = wire[0]&0xf0 | byte(op)
 	r := bytes.NewReader(wire)
-	c := newTestConn(&benchmarkConn{reader: r, writer: io.Discard}, ConnConfig{Server: masked, extensions: extensions})
+	c := newTestConn(&benchmarkConn{reader: r, writer: io.Discard}, ConnConfig{Server: masked}, extensions...)
 	kind, got, err := c.ReadMessage()
 	if err != nil || kind != op || !bytes.Equal(got, payload) {
 		b.Fatal(kind, len(got), err)

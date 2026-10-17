@@ -30,7 +30,7 @@ func (c *headerOnlyConn) Read(p []byte) (int, error) {
 func requireHeaderRejection(t *testing.T, wire []byte, server bool, limit int, extensions []frameExtension, want error) {
 	t.Helper()
 	raw := &headerOnlyConn{memoryConn: memoryConn{Reader: bytes.NewReader(wire)}}
-	c := newTestConn(raw, ConnConfig{Server: server, extensions: extensions, MaxMessageSize: limit})
+	c := newTestConn(raw, ConnConfig{Server: server, MaxMessageSize: limit}, extensions...)
 	_, _, err := c.ReadMessage()
 	if !errors.Is(err, want) || raw.bodyReads != 0 {
 		t.Fatalf("ReadMessage = %v, reads after header = %d; want %v without reading a body", err, raw.bodyReads, want)
