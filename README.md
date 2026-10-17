@@ -191,3 +191,8 @@ go vet ./...
 GOARCH=386 CGO_ENABLED=0 go test ./...
 go test . -run '^$' -fuzz '^FuzzReadMessage$' -fuzztime=30s
 ```
+
+`TestAPI` compares the exported API of every package with
+[`api/v0.txt`](api/v0.txt), so any change to it shows up as a reviewed diff.
+After an intended change, run `go test -run '^TestAPI$' -update-api .` and
+commit the result.

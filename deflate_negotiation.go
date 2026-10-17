@@ -7,9 +7,9 @@ import (
 	"strings"
 )
 
-// A zero window is absent (effective 15); -1 is the bare client offer parameter.
-// Preserve presence: an omitted response cannot satisfy a server window offer,
-// even when both have an effective value of 15.
+// A zero window is absent (effective 15); -1 is the bare client offer
+// parameter. Preserve presence: an omitted response cannot satisfy a server
+// window offer, even when both have an effective value of 15.
 type pmdParameters struct {
 	clientNoContextTakeover bool
 	serverNoContextTakeover bool

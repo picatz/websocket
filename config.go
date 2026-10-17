@@ -14,7 +14,8 @@ import (
 // A Dialer contains options for connecting to a WebSocket server. Its zero
 // value dials directly with TLS defaults, no compression, and the default
 // message and response-head limits. A Dialer may be reused and is safe for
-// concurrent use; Dial does not modify it or the values it refers to.
+// concurrent use; Dial does not modify it or the values it refers to. A nil
+// *Dialer behaves as the zero Dialer.
 type Dialer struct {
 	// NetDialContext opens the TCP transport, either to the WebSocket server
 	// or, when Proxy selects one, to the proxy. It receives the Dial context,
@@ -39,18 +40,19 @@ type Dialer struct {
 	// proxy never sees the WebSocket request headers of a wss connection.
 	//
 	// Proxy URLs must use the http or https scheme; https proxies are reached
-	// over TLS using a clone of TLSClientConfig with ServerName set to the proxy
-	// host, matching [http.Transport]. User info in the proxy URL is sent only
-	// to the proxy as Basic Proxy-Authorization. The CONNECT response head
+	// over TLS using a clone of TLSClientConfig with ServerName set to the
+	// proxy host, matching [http.Transport]. User info in the proxy URL is sent
+	// only to the proxy as Basic Proxy-Authorization. The CONNECT response head
 	// counts against MaxResponseHeaderBytes, and any status other than 200
-	// fails with an error matching ErrBadHandshake that names the proxy. SOCKS proxies
-	// are not supported; supply a SOCKS dialer as NetDialContext instead.
+	// fails with an error matching ErrBadHandshake that names the proxy. SOCKS
+	// proxies are not supported; supply a SOCKS dialer as NetDialContext
+	// instead.
 	//
 	// [RFC 9110, Section 9.3.6]: https://www.rfc-editor.org/rfc/rfc9110.html#section-9.3.6
 	Proxy func(*http.Request) (*url.URL, error)
 
-	// TLSClientConfig configures TLS for wss URLs and HTTPS proxies. Dial uses a
-	// clone, setting ServerName from the URL when it is empty. If nil, the
+	// TLSClientConfig configures TLS for wss URLs and HTTPS proxies. Dial uses
+	// a clone, setting ServerName from the URL when it is empty. If nil, the
 	// zero configuration is used.
 	TLSClientConfig *tls.Config
 
@@ -70,7 +72,7 @@ type Dialer struct {
 	// selects at most one; Conn.Subprotocol reports it, and Dial rejects a
 	// selection that was not offered with an error matching ErrBadHandshake.
 	//
-	// https://datatracker.ietf.org/doc/html/rfc6455#section-4.1
+	// https://www.rfc-editor.org/rfc/rfc6455#section-4.1
 	Subprotocols []string
 
 	// Compression, if non-nil, offers permessage-deflate (RFC 7692) with these
@@ -132,7 +134,10 @@ func (d *Dialer) dial(ctx context.Context, urlStr string, extra []frameExtension
 	return conn, resp, err
 }
 
-// Dial connects to the WebSocket server at urlStr with a zero Dialer.
+// Dial connects to the WebSocket server at urlStr with the zero Dialer. See
+// Dialer.Dial: ctx bounds only connecting and the handshake, and a rejected
+// handshake returns the server's response with an error matching
+// ErrBadHandshake.
 func Dial(ctx context.Context, urlStr string) (*Conn, *http.Response, error) {
 	return (&Dialer{}).Dial(ctx, urlStr)
 }
@@ -140,19 +145,22 @@ func Dial(ctx context.Context, urlStr string) (*Conn, *http.Response, error) {
 // An Upgrader contains options for accepting WebSocket connections. Its zero
 // value accepts same-origin requests with no subprotocol, no compression and
 // the default message limit. One Upgrader may be shared by every handler; it
-// is safe for concurrent use, and Upgrade does not modify it.
+// is safe for concurrent use, and Upgrade does not modify it. A nil *Upgrader
+// behaves as the zero Upgrader.
 type Upgrader struct {
-	// CheckOrigin replaces the default same-origin decision. If nil, a
-	// missing Origin is allowed; otherwise a single valid HTTP/HTTPS Origin
-	// must match r.Host and the scheme observed through r.TLS. Forwarded
-	// headers and r.URL.Scheme are not trusted.
+	// CheckOrigin replaces the default policy, which allows a missing Origin
+	// and otherwise requires a single HTTP or HTTPS Origin matching r.Host
+	// and the scheme seen through r.TLS. Forwarded headers and r.URL.Scheme
+	// are not trusted. See the package's Limits and security section.
 	//
 	// The function receives the request and one canonical Origin: a lowercase
 	// scheme/ASCII host, normalized numeric port (HTTP/HTTPS defaults
 	// omitted), and normalized IPv6; "" means absent and "null" means an
 	// opaque origin. Host spelling is otherwise preserved, including trailing
-	// dots; Unicode hosts must use ASCII/punycode. Malformed, empty, multiple,
-	// or list-valued Origin fields are rejected before the function runs.
+	// dots, and no name is resolved, so "localhost" and "127.0.0.1" are
+	// different origins; Unicode hosts must use ASCII/punycode. Malformed,
+	// empty, multiple, or list-valued Origin fields are rejected before the
+	// function runs.
 	//
 	// It replaces, rather than supplements, the default: it must decide
 	// whether missing and opaque origins are allowed. Use an exact allowlist
@@ -167,7 +175,7 @@ type Upgrader struct {
 	// without one. Conn.Subprotocol reports the selection. Each must be a
 	// unique, case-sensitive HTTP token.
 	//
-	// https://datatracker.ietf.org/doc/html/rfc6455#section-4.2.2
+	// https://www.rfc-editor.org/rfc/rfc6455#section-4.2.2
 	Subprotocols []string
 
 	// Header holds additional response header fields for the 101 response.
@@ -220,12 +228,13 @@ type Upgrader struct {
 // may implement http.Hijacker directly or expose the underlying
 // http.ResponseWriter through an Unwrap() http.ResponseWriter method, as used
 // by http.ResponseController. A writer's own Hijack method takes precedence
-// over Unwrap. HTTP/2 is not supported.
+// over Unwrap. HTTP/2 is not supported. After a successful Upgrade the
+// connection belongs to the returned Conn, so the handler must not use w.
 //
 // Origin checks are not authentication: callers still own authentication,
 // authorization, and authoritative Host validation.
 //
-// https://datatracker.ietf.org/doc/html/rfc6455#section-4.2.1
+// https://www.rfc-editor.org/rfc/rfc6455#section-4.2.1
 func (u *Upgrader) Upgrade(w http.ResponseWriter, r *http.Request) (*Conn, error) {
 	if u == nil {
 		u = &zeroUpgrader
@@ -270,7 +279,10 @@ func (u *Upgrader) options(extra []frameExtension) (upgradeOptions, error) {
 	}, nil
 }
 
-// Upgrade upgrades the HTTP server connection with a zero Upgrader.
+// Upgrade upgrades the HTTP server connection with the zero Upgrader. See
+// Upgrader.Upgrade: on failure the HTTP error response has already been
+// written, so the handler should just return, and after success the handler
+// must not use w.
 func Upgrade(w http.ResponseWriter, r *http.Request) (*Conn, error) {
 	return zeroUpgrader.Upgrade(w, r)
 }
@@ -299,8 +311,8 @@ type ConnConfig struct {
 
 	// Compression sets Level, Threshold and MemoryLimit for permessage-deflate
 	// when Extensions agrees on it. Its window and no_context_takeover fields
-	// are not used: the agreement decides those. If nil, the zero Compression
-	// is used.
+	// are ignored, since the agreement decides those, but must still be
+	// valid. If nil, the zero Compression is used.
 	Compression *Compression
 
 	// MaxMessageSize bounds each incoming frame and reassembled message in

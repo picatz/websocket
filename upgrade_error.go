@@ -18,7 +18,7 @@ import (
 //   - errHandshakeFailed: 0. The transport may already be hijacked.
 //   - Any other error, which is a malformed client handshake: 400 Bad Request.
 //
-// https://datatracker.ietf.org/doc/html/rfc6455#section-4.2.1
+// https://www.rfc-editor.org/rfc/rfc6455#section-4.2.1
 func upgradeErrorStatus(err error) int {
 	switch {
 	case err == nil, errors.Is(err, errHandshakeFailed):

@@ -113,11 +113,11 @@ type listener struct {
 }
 
 // Dial opens a WebSocket connection to urlStr, a ws or wss URL; browsers also
-// accept http and https URLs and URLs relative to the document. It waits for the
-// host to finish the opening handshake, or for ctx to end, in which case the
-// connection attempt is abandoned. Canceling ctx after Dial returns has no
+// accept http and https URLs and URLs relative to the document. It waits for
+// the host to finish the opening handshake, or for ctx to end, in which case
+// the connection attempt is abandoned. Canceling ctx after Dial returns has no
 // effect on the connection.
-func (d *Dialer) Dial(ctx context.Context, urlStr string) (conn *Conn, err error) {
+func (d *Dialer) Dial(ctx context.Context, urlStr string) (*Conn, error) {
 	if d == nil {
 		d = &Dialer{}
 	}
@@ -251,10 +251,11 @@ func (c *Conn) onClose(ev js.Value) {
 }
 
 // closeEventError converts a close event into ReadMessage's terminal error.
-// After a local Close it matches net.ErrClosed. A clean close from the peer is a
-// *websocket.CloseError carrying the peer's code and reason, which matches
-// io.EOF for a normal close like websocket.Conn's. A close without a closing handshake, which the
-// host reports as code 1006 (Abnormal Closure), matches io.ErrUnexpectedEOF.
+// After a local Close it matches net.ErrClosed. A clean close from the peer is
+// a *websocket.CloseError carrying the peer's code and reason, which matches
+// io.EOF for a normal close like websocket.Conn's. A close without a closing
+// handshake, which the host reports as code 1006 (Abnormal Closure), matches
+// io.ErrUnexpectedEOF.
 //
 // https://websockets.spec.whatwg.org/#the-closeevent-interface
 func closeEventError(ev js.Value, closedLocally bool) error {
@@ -473,7 +474,7 @@ func (c *Conn) CloseWithStatus(code websocket.StatusCode, reason string) error {
 // maxCloseReason is the largest close reason that fits in a control frame
 // after the two-byte status code.
 //
-// https://datatracker.ietf.org/doc/html/rfc6455#section-5.5
+// https://www.rfc-editor.org/rfc/rfc6455#section-5.5
 const maxCloseReason = 125 - 2
 
 func (c *Conn) close(code websocket.StatusCode, reason string) error {

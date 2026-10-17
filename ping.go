@@ -19,8 +19,9 @@ import (
 // WriteMessageContext, because a partial frame cannot be retried. If ctx ends
 // while waiting for the Pong, Ping returns ctx's cause and the connection is
 // left open: deciding that a missing Pong means the peer is gone, and closing,
-// is up to the caller. If the connection closes first, Ping returns an error
-// matching net.ErrClosed.
+// is up to the caller. If ctx ends just as the frame is written, the connection
+// may already be aborted. If the connection closes first, Ping returns an
+// error matching net.ErrClosed.
 //
 // [RFC 6455, Section 5.5.2]: https://www.rfc-editor.org/rfc/rfc6455.html#section-5.5.2
 func (c *Conn) Ping(ctx context.Context) error {

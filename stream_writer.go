@@ -25,12 +25,12 @@ var errWriterClosed = errors.New("websocket: message writer closed")
 //
 // For TextMessage, the payload is checked as UTF-8 across Write calls. An
 // invalid sequence, or a rune left incomplete at Close, fails the writer as
-// WriteMessage fails invalid text. Errors follow WriteMessage: once part of the message has
-// reached the transport, a failure poisons later writes, and the connection
-// should be closed. After an error or Close, the writer returns an error and
-// no longer blocks other writers.
+// WriteMessage fails invalid text. Errors follow WriteMessage: once part of the
+// message has reached the transport, a failure poisons later writes, and the
+// connection should be closed. After an error or Close, the writer returns an
+// error and no longer blocks other writers.
 //
-// https://datatracker.ietf.org/doc/html/rfc6455#section-5.4
+// https://www.rfc-editor.org/rfc/rfc6455#section-5.4
 func (c *Conn) NextWriter(messageType MessageType) (io.WriteCloser, error) {
 	if messageType != TextMessage && messageType != BinaryMessage {
 		return nil, errInvalidMessageType
