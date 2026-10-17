@@ -23,6 +23,9 @@
 // framing and I/O and closes its transport on Close or read failure; do not
 // read or write framed bytes directly on that transport.
 //
+// Conn.LocalAddr, Conn.RemoteAddr and Conn.ConnectionState describe the
+// transport. The wsjson subpackage reads and writes JSON text messages.
+//
 // # Proxies and custom transports
 //
 // Dial connects directly unless WithProxy selects an HTTP or HTTPS proxy, for
