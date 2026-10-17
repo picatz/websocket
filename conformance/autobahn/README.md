@@ -63,8 +63,8 @@ conformance, and default-mode results cannot establish RFC 7692 support.
 
 Compression partitions the authoritative selected inventory into
 deterministic shards: single cases for server compression, and batches of eight
-for client compression, whose single `fuzzingserver` run exceeded the 1 GiB cap
-when unsharded. Both peers restart in a fresh isolated
+for client compression, whose single `fuzzingserver` run exceeded the memory
+cap when unsharded. Both peers restart in a fresh isolated
 container per shard, sequentially within one job. The binary and pinned image
 are prepared once. The aggregate deadline remains 20 minutes, not 20 minutes
 per shard. Every shard keeps its config, resource diagnostics, logs, and raw
@@ -100,7 +100,11 @@ Both peers run inside the same container with Docker `--network none`. Only its
 loopback interface is used; no host ports are published. The Go driver rejects
 DNS names and non-loopback addresses. The container has a read-only root,
 dropped capabilities, no-new-privileges, a non-root host UID, a 128-process cap,
-two CPUs, 1 GiB memory with no additional swap, and a bounded temporary mount.
+two CPUs, 2 GiB memory with no additional swap, and a bounded temporary mount.
+The cap was 1 GiB until the suite's `fuzzingserver` was measured peaking near
+1.3 GiB RSS on client-compression cases `12.1.9`–`12.1.16`, which OOM-killed it
+intermittently; the Go testee stays under 16 MiB, so the cap bounds the
+suite, not the library.
 Only the test binary, this harness, and generated config are mounted read-only;
 only the report directory is writable. No Docker socket, credentials, checkout,
 or external targets are passed into the container. Pulling the official image
@@ -110,7 +114,7 @@ The legacy suite runs with `PYPY_GC_MAX=512MB` (512 MiB in PyPy's parser),
 recorded in `metadata.json`. This starts more frequent collection near that
 GC-managed heap limit and can raise `MemoryError` or terminate if exhausted.
 It does not cap total RSS, change the Go testee's runtime, raise the shared
-1 GiB container cap, or suppress OOM failures. This is baseline-generation
+container cap, or suppress OOM failures. This is baseline-generation
 infrastructure, not a production tuning recommendation or performance result.
 See [official PyPy GC configuration](https://doc.pypy.org/gc_info.html#environment-variables)
 and the [pinned runtime implementation](https://github.com/pypy/pypy/blob/release-pypy2.7-v7.3.20/rpython/memory/gc/incminimark.py).

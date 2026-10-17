@@ -41,7 +41,7 @@ jobs:
           - role: server
             profile: compression
             shard_size: 1
-          # One unsharded fuzzingserver run exceeds the 1 GiB container cap.
+          # One unsharded fuzzingserver run exceeds the container memory cap.
           - role: client
             profile: compression
             shard_size: 8
