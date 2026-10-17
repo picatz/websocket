@@ -110,8 +110,8 @@ func (nc *netConn) SetWriteDeadline(t time.Time) error { return nc.c.SetWriteDea
 
 // netConnError maps Conn errors onto net.Conn conventions: a peer's clean
 // close becomes the bare io.EOF that stream readers such as io.Copy compare
-// against with ==, and a closed connection matches net.ErrClosed. Other
-// errors, including abnormal closes and timeouts, are unchanged.
+// against with ==. Other errors, including abnormal closes and timeouts, are
+// unchanged; a closed connection's errors already match net.ErrClosed.
 func netConnError(err error) error {
 	if ce, ok := errors.AsType[*CloseError](err); ok {
 		switch ce.Code {
@@ -119,9 +119,6 @@ func netConnError(err error) error {
 			return io.EOF
 		}
 		return err
-	}
-	if errors.Is(err, io.ErrClosedPipe) {
-		return fmt.Errorf("%w: %w", net.ErrClosed, err)
 	}
 	return err
 }

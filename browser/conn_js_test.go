@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"os"
 	"strings"
 	"testing"
@@ -96,8 +97,8 @@ func TestPeerClose(t *testing.T) {
 	if ce, ok := errors.AsType[*websocket.CloseError](err); !ok || ce.Reason != "bye" {
 		t.Fatalf("after peer close: err = %#v, want reason %q", err, "bye")
 	}
-	if err := conn.WriteMessage(websocket.TextMessage, []byte("late")); err != io.ErrClosedPipe {
-		t.Fatalf("write after peer close: err = %v, want io.ErrClosedPipe", err)
+	if err := conn.WriteMessage(websocket.TextMessage, []byte("late")); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("write after peer close: err = %v, want net.ErrClosed", err)
 	}
 }
 
@@ -109,11 +110,11 @@ func TestClose(t *testing.T) {
 	if err := conn.Close(); !errors.Is(err, websocket.ErrAlreadyClosed) {
 		t.Fatalf("second Close: err = %v, want ErrAlreadyClosed", err)
 	}
-	if err := conn.WriteMessage(websocket.TextMessage, []byte("x")); err != io.ErrClosedPipe {
-		t.Fatalf("write after Close: err = %v, want io.ErrClosedPipe", err)
+	if err := conn.WriteMessage(websocket.TextMessage, []byte("x")); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("write after Close: err = %v, want net.ErrClosed", err)
 	}
-	if _, _, err := conn.ReadMessage(); err != io.ErrClosedPipe {
-		t.Fatalf("read after Close: err = %v, want io.ErrClosedPipe", err)
+	if _, _, err := conn.ReadMessage(); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("read after Close: err = %v, want net.ErrClosed", err)
 	}
 }
 
@@ -146,8 +147,8 @@ func TestReadContext(t *testing.T) {
 		t.Fatalf("err = %v, want context.DeadlineExceeded", err)
 	}
 	// The canceled read closed the connection.
-	if err := conn.WriteMessage(websocket.TextMessage, []byte("x")); err != io.ErrClosedPipe {
-		t.Fatalf("write after canceled read: err = %v, want io.ErrClosedPipe", err)
+	if err := conn.WriteMessage(websocket.TextMessage, []byte("x")); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("write after canceled read: err = %v, want net.ErrClosed", err)
 	}
 }
 

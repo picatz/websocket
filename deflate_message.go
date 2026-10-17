@@ -259,7 +259,7 @@ func (r *deflateFrameReader) startBuffered(frame *Frame, n uint64) error {
 func (r *deflateFrameReader) advance() error {
 	for r.remaining == 0 {
 		if r.c.closed.Load() {
-			return io.ErrClosedPipe
+			return errClosed
 		}
 		if r.frame.Final {
 			return io.EOF
@@ -434,7 +434,7 @@ func (p *perMessageDeflate) decodeMessage(input *deflateMessageInput, limit int,
 	p.receiveLife.Lock()
 	if p.receiveClosed {
 		p.receiveLife.Unlock()
-		return nil, io.ErrClosedPipe
+		return nil, errClosed
 	}
 	d := p.receive
 	p.receive = nil
@@ -470,7 +470,7 @@ func (p *perMessageDeflate) decodeMessage(input *deflateMessageInput, limit int,
 			return
 		}
 		if p.receiveClosed {
-			out, err = nil, io.ErrClosedPipe
+			out, err = nil, errClosed
 			return
 		}
 		p.receive = d

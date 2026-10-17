@@ -113,11 +113,11 @@ func TestReadFailureStatusAndTerminalState(t *testing.T) {
 				}
 				before := bytes.Clone(raw.written.Bytes())
 				for range 3 {
-					if _, p, e := c.ReadMessage(); e != io.ErrClosedPipe || p != nil {
+					if _, p, e := c.ReadMessage(); !errors.Is(e, net.ErrClosed) || p != nil {
 						t.Fatalf("later read %x %v", p, e)
 					}
 					for _, write := range []func() error{func() error { return c.WriteMessage(TextMessage, []byte("late")) }, func() error { return c.WriteControlFrame(PingMessage, nil) }, func() error { return c.WriteControlFrame(CloseMessage, nil) }} {
-						if e := write(); e != io.ErrClosedPipe {
+						if e := write(); !errors.Is(e, net.ErrClosed) {
 							t.Fatal(e)
 						}
 					}
@@ -331,7 +331,7 @@ func TestConcurrentCloseCancelsFailureNotification(t *testing.T) {
 		case <-time.After(2 * time.Second):
 			t.Fatal("notification never started")
 		}
-		if _, _, err := c.ReadMessage(); err != io.ErrClosedPipe {
+		if _, _, err := c.ReadMessage(); !errors.Is(err, net.ErrClosed) {
 			t.Fatal(err)
 		}
 		start := time.Now()
@@ -582,7 +582,7 @@ func TestReadFailurePartialNotificationIsNeverRetried(t *testing.T) {
 			if err := c.Close(); err != ErrAlreadyClosed {
 				t.Fatal(err)
 			}
-			if err := c.WriteControlFrame(CloseMessage, nil); err != io.ErrClosedPipe {
+			if err := c.WriteControlFrame(CloseMessage, nil); !errors.Is(err, net.ErrClosed) {
 				t.Fatal(err)
 			}
 			if raw.writes != 1 || raw.closes != 1 || !bytes.Equal(before, raw.written.Bytes()) {

@@ -120,7 +120,7 @@ func (w *messageWriter) frame(final bool, payload []byte) error {
 	rsv1 := frame.Rsv1
 	for _, ext := range w.frameExts {
 		if err := ext.ProcessOutgoingFrame(frame); err != nil {
-			return w.fail(fmt.Errorf("extension %s failed to process outgoing frame: %v", ext.Name(), err))
+			return w.fail(fmt.Errorf("extension %s failed to process outgoing frame: %w", ext.Name(), err))
 		}
 	}
 	// RFC 7692 section 5: permessage-deflate owns RSV1 for data frames.

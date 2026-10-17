@@ -195,6 +195,30 @@ that follow RFC 7692 need no change; these are the observable differences:
   `WithCompressionMemoryLimit(0)` to keep a compressor per connection instead,
   which is faster per message and uses about 0.5–1 MiB.
 
+## Closed-connection errors
+
+Operations on a closed connection report one condition the standard library's
+way. Reads, writes, `WriteControlFrame` and `Ping` after `Close`, after the
+peer's close, after an aborted context or after any terminal read error return
+an error matching `net.ErrClosed`, the same error a read that `Close`
+interrupts already returned from the transport. Repeated `Close` and
+`CloseWithStatus` return `ErrAlreadyClosed`, which now matches `net.ErrClosed`
+too. The `browser` package's `Conn` follows the same rule.
+
+```go
+if errors.Is(err, net.ErrClosed) {
+    return // this side or the peer has closed the connection
+}
+```
+
+These errors still match `io.ErrClosedPipe` with `errors.Is`, so checks written
+that way keep working. Code that compared with `err == io.ErrClosedPipe` must
+switch to `errors.Is`.
+
+An error an outgoing extension returns from `ProcessOutgoingFrame` is now
+wrapped with `%w`, like incoming extension errors, so `errors.Is` and
+`errors.As` reach it. It still does not match `ErrWriteFailed`.
+
 ## Verification scope
 
 Default-policy tests exercise omitted options separately from configured protocol
