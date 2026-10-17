@@ -214,6 +214,23 @@ dial failures carry no detail. See the package documentation for the full list.
 Its tests run in Node.js 22 or later against a native Go server as part of
 `go test ./...`, and are skipped when Node is not installed.
 
+## Connection details and JSON
+
+`Conn.LocalAddr` and `Conn.RemoteAddr` return the transport's addresses.
+`Conn.ConnectionState` returns the TLS state of a `wss` client connection or of
+a server connection upgraded from HTTPS, such as the peer's certificates.
+
+The optional `wsjson` package reads and writes one JSON value per text
+message, kept separate so the core package carries no encoding helpers:
+
+```go
+var event struct{ Kind string }
+if err := wsjson.Read(ctx, conn, &event); err != nil {
+	return err
+}
+err := wsjson.Write(ctx, conn, map[string]string{"ack": event.Kind})
+```
+
 ## Limits and connection lifetime
 
 `Dial` and `Upgrade` default to `DefaultMaxMessageSize`, 1 MiB (1,048,576 bytes).
