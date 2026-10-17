@@ -1,11 +1,14 @@
 package websocket_test
 
 import (
+	"bufio"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -286,4 +289,283 @@ func ExampleUpgrader_checkOrigin() {
 	// Output:
 	// https://app.example.com 101
 	// https://evil.example 403
+}
+
+// A Dialer carries client settings and may be shared by many dials. Header
+// adds request fields such as credentials, and the server's handshake
+// response is returned alongside the connection.
+func ExampleDialer() {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer secret-token" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		upgrader := &websocket.Upgrader{
+			Subprotocols: []string{"chat.v1"},
+			Header:       http.Header{"X-Server": {"example"}},
+		}
+		conn, err := upgrader.Upgrade(w, r)
+		if err != nil {
+			return
+		}
+		conn.Close()
+	}))
+	defer srv.Close()
+
+	dialer := &websocket.Dialer{
+		Header:         http.Header{"Authorization": {"Bearer secret-token"}},
+		Subprotocols:   []string{"chat.v1"},
+		MaxMessageSize: 64 << 10,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, resp, err := dialer.Dial(ctx, wsURL(srv))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer conn.Close()
+	fmt.Println(resp.StatusCode, resp.Header.Get("X-Server"), conn.Subprotocol())
+	// Output: 101 example chat.v1
+}
+
+// NetDialContext replaces the TCP dialer, for service discovery, Unix
+// sockets, SOCKS proxies or tests. Here every host name resolves to one local
+// server, while the URL's host is still sent in the handshake.
+func ExampleDialer_netDialContext() {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Upgrade(w, r)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_ = conn.WriteMessage(websocket.TextMessage, []byte("served for "+r.Host))
+	}))
+	defer srv.Close()
+
+	dialer := &websocket.Dialer{
+		NetDialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, network, srv.Listener.Addr().String())
+		},
+	}
+	conn, _, err := dialer.Dial(context.Background(), "ws://chat.internal/socket")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer conn.Close()
+	_, data, err := conn.ReadMessage()
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(string(data))
+	// Output: served for chat.internal
+}
+
+// Error replaces the body Upgrade writes when it rejects a request, for
+// example to match an API's JSON errors. The status and any header fields the
+// status requires are already decided.
+func ExampleUpgrader_error() {
+	upgrader := &websocket.Upgrader{
+		Error: func(w http.ResponseWriter, r *http.Request, status int, err error) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(status)
+			fmt.Fprintf(w, "{\"error\":%q}\n", http.StatusText(status))
+		},
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r)
+		if err != nil {
+			return // Error has written the response.
+		}
+		conn.Close()
+	}))
+	defer srv.Close()
+
+	// A plain HTTP request is not a WebSocket handshake.
+	resp, err := http.Get(srv.URL)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Print(resp.StatusCode, " ", string(body))
+	// Output: 400 {"error":"Bad Request"}
+}
+
+// ReadMessageContext bounds a single read. When the context ends mid-read
+// the connection is aborted, just as after a read timeout, so later calls
+// fail with an error matching net.ErrClosed.
+func ExampleConn_ReadMessageContext() {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Upgrade(w, r)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, _, _ = conn.ReadMessage() // Never sends; waits for the client to go.
+	}))
+	defer srv.Close()
+
+	conn, _, err := websocket.Dial(context.Background(), wsURL(srv))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer conn.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, _, err = conn.ReadMessageContext(ctx)
+	fmt.Println(errors.Is(err, context.DeadlineExceeded))
+
+	err = conn.WriteMessage(websocket.TextMessage, []byte("too late"))
+	fmt.Println(errors.Is(err, net.ErrClosed))
+	// Output:
+	// true
+	// true
+}
+
+// A server shutting down ends each connection with Shutdown, which waits for
+// the client's reply to its Close frame before closing the transport, so the
+// client reads the status instead of a connection reset. Give it a deadline,
+// since a peer may never answer.
+func ExampleConn_Shutdown_server() {
+	shutdown := make(chan error, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Upgrade(w, r)
+		if err != nil {
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		shutdown <- conn.Shutdown(ctx, websocket.StatusGoingAway, "server restarting")
+	}))
+	defer srv.Close()
+
+	conn, _, err := websocket.Dial(context.Background(), wsURL(srv))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer conn.Close()
+
+	// The client's read loop answers the Close frame and ends with the
+	// server's status.
+	for {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			var ce *websocket.CloseError
+			if errors.As(err, &ce) {
+				fmt.Println("client:", ce.Code, ce.Reason)
+			}
+			break
+		}
+	}
+	fmt.Println("server:", <-shutdown)
+	// Output:
+	// client: StatusGoingAway server restarting
+	// server: <nil>
+}
+
+// A Ping handler runs inside ReadMessage before it returns the next message.
+// A replacement handler must answer with a Pong itself. Most programs keep
+// the default, which already does.
+func ExampleConn_SetPingHandler() {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Upgrade(w, r)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_ = conn.WriteControlFrame(websocket.PingMessage, []byte("heartbeat 1"))
+		_ = conn.WriteMessage(websocket.TextMessage, []byte("hello"))
+		_, _, _ = conn.ReadMessage()
+	}))
+	defer srv.Close()
+
+	conn, _, err := websocket.Dial(context.Background(), wsURL(srv))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer conn.Close()
+	conn.SetPingHandler(func(appData string) error {
+		fmt.Println("ping:", appData)
+		return conn.WriteControlFrame(websocket.PongMessage, []byte(appData))
+	})
+
+	_, data, err := conn.ReadMessage()
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println("message:", string(data))
+	// Output:
+	// ping: heartbeat 1
+	// message: hello
+}
+
+// ConnectionState reports the TLS state of a wss connection, on the client
+// and on a server upgraded from HTTPS, for example to read the peer's
+// certificates.
+func ExampleConn_ConnectionState() {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Upgrade(w, r)
+		if err != nil {
+			return
+		}
+		conn.Close()
+	}))
+	defer srv.Close()
+
+	// Trust the test server's certificate.
+	dialer := &websocket.Dialer{
+		TLSClientConfig: srv.Client().Transport.(*http.Transport).TLSClientConfig,
+	}
+	conn, _, err := dialer.Dial(context.Background(), wsURL(srv))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer conn.Close()
+
+	state, ok := conn.ConnectionState()
+	fmt.Println(ok, tls.VersionName(state.Version), len(state.PeerCertificates) > 0)
+	// Output: true TLS 1.3 true
+}
+
+// NetConn turns a connection into a net.Conn, so code written for streams
+// can run over a WebSocket. Here a line-based protocol uses bufio on both
+// ends; message boundaries are not preserved.
+func ExampleNetConn() {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ws, err := websocket.Upgrade(w, r)
+		if err != nil {
+			return
+		}
+		conn := websocket.NetConn(r.Context(), ws, websocket.BinaryMessage)
+		defer conn.Close()
+		lines := bufio.NewScanner(conn)
+		for lines.Scan() {
+			fmt.Fprintln(conn, strings.ToUpper(lines.Text()))
+		}
+	}))
+	defer srv.Close()
+
+	ws, _, err := websocket.Dial(context.Background(), wsURL(srv))
+	if err != nil {
+		log.Fatal(err)
+	}
+	conn := websocket.NetConn(context.Background(), ws, websocket.BinaryMessage)
+	defer conn.Close()
+
+	replies := bufio.NewReader(conn)
+	for _, line := range []string{"hello", "stream"} {
+		fmt.Fprintln(conn, line)
+		reply, err := replies.ReadString('\n')
+		if err != nil {
+			log.Fatal(err)
+		}
+		fmt.Print(reply)
+	}
+	// Output:
+	// HELLO
+	// STREAM
 }
