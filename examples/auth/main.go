@@ -227,16 +227,17 @@ func (s *server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	})
 	defer expiry.Stop()
 
-	if err := conn.WriteMessage(websocket.TextMessage, fmt.Appendf(nil, "hello, %s", id.subject)); err != nil {
+	ctx := r.Context()
+	if err := conn.WriteMessage(ctx, websocket.TextMessage, fmt.Appendf(nil, "hello, %s", id.subject)); err != nil {
 		return
 	}
 	for {
-		messageType, data, err := conn.ReadMessage()
+		messageType, data, err := conn.ReadMessage(ctx)
 		if err != nil {
 			return
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-		err = conn.WriteMessageContext(ctx, messageType, data)
+		writeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		err = conn.WriteMessage(writeCtx, messageType, data)
 		cancel()
 		if err != nil {
 			return

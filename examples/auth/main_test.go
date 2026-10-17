@@ -60,13 +60,13 @@ func dialAs(t *testing.T, url, authorization string) (*websocket.Conn, *http.Res
 // greet reads the server's greeting and checks one echo.
 func greet(t *testing.T, c *websocket.Conn) {
 	t.Helper()
-	if _, msg, err := c.ReadMessage(); err != nil || string(msg) != "hello, alice" {
+	if _, msg, err := c.ReadMessage(t.Context()); err != nil || string(msg) != "hello, alice" {
 		t.Fatalf("greeting = %q, %v", msg, err)
 	}
-	if err := c.WriteMessage(websocket.TextMessage, []byte("ping")); err != nil {
+	if err := c.WriteMessage(t.Context(), websocket.TextMessage, []byte("ping")); err != nil {
 		t.Fatal(err)
 	}
-	if _, msg, err := c.ReadMessage(); err != nil || string(msg) != "ping" {
+	if _, msg, err := c.ReadMessage(t.Context()); err != nil || string(msg) != "ping" {
 		t.Fatalf("echo = %q, %v", msg, err)
 	}
 }
@@ -183,7 +183,7 @@ func TestClosedWhenCredentialExpires(t *testing.T) {
 	greet(t, c)
 
 	c.SetReadDeadline(time.Now().Add(5 * time.Second))
-	_, _, err = c.ReadMessage()
+	_, _, err = c.ReadMessage(t.Context())
 	var ce *websocket.CloseError
 	if !errors.As(err, &ce) || ce.Code != websocket.StatusPolicyViolation || ce.Reason != "credential expired" {
 		t.Fatalf("read error = %v, want StatusPolicyViolation \"credential expired\"", err)

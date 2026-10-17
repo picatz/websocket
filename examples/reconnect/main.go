@@ -208,8 +208,11 @@ func (c *client) session(ctx context.Context, conn *websocket.Conn) (received bo
 		<-keepalive
 	}()
 
+	// The read is not bound to ctx: the keepalive goroutine ends the
+	// connection, with a closing handshake when the program is stopping,
+	// and the read returns once it does.
 	for {
-		_, data, err := conn.ReadMessage()
+		_, data, err := conn.ReadMessage(context.Background())
 		if err != nil {
 			return received, err
 		}

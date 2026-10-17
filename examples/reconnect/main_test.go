@@ -57,7 +57,7 @@ func serve(first int, texts []string, end func(*websocket.Conn)) func(http.Respo
 		}
 		defer c.Close()
 		for i, text := range texts {
-			if err := c.WriteMessage(websocket.TextMessage, fmt.Appendf(nil, "%d %s", first+i, text)); err != nil {
+			if err := c.WriteMessage(context.Background(), websocket.TextMessage, fmt.Appendf(nil, "%d %s", first+i, text)); err != nil {
 				return
 			}
 		}
@@ -199,7 +199,7 @@ func TestStopsOnCancel(t *testing.T) {
 	serverSaw := make(chan error, 1)
 	s := &script{t: t, steps: []func(http.ResponseWriter, *http.Request){
 		serve(1, []string{"one"}, func(c *websocket.Conn) {
-			_, _, err := c.ReadMessage()
+			_, _, err := c.ReadMessage(context.Background())
 			serverSaw <- err
 		}),
 	}}
