@@ -57,7 +57,9 @@
 // Conn.Close makes a best-effort attempt, bounded to one second, to send a
 // Close frame with StatusNormalClosure, and then closes the transport without
 // waiting for the peer's reply. Conn.CloseWithStatus sends another code and an
-// optional reason. When the
+// optional reason. Conn.Shutdown performs the full closing handshake: it sends
+// the Close frame and waits, bounded by a context, for the peer's, so a peer
+// that is still sending is not cut off with a connection reset. When the
 // peer closes, ReadMessage returns a *CloseError, which matches io.EOF with
 // errors.Is; CloseStatus extracts its code from any error. After either side
 // closes, operations return errors matching net.ErrClosed.
