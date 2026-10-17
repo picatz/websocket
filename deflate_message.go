@@ -6,12 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 )
 
 var (
-	// ErrUnsupportedExtensionComposition identifies an enabled built-in PMD
-	// selection combined with another enabled extension. That experimental
-	// combination has no supported message/frame transformation contract.
+	// ErrUnsupportedExtensionComposition identifies more than one enabled
+	// built-in PMD instance, or a custom extension that changes RSV1 while
+	// built-in PMD is enabled. RFC 7692 section 5 gives RSV1 to one PMCE.
 	ErrUnsupportedExtensionComposition = errors.New("websocket: unsupported enabled extension composition")
 	// ErrFragmentedCompression identifies direct PMD frame callbacks that do
 	// not contain one complete message. Conn handles fragmentation internally.
@@ -30,7 +31,7 @@ func (e *compressedPayloadError) Unwrap() error        { return e.cause }
 func (e *compressedPayloadError) Is(target error) bool { return target == ErrInvalidCompressedPayload }
 
 // messageCompression returns the enabled built-in PMD extension, if any. It
-// calls IsEnabled once per extension and rejects unsupported compositions.
+// calls IsEnabled once per extension and rejects multiple built-in instances.
 func messageCompression(extensions []Extension) (*perMessageDeflate, error) {
 	var buf [4]Extension
 	enabled, err := enabledExtensions(extensions, buf[:0])
@@ -42,10 +43,11 @@ func messageCompression(extensions []Extension) (*perMessageDeflate, error) {
 }
 
 // enabledExtensions appends the enabled extensions to dst, in order, calling
-// IsEnabled exactly once on each. Enabled built-in PMD must be the only enabled
-// extension; any other combination returns ErrUnsupportedExtensionComposition.
+// IsEnabled exactly once on each. At most one built-in PMD may be enabled: RFC
+// 7692 section 5 gives RSV1 to a single PMCE. Custom frame extensions may be
+// combined with it (see Conn's composition order).
 func enabledExtensions(extensions, dst []Extension) ([]Extension, error) {
-	var pmd, custom bool
+	var pmd bool
 	for _, ext := range extensions {
 		if ext == nil {
 			return nil, fmt.Errorf("%w: nil extension", ErrInvalidExtension)
@@ -58,13 +60,8 @@ func enabledExtensions(extensions, dst []Extension) ([]Extension, error) {
 				return nil, fmt.Errorf("%w: multiple permessage-deflate owners", ErrUnsupportedExtensionComposition)
 			}
 			pmd = true
-		} else {
-			custom = true
 		}
 		dst = append(dst, ext)
-	}
-	if pmd && custom {
-		return nil, fmt.Errorf("%w: permessage-deflate with a legacy frame extension", ErrUnsupportedExtensionComposition)
 	}
 	return dst, nil
 }
@@ -78,6 +75,17 @@ func (c *Conn) closeCompression() {
 		}
 	}
 }
+
+// releaseSendCompression returns idle send compressors to their pools once no
+// further data frames can be written. writeMu must be held.
+func (c *Conn) releaseSendCompression() {
+	for _, ext := range c.extensions {
+		if p, ok := ext.(*perMessageDeflate); ok && !p.send.active {
+			p.send.release()
+		}
+	}
+}
+
 func (p *perMessageDeflate) closeReceive() {
 	p.receiveLife.Lock()
 	p.receiveClosed = true
@@ -89,11 +97,22 @@ const deflateWindow = 32768
 
 var deflateTail = [...]byte{0, 0, 255, 255, 1, 0, 0, 255, 255}
 
+// deflateReceiveState is what a connection keeps between compressed messages:
+// with the peer's context takeover, the last window bytes of decoded output.
 type deflateReceiveState struct {
-	inflater      io.ReadCloser
-	history, seed []byte
-	buffer        [4096]byte
+	history []byte
+	window  int // Bytes of history the peer may reference (2^peer window bits).
 }
+
+// inflaterState is the decoder working state. It is pooled across all
+// connections and held only while a message is being decoded.
+type inflaterState struct {
+	inflater io.ReadCloser
+	seed     []byte
+	buffer   [4096]byte
+}
+
+var inflaterPool sync.Pool
 
 type emptyDeflateInput struct{}
 
@@ -182,16 +201,26 @@ func (r *deflateMessageInput) closedByPeer() bool { return r.peerClosed != nil &
 // deflateFrameReader exposes only the current logical message's encoded bytes.
 // Headers/keys are validated/read before each body; controls run synchronously
 // with no PMD lifetime lock held. Only physical FIN produces a clean EOF.
+//
+// With enabled custom extensions, each frame is read whole and passed through
+// them in registration order before its bytes reach the inflater, so frame
+// extensions apply outside compression in both directions.
 type deflateFrameReader struct {
 	c          *Conn
 	frame      *Frame
 	remaining  uint64
 	phase      uint64
 	peerClosed *bool
+	frameExts  []Extension // Enabled custom extensions; frames are buffered.
+	buf        []byte      // Remaining extension-processed payload.
+	first      bool        // The current frame starts the message.
 }
 
 func (r *deflateFrameReader) start(frame *Frame, n uint64) error {
 	r.frame, r.remaining, r.phase = frame, n, 0
+	if len(r.frameExts) > 0 {
+		return r.startBuffered(frame, n)
+	}
 	if frame.Masked {
 		if _, err := io.ReadFull(r.c.rw, frame.MaskKey[:]); err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
@@ -202,6 +231,34 @@ func (r *deflateFrameReader) start(frame *Frame, n uint64) error {
 	}
 	return nil
 }
+
+// startBuffered reads a whole frame and applies the custom extensions. They
+// must consume their own reserved bits and leave RSV1, the opcode and the
+// message state to permessage-deflate.
+func (r *deflateFrameReader) startBuffered(frame *Frame, n uint64) error {
+	opcode, rsv1 := frame.Opcode, frame.Rsv1
+	if err := r.c.readFrameBody(frame, n); err != nil {
+		return err
+	}
+	for _, ext := range r.frameExts {
+		if err := ext.ProcessIncomingFrame(frame); err != nil {
+			return fmt.Errorf("extension %s failed to process incoming frame: %w", ext.Name(), err)
+		}
+	}
+	switch {
+	case frame.Opcode != opcode:
+		return failWith(StatusProtocolError, ErrUnexpectedFrame)
+	case frame.Rsv1 != rsv1:
+		return fmt.Errorf("%w: an extension changed RSV1 owned by permessage-deflate", ErrUnsupportedExtensionComposition)
+	case frame.Rsv1 != r.first || frame.Rsv2 || frame.Rsv3:
+		// RFC 7692 section 6.1: RSV1 only on a message's first frame.
+		return failWith(StatusProtocolError, ErrUnsupportedExtensions)
+	}
+	r.first = false
+	r.buf, r.remaining = frame.Payload, uint64(len(frame.Payload))
+	return nil
+}
+
 func (r *deflateFrameReader) advance() error {
 	for r.remaining == 0 {
 		if r.c.closed.Load() {
@@ -252,6 +309,11 @@ func (r *deflateFrameReader) Read(p []byte) (int, error) {
 	if err := r.advance(); err != nil {
 		return 0, err
 	}
+	if r.frameExts != nil {
+		n := copy(p, r.buf)
+		r.buf, r.remaining = r.buf[n:], r.remaining-uint64(n)
+		return n, nil
+	}
 	if uint64(len(p)) > r.remaining {
 		p = p[:int(r.remaining)]
 	}
@@ -273,6 +335,11 @@ func (r *deflateFrameReader) Read(p []byte) (int, error) {
 func (r *deflateFrameReader) ReadByte() (byte, error) {
 	if err := r.advance(); err != nil {
 		return 0, err
+	}
+	if r.frameExts != nil {
+		b := r.buf[0]
+		r.buf, r.remaining = r.buf[1:], r.remaining-1
+		return b, nil
 	}
 	b, err := r.c.rw.ReadByte()
 	if err == io.EOF {
@@ -312,24 +379,29 @@ func deflateSeed(history, output []byte, scratch *[]byte) []byte {
 	copy((*scratch)[n:], output)
 	return *scratch
 }
+
+// save keeps the final window bytes of history followed by output. The peer
+// cannot reference anything older (RFC 7692 section 7.2.2), so a smaller
+// negotiated peer window keeps proportionally less memory per connection.
 func (d *deflateReceiveState) save(output []byte, noContext bool) {
 	if noContext {
 		d.history = nil
 		return
 	}
-	if len(output) >= deflateWindow {
-		if cap(d.history) < deflateWindow {
-			d.history = make([]byte, deflateWindow)
+	window := d.window
+	if len(output) >= window {
+		if cap(d.history) < window {
+			d.history = make([]byte, window)
 		} else {
-			d.history = d.history[:deflateWindow]
+			d.history = d.history[:window]
 		}
-		copy(d.history, output[len(output)-deflateWindow:])
+		copy(d.history, output[len(output)-window:])
 		return
 	}
-	keep := min(len(d.history), deflateWindow-len(output))
+	keep := min(len(d.history), window-len(output))
 	need := keep + len(output)
 	if cap(d.history) < need {
-		next := make([]byte, need, min(deflateWindow, max(need, max(32, cap(d.history)*2))))
+		next := make([]byte, need, min(window, max(need, max(32, cap(d.history)*2))))
 		copy(next, d.history[len(d.history)-keep:])
 		d.history = next
 	} else {
@@ -370,18 +442,27 @@ func (p *perMessageDeflate) decodeMessage(input *deflateMessageInput, limit int,
 	p.receive = nil
 	p.receiveLife.Unlock()
 	if d == nil {
-		d = new(deflateReceiveState)
+		d = &deflateReceiveState{window: 1 << p.peerWindowBits()}
 	}
 	noContext := p.peerNoContextTakeover()
 	if noContext {
 		d.history = nil
 	}
+	f, _ := inflaterPool.Get().(*inflaterState)
+	if f == nil {
+		f = new(inflaterState)
+	}
 	defer func() {
-		if err == nil {
-			err = d.inflater.(flate.Resetter).Reset(emptyDeflateInput{}, nil)
-			if err == nil {
-				d.save(out, noContext)
+		// Never return an inflater that still references this input.
+		if f.inflater != nil {
+			if resetErr := f.inflater.(flate.Resetter).Reset(emptyDeflateInput{}, nil); resetErr == nil {
+				inflaterPool.Put(f)
+			} else if err == nil {
+				err = resetErr
 			}
+		}
+		if err == nil {
+			d.save(out, noContext)
 		}
 		p.receiveLife.Lock()
 		defer p.receiveLife.Unlock()
@@ -396,14 +477,14 @@ func (p *perMessageDeflate) decodeMessage(input *deflateMessageInput, limit int,
 		}
 		p.receive = d
 	}()
-	if d.inflater == nil {
-		d.inflater = flate.NewReaderDict(input, d.history)
-	} else if err = d.inflater.(flate.Resetter).Reset(input, d.history); err != nil {
+	if f.inflater == nil {
+		f.inflater = flate.NewReaderDict(input, d.history)
+	} else if err = f.inflater.(flate.Resetter).Reset(input, d.history); err != nil {
 		return nil, err
 	}
 	validated := 0
 	for {
-		nmax := len(d.buffer)
+		nmax := len(f.buffer)
 		remaining := int(^uint(0)>>1) - len(out)
 		if limit > 0 {
 			remaining = min(remaining, limit-len(out))
@@ -411,7 +492,7 @@ func (p *perMessageDeflate) decodeMessage(input *deflateMessageInput, limit int,
 		if remaining < nmax {
 			nmax = remaining + 1
 		}
-		n, readErr := d.inflater.Read(d.buffer[:nmax])
+		n, readErr := f.inflater.Read(f.buffer[:nmax])
 		// A source Close can flush invalid/oversized buffered output. Closure wins
 		// before even validating or appending that stale output.
 		if input.closedByPeer() {
@@ -429,7 +510,7 @@ func (p *perMessageDeflate) decodeMessage(input *deflateMessageInput, limit int,
 					var carry [4]byte
 					used := min(4-pending, n)
 					copy(carry[:], out[validated:])
-					copy(carry[pending:], d.buffer[:used])
+					copy(carry[pending:], f.buffer[:used])
 					complete, valid := validUTF8Prefix(carry[:pending+used])
 					if !valid {
 						return nil, failWith(StatusInvalidFramePayloadData, ErrInvalidFrame)
@@ -441,13 +522,13 @@ func (p *perMessageDeflate) decodeMessage(input *deflateMessageInput, limit int,
 						offset = complete - pending
 					}
 				}
-				complete, valid := validUTF8Prefix(d.buffer[offset:n])
+				complete, valid := validUTF8Prefix(f.buffer[offset:n])
 				if !valid {
 					return nil, failWith(StatusInvalidFramePayloadData, ErrInvalidFrame)
 				}
 				validated += complete
 			}
-			out = appendDecoded(out, d.buffer[:n], limit)
+			out = appendDecoded(out, f.buffer[:n], limit)
 		}
 
 		if readErr == nil {
@@ -473,7 +554,7 @@ func (p *perMessageDeflate) decodeMessage(input *deflateMessageInput, limit int,
 		if !more {
 			break
 		}
-		if err = d.inflater.(flate.Resetter).Reset(input, deflateSeed(d.history, out, &d.seed)); err != nil {
+		if err = f.inflater.(flate.Resetter).Reset(input, deflateSeed(d.history, out, &f.seed)); err != nil {
 			return nil, err
 		}
 	}

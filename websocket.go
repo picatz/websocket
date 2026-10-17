@@ -132,7 +132,7 @@ type Extension interface {
 	IsEnabled() bool
 }
 
-// perMessageDeflate implements the experimental permessage-deflate extension.
+// perMessageDeflate implements the permessage-deflate extension (RFC 7692).
 // Configuration, the actual client offer, and the agreed response are distinct.
 type perMessageDeflate struct {
 	enabled bool
@@ -143,17 +143,26 @@ type perMessageDeflate struct {
 	offerSet   bool
 	negotiated pmdParameters
 
-	receiveMu       sync.Mutex // Receive serialization; never acquired by Close or send.
-	receiveLife     sync.Mutex // Short state lifetime guard; never held during I/O.
-	receive         *deflateReceiveState
-	receiveClosed   bool
-	flateWriterPool sync.Pool
+	level       int // Compression level, as in compress/flate.
+	threshold   int // Messages shorter than this are sent uncompressed.
+	memoryLimit int // Bytes of state kept between messages; 0 is unlimited.
+
+	receiveMu     sync.Mutex // Receive serialization; never acquired by Close or send.
+	receiveLife   sync.Mutex // Short state lifetime guard; never held during I/O.
+	receive       *deflateReceiveState
+	receiveClosed bool
+
+	send     deflateSender // Used with the connection's write lock held.
+	sendInit bool
 }
 
 func (pmd *perMessageDeflate) IsEnabled() bool {
 	return pmd.enabled
 }
 
+// ProcessOutgoingFrame compresses one complete Text or Binary message. Conn
+// does not call it: it streams messages through the same compressor, across
+// as many frames as needed.
 func (pmd *perMessageDeflate) ProcessOutgoingFrame(frame *Frame) error {
 	if !pmd.enabled {
 		return nil
@@ -164,34 +173,10 @@ func (pmd *perMessageDeflate) ProcessOutgoingFrame(frame *Frame) error {
 	if frame.Opcode != TextMessage && frame.Opcode != BinaryMessage {
 		return nil
 	}
-
-	if err := pmd.negotiated.validateLocalWindow(pmd.server); err != nil {
-		return err
-	}
-
-	// Compress the payload
-	var buf bytes.Buffer
-	w := pmd.getWriter(&buf)
-	defer pmd.putWriter(w)
-
-	if _, err := w.Write(frame.Payload); err != nil {
-		return err
-	}
-	// RFC 7692 uses a sync-flushed stream, not a final DEFLATE block.
-	if err := w.Flush(); err != nil {
-		return err
-	}
-
-	compressed := buf.Bytes()
-	// Remove the last four bytes (empty DEFLATE block) if present
-	if len(compressed) >= 4 {
-		compressed = compressed[:len(compressed)-4]
-	}
-	frame.Payload = compressed
-
-	// Set RSV1 bit to indicate compression
+	s := pmd.sender()
+	s.begin()
+	frame.Payload = s.end(s.write(nil, frame.Payload))
 	frame.Rsv1 = true
-
 	return nil
 }
 
@@ -199,28 +184,27 @@ func (pmd *perMessageDeflate) ProcessIncomingFrame(frame *Frame) error {
 	return pmd.processIncomingFrame(frame, 0)
 }
 
-// getWriter retrieves or creates a flate.Writer, resetting it if necessary.
-func (pmd *perMessageDeflate) getWriter(buf *bytes.Buffer) *flate.Writer {
-	var w *flate.Writer
-	if pmd.localNoContextTakeover() {
-		w, _ = flate.NewWriter(buf, flate.DefaultCompression)
-	} else {
-		if v := pmd.flateWriterPool.Get(); v != nil {
-			w = v.(*flate.Writer)
-			w.Reset(buf)
-		} else {
-			w, _ = flate.NewWriter(buf, flate.DefaultCompression)
+// sender configures the send state from the negotiated parameters on first
+// use. Negotiation always completes before I/O begins.
+func (pmd *perMessageDeflate) sender() *deflateSender {
+	if !pmd.sendInit {
+		pmd.sendInit = true
+		pmd.send = deflateSender{bits: pmd.localWindowBits(), level: pmd.level, retention: retainCompressor}
+		if pmd.memoryLimit > 0 {
+			// A sender may always use a smaller window than agreed and may
+			// always forgo context takeover (RFC 7692 section 7.2.1).
+			if bits, ok := pmd.budgetWindowBits(); ok {
+				pmd.send.bits = min(pmd.send.bits, bits)
+				pmd.send.retention = retainHistory
+			} else {
+				pmd.send.retention = retainNothing
+			}
+		}
+		if pmd.localNoContextTakeover() {
+			pmd.send.retention = retainNothing
 		}
 	}
-	return w
-}
-
-// putWriter reuses allocations when local no-context mode is not selected.
-// Reset still discards history; pooling does not implement context takeover.
-func (pmd *perMessageDeflate) putWriter(w *flate.Writer) {
-	if !pmd.localNoContextTakeover() {
-		pmd.flateWriterPool.Put(w)
-	}
+	return &pmd.send
 }
 
 // PerMessageDeflateOption represents an option for permessage-deflate extension.
@@ -240,10 +224,15 @@ func WithServerNoContextTakeover() PerMessageDeflateOption {
 	}
 }
 
-// WithClientMaxWindowBits sets the client_max_window_bits option.
-// Dial supports only 15 for its local compressor; 8-14 fail before connecting.
-// Upgrade can request any peer window from 8 to 15, but declines offers that
-// do not permit the requested constraint. Values outside 8-15 are ignored.
+// WithClientMaxWindowBits sets the client_max_window_bits option: the base-2
+// logarithm of the LZ77 window a client compresses with, from 8 to 15.
+//
+// For Dial it is offered as the largest window the client will use; a server
+// may select a smaller one. For Upgrade it limits the client's window when the
+// client's offer permits that, and such offers are declined otherwise. Values
+// outside 8-15 are ignored.
+//
+// https://www.rfc-editor.org/rfc/rfc7692#section-7.1.2.2
 func WithClientMaxWindowBits(bits int) PerMessageDeflateOption {
 	return func(pmd *perMessageDeflate) {
 		if bits >= 8 && bits <= 15 {
@@ -252,9 +241,15 @@ func WithClientMaxWindowBits(bits int) PerMessageDeflateOption {
 	}
 }
 
-// WithServerMaxWindowBits sets the server_max_window_bits option.
-// Dial can request any peer window from 8 to 15. Upgrade supports only 15 for
-// its local compressor; 8-14 fail before hijacking. Values outside 8-15 are ignored.
+// WithServerMaxWindowBits sets the server_max_window_bits option: the base-2
+// logarithm of the LZ77 window a server compresses with, from 8 to 15.
+//
+// For Dial it is a constraint the server must accept. For Upgrade the server
+// selects this window, or a smaller one the client requests. Smaller windows
+// use less memory per connection and compress less. Values outside 8-15 are
+// ignored.
+//
+// https://www.rfc-editor.org/rfc/rfc7692#section-7.1.2.1
 func WithServerMaxWindowBits(bits int) PerMessageDeflateOption {
 	return func(pmd *perMessageDeflate) {
 		if bits >= 8 && bits <= 15 {
@@ -263,21 +258,82 @@ func WithServerMaxWindowBits(bits int) PerMessageDeflateOption {
 	}
 }
 
-// NewPerMessageDeflateExtension creates an opt-in, experimental compression extension.
-// Receive fragmentation and context takeover are supported by Conn. Direct
-// callbacks require complete messages; do not mix them concurrently with Conn
-// I/O. Enabled PMD cannot be combined with another enabled extension. Create a
-// separate instance for each connection. Configuration/negotiation must finish
-// before I/O; concurrent reconfiguration is not supported.
-func NewPerMessageDeflateExtension(options ...PerMessageDeflateOption) Extension {
-	pmd := &perMessageDeflate{
-		flateWriterPool: sync.Pool{
-			New: func() any {
-				w, _ := flate.NewWriter(nil, flate.DefaultCompression)
-				return w
-			},
-		},
+// WithCompressionLevel sets the DEFLATE level used to compress outgoing
+// messages, from compress/flate.HuffmanOnly (-2) to compress/flate.BestCompression
+// (9). compress/flate.DefaultCompression (-1) is the default. Other values
+// are ignored. The level is independent of the window size.
+func WithCompressionLevel(level int) PerMessageDeflateOption {
+	return func(pmd *perMessageDeflate) {
+		if level >= flate.HuffmanOnly && level <= flate.BestCompression {
+			pmd.level = level
+		}
 	}
+}
+
+// WithCompressionThreshold sends messages shorter than n bytes uncompressed.
+// Compressing a tiny message costs CPU and can make it larger; RFC 7692
+// section 6 lets a sender choose per message. Uncompressed messages do not
+// enter the compression context. The default, 0, compresses every message.
+// Negative values are ignored.
+//
+// https://www.rfc-editor.org/rfc/rfc7692#section-6
+func WithCompressionThreshold(n int) PerMessageDeflateOption {
+	return func(pmd *perMessageDeflate) {
+		if n >= 0 {
+			pmd.threshold = n
+		}
+	}
+}
+
+// WithCompressionMemoryLimit bounds the compression state one connection keeps
+// between messages to n bytes: half for the history it receives with, half for
+// the history it sends with. Buffers used while a message is being encoded or
+// decoded come from pools shared by all connections and are not counted.
+//
+// The limit is enforced through negotiation (RFC 7692 section 7.1). Each half
+// selects the largest window of 2^8 to 2^15 bytes that fits: a client offers
+// server_max_window_bits and a client_max_window_bits hint, and a server
+// responds with server_max_window_bits and, when the client offered it,
+// client_max_window_bits. Where a window cannot fit, or the peer's window
+// cannot be bounded, the corresponding no_context_takeover parameter is used
+// instead. A sender with a limit keeps only its window of history and re-indexes
+// it for each message, trading CPU for memory; without a limit it keeps a
+// whole compressor, which is faster but uses 0.5 to 1 MiB per connection.
+//
+// The default, [DefaultCompressionMemoryLimit], keeps full 2^15-byte windows,
+// so it changes no negotiated parameter, only what the sender retains. Pass 0
+// to remove the limit. Negative values are ignored.
+func WithCompressionMemoryLimit(n int) PerMessageDeflateOption {
+	return func(pmd *perMessageDeflate) {
+		if n >= 0 {
+			pmd.memoryLimit = n
+		}
+	}
+}
+
+// DefaultCompressionMemoryLimit is the default [WithCompressionMemoryLimit]:
+// about 64 KiB of state per idle connection, the two 32 KiB histories that
+// context takeover with the largest window needs (RFC 7692 section 7.1.1).
+const DefaultCompressionMemoryLimit = 64 << 10
+
+// NewPerMessageDeflateExtension creates an opt-in permessage-deflate (RFC 7692)
+// compression extension. Conn compresses and decompresses whole messages,
+// fragmented or not, with context takeover unless a no_context_takeover
+// parameter is negotiated, and with any negotiated window from 8 to 15 bits.
+//
+// Conn applies other enabled extensions to each frame after compression on
+// send and before decompression on receive. They may use RSV2 and RSV3, but
+// RSV1 belongs to permessage-deflate (RFC 7692 section 5); a frame whose RSV1
+// another extension changed fails with [ErrUnsupportedExtensionComposition],
+// as does enabling more than one permessage-deflate instance.
+//
+// Direct callbacks require complete messages; do not mix them concurrently
+// with Conn I/O. Create a separate instance for each connection. Configuration and negotiation
+// must finish before I/O; concurrent reconfiguration is not supported.
+//
+// https://www.rfc-editor.org/rfc/rfc7692
+func NewPerMessageDeflateExtension(options ...PerMessageDeflateOption) Extension {
+	pmd := &perMessageDeflate{level: flate.DefaultCompression, memoryLimit: DefaultCompressionMemoryLimit}
 	for _, option := range options {
 		option(pmd)
 	}
@@ -313,6 +369,9 @@ type Conn struct {
 
 	// Extensions
 	extensions []Extension
+
+	// Reusable buffers for compressed messages. Protected by writeMu.
+	writeBuf, writeScratch []byte
 
 	// Ping bookkeeping. done is created lazily and closed, under closeMu, once
 	// the connection becomes terminal; pings maps outstanding Ping payloads to
@@ -477,6 +536,7 @@ func (c *Conn) closeWithPayload(payload []byte) error {
 				_ = c.writeFrameExtensions(&Frame{Final: true, Opcode: CloseMessage, Payload: payload, Masked: !c.isServer}, enabled)
 			}
 		}
+		c.releaseSendCompression()
 		c.writeMu.Unlock()
 	}
 
@@ -539,6 +599,7 @@ func (c *Conn) failRead(err error) error {
 	var payload [2]byte
 	binary.BigEndian.PutUint16(payload[:], code)
 	_ = c.writeFrameRaw(&Frame{Final: true, Opcode: CloseMessage, Payload: payload[:], Masked: !c.isServer})
+	c.releaseSendCompression()
 	c.abort()
 	if !timer.Stop() {
 		<-done
@@ -620,7 +681,12 @@ func (c *Conn) ReadMessage() (messageType Opcode, data []byte, err error) {
 			err = c.validateMessageHeader(frame, payloadLen, messageTypeSet, len(message))
 		}
 		if err == nil && pmd != nil && frame.Rsv1 && (frame.Opcode == TextMessage || frame.Opcode == BinaryMessage) {
-			source := &deflateFrameReader{c: c, peerClosed: &peerClosed}
+			source := &deflateFrameReader{c: c, peerClosed: &peerClosed, first: true}
+			for _, ext := range c.extensions {
+				if _, builtin := ext.(*perMessageDeflate); !builtin && ext.IsEnabled() {
+					source.frameExts = append(source.frameExts, ext)
+				}
+			}
 			if err = source.start(frame, payloadLen); err != nil {
 				return 0, nil, err
 			}
@@ -770,13 +836,30 @@ func (c *Conn) WriteMessage(messageType Opcode, data []byte) error {
 		return io.ErrClosedPipe
 	}
 
+	if c.writeErr != nil {
+		return fmt.Errorf("%w: failed to write frame header: %w", ErrWriteFailed, c.writeErr)
+	}
+	var buf [4]Extension
+	enabled, err := enabledExtensions(c.extensions, buf[:0])
+	if err != nil {
+		return c.failRead(err)
+	}
+	for _, ext := range enabled {
+		if _, ok := ext.(*perMessageDeflate); ok {
+			w := c.newMessageWriter(messageType, enabled)
+			if _, err := w.Write(data); err != nil {
+				return err
+			}
+			return w.Close()
+		}
+	}
 	frame := &Frame{
 		Final:   true,
 		Opcode:  messageType,
 		Payload: data,
 		Masked:  !c.isServer,
 	}
-	return c.writeFrame(frame)
+	return c.writeFrameExtensions(frame, enabled)
 }
 
 // WriteControlFrame writes a control frame to the connection. A successful Close
@@ -986,6 +1069,19 @@ func (c *Conn) readFramePayload(frame *Frame, payloadLen uint64) error {
 // bytes arrive. tail contains at most three incomplete UTF-8 bytes from the
 // previous frame; the returned count carries them across empty continuations.
 func (c *Conn) readFramePayloadText(frame *Frame, payloadLen uint64, checkText bool, tail []byte) (pending int, err error) {
+	if pending, err = c.readFrameBodyText(frame, payloadLen, checkText, tail); err != nil {
+		return 0, err
+	}
+	return pending, c.processIncomingFrame(frame)
+}
+
+// readFrameBody reads and unmasks a frame payload without calling extensions.
+func (c *Conn) readFrameBody(frame *Frame, payloadLen uint64) error {
+	_, err := c.readFrameBodyText(frame, payloadLen, false, nil)
+	return err
+}
+
+func (c *Conn) readFrameBodyText(frame *Frame, payloadLen uint64, checkText bool, tail []byte) (pending int, err error) {
 	if checkText {
 		pending = len(tail)
 	}
@@ -1027,8 +1123,12 @@ func (c *Conn) readFramePayloadText(frame *Frame, payloadLen uint64, checkText b
 			xor(frame.MaskKey[:], frame.Payload)
 		}
 	}
+	return pending, nil
+}
 
-	// Process incoming frame through extensions
+// processIncomingFrame passes a complete frame through the enabled extensions
+// in registration order, then rejects any reserved bit none of them consumed.
+func (c *Conn) processIncomingFrame(frame *Frame) error {
 	for _, ext := range c.extensions {
 		if ext.IsEnabled() {
 			var err error
@@ -1042,18 +1142,17 @@ func (c *Conn) readFramePayloadText(frame *Frame, payloadLen uint64, checkText b
 			if err != nil {
 				cause := fmt.Errorf("extension %s failed to process incoming frame: %w", ext.Name(), err)
 				if _, builtin := ext.(*perMessageDeflate); builtin && err == ErrPayloadTooLarge {
-					return 0, failWith(StatusMessageTooBig, cause)
+					return failWith(StatusMessageTooBig, cause)
 				}
-				return 0, cause
+				return cause
 			}
 		}
 	}
 	// Extensions consume the reserved bits whose semantics they implement.
 	if frame.Rsv1 || frame.Rsv2 || frame.Rsv3 {
-		return 0, failWith(StatusProtocolError, ErrUnsupportedExtensions)
+		return failWith(StatusProtocolError, ErrUnsupportedExtensions)
 	}
-
-	return pending, nil
+	return nil
 }
 
 // textPayloadReader bounds a single frame without preallocating from its wire
@@ -1172,6 +1271,12 @@ func (c *Conn) writeFrameExtensions(frame *Frame, enabled []Extension) error {
 // writeFrameRaw encodes a frame without calling extensions. writeMu must be
 // held; any transport failure poisons the stream for later close notification.
 func (c *Conn) writeFrameRaw(frame *Frame) error {
+	return c.writeFrameBuffer(frame, false)
+}
+
+// writeFrameBuffer is writeFrameRaw for a payload the connection owns, which
+// may then be masked in place instead of copied.
+func (c *Conn) writeFrameBuffer(frame *Frame, owned bool) error {
 	b0 := byte(frame.Opcode)
 	if frame.Final {
 		b0 |= 0x80
@@ -1232,7 +1337,9 @@ func (c *Conn) writeFrameRaw(frame *Frame) error {
 	if frame.Masked && len(frame.Payload) > 0 {
 		// Never mutate the caller's slice, even temporarily. It may be shared
 		// with another connection or being inspected by the application.
-		frame.Payload = bytes.Clone(frame.Payload)
+		if !owned {
+			frame.Payload = bytes.Clone(frame.Payload)
+		}
 		xor(frame.MaskKey[:], frame.Payload)
 	}
 
@@ -1351,9 +1458,6 @@ func Dial(ctx context.Context, urlStr string, options ...DialOption) (ws *Conn, 
 		return nil, nil, fmt.Errorf("%w: %w", ErrInvalidHandshakeHeader, err)
 	}
 
-	if err := validatePMDConfiguration(opts.extensions, false); err != nil {
-		return nil, nil, fmt.Errorf("%w: %w", ErrInvalidHandshakeHeader, err)
-	}
 	extOffer, offeredExtensions, err := extensionOffers(opts.extensions)
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: %w", ErrInvalidHandshakeHeader, err)
@@ -1658,10 +1762,6 @@ func Upgrade(w http.ResponseWriter, r *http.Request, options ...UpgradeOption) (
 		return nil, ErrOriginNotAllowed
 	}
 	acceptKey := computeAcceptKey(key)
-
-	if err := validatePMDConfiguration(opts.extensions, true); err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrInvalidHandshakeHeader, err)
-	}
 
 	// Handle extensions
 	var responseHeader http.Header

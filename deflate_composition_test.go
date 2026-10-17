@@ -72,16 +72,16 @@ func (w *entryUnwrapper) Unwrap() http.ResponseWriter { return w.ResponseWriter 
 
 func TestPMDEntryUpgradeComposition(t *testing.T) {
 	for _, tc := range []struct {
-		name, offer                string
-		decline, duplicate, reject bool
-		wantSelection              string
+		name, offer                       string
+		decline, duplicate, reject, mixed bool
+		wantSelection                     string
 	}{
 		{name: "PMD only selected", offer: "permessage-deflate", wantSelection: "permessage-deflate"},
 		{name: "custom only selected", offer: "entry-custom", wantSelection: "entry-custom"},
 		{name: "neither selected", offer: "unknown"},
 		{name: "custom declines combined offer", offer: "permessage-deflate, entry-custom", decline: true, wantSelection: "permessage-deflate"},
-		{name: "PMD first mixed", offer: "permessage-deflate, entry-custom", reject: true},
-		{name: "custom first mixed", offer: "entry-custom, permessage-deflate", reject: true},
+		{name: "PMD first mixed", offer: "permessage-deflate, entry-custom", mixed: true},
+		{name: "custom first mixed", offer: "entry-custom, permessage-deflate", mixed: true},
 		{name: "multiple PMD owners", offer: "permessage-deflate", duplicate: true, reject: true},
 		{name: "multiple disabled PMD owners", offer: "entry-custom", duplicate: true, wantSelection: "entry-custom"},
 	} {
@@ -121,8 +121,16 @@ func TestPMDEntryUpgradeComposition(t *testing.T) {
 						if err != nil {
 							t.Fatal(err)
 						}
-						if got := resp.Header.Get("Sec-WebSocket-Extensions"); got != tc.wantSelection {
-							t.Fatalf("selection=%q, want %q", got, tc.wantSelection)
+						want := tc.wantSelection
+						if tc.mixed {
+							// The response lists selections in registration order.
+							want = "permessage-deflate, entry-custom"
+							if reverse {
+								want = "entry-custom, permessage-deflate"
+							}
+						}
+						if got := resp.Header.Get("Sec-WebSocket-Extensions"); got != want {
+							t.Fatalf("selection=%q, want %q", got, want)
 						}
 						if resp.StatusCode != http.StatusSwitchingProtocols {
 							t.Fatalf("status=%d", resp.StatusCode)
@@ -147,9 +155,9 @@ func TestPMDEntryDialComposition(t *testing.T) {
 		{name: "custom only selected", selection: []string{"entry-custom"}},
 		{name: "neither selected"},
 		{name: "custom declines selection", selection: []string{"permessage-deflate, entry-custom"}, decline: true},
-		{name: "PMD first mixed", selection: []string{"permessage-deflate, entry-custom"}, reject: true},
-		{name: "custom first mixed", selection: []string{"entry-custom, permessage-deflate"}, reject: true},
-		{name: "separate response fields", selection: []string{"entry-custom", "permessage-deflate"}, reject: true},
+		{name: "PMD first mixed", selection: []string{"permessage-deflate, entry-custom"}},
+		{name: "custom first mixed", selection: []string{"entry-custom, permessage-deflate"}},
+		{name: "separate response fields", selection: []string{"entry-custom", "permessage-deflate"}},
 		{name: "multiple PMD owners", selection: []string{"permessage-deflate"}, duplicate: true, reject: true},
 		{name: "multiple disabled PMD owners", selection: []string{"entry-custom"}, duplicate: true},
 		{name: "unknown selection", selection: []string{"unknown"}, invalid: true},
@@ -271,16 +279,14 @@ func TestPMDEntryManualCompositionBeforeIO(t *testing.T) {
 		{"direct Close", func(c *Conn) error { return c.Close() }},
 	}
 	for _, afterConstruction := range []bool{false, true} {
-		for _, duplicate := range []bool{false, true} {
+		// A custom frame extension may compose with PMD; a second enabled
+		// built-in instance may not, with or without a custom extension.
+		for _, declineCustom := range []bool{false, true} {
 			for _, op := range operations {
-				t.Run(fmt.Sprintf("%s/postconstruction=%t/duplicate=%t", op.name, afterConstruction, duplicate), func(t *testing.T) {
+				t.Run(fmt.Sprintf("%s/postconstruction=%t/declineCustom=%t", op.name, afterConstruction, declineCustom), func(t *testing.T) {
 					pmd := NewPerMessageDeflateExtension()
-					custom := &entryExtension{name: "entry-custom"}
-					exts := []Extension{pmd, custom}
-					if duplicate {
-						exts = []Extension{pmd, NewPerMessageDeflateExtension(), custom}
-						custom.decline = true
-					}
+					custom := &entryExtension{name: "entry-custom", decline: declineCustom}
+					exts := []Extension{pmd, NewPerMessageDeflateExtension(), custom}
 					enable := func() {
 						for _, ext := range exts {
 							if err := ext.Negotiate("permessage-deflate, entry-custom"); err != nil {
@@ -389,11 +395,9 @@ func TestPMDEntryCompositionUsesBuiltinIdentity(t *testing.T) {
 			}
 			raw := newEntryConn(nil)
 			err := NewConn(raw, true, exts).WriteMessage(BinaryMessage, []byte("x"))
-			if withBuiltin {
-				if !errors.Is(err, ErrUnsupportedExtensionComposition) || custom.outgoing != 0 || raw.writes != 0 {
-					t.Fatalf("named custom mixed with builtin: error=%v callbacks=%d writes=%d", err, custom.outgoing, raw.writes)
-				}
-			} else if err != nil || custom.outgoing != 1 || raw.writes == 0 {
+			// Only the built-in type owns permessage-deflate semantics; a custom
+			// extension with the same name is an ordinary frame extension.
+			if err != nil || custom.outgoing != 1 || raw.writes == 0 {
 				t.Fatalf("custom-only behavior changed: error=%v callbacks=%d writes=%d", err, custom.outgoing, raw.writes)
 			}
 		})
@@ -561,16 +565,16 @@ func TestPMDEntryDirectBFINALAndRejectedFragment(t *testing.T) {
 func TestPMDEntryManualCompositionRevalidated(t *testing.T) {
 	for _, operation := range []string{"read", "write", "control", "Close"} {
 		t.Run(operation, func(t *testing.T) {
-			pmd := NewPerMessageDeflateExtension()
+			pmd, second := NewPerMessageDeflateExtension(), NewPerMessageDeflateExtension()
 			custom := &entryExtension{name: "entry-custom"}
 			raw := newEntryConn([]byte{0x82, 1, 'x'})
-			conn := NewConn(raw, false, []Extension{pmd, custom})
+			conn := NewConn(raw, false, []Extension{pmd, second, custom})
 			if err := conn.WriteControlFrame(PongMessage, nil); err != nil {
 				t.Fatal(err)
 			}
 			beforeWrites, beforeWire := raw.writes, bytes.Clone(raw.written.Bytes())
-			for _, ext := range []Extension{pmd, custom} {
-				if err := ext.Negotiate("permessage-deflate, entry-custom"); err != nil {
+			for _, ext := range []Extension{pmd, second} {
+				if err := ext.Negotiate("permessage-deflate"); err != nil {
 					t.Fatal(err)
 				}
 			}

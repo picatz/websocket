@@ -30,7 +30,7 @@ func main() {
 	address := flag.String("address", "127.0.0.1:9001", "literal loopback IP and port")
 	agent := flag.String("agent", "picatz-websocket", "Autobahn report agent")
 	var cfg settings
-	flag.BoolVar(&cfg.compression, "compression", false, "opt into experimental permessage-deflate")
+	flag.BoolVar(&cfg.compression, "compression", false, "opt into permessage-deflate")
 	flag.IntVar(&cfg.maxBytes, "max-bytes", 64<<20, "test-only incoming message cap")
 	flag.DurationVar(&cfg.caseTimeout, "case-timeout", time.Minute, "hard connection lifetime per case")
 	flag.Parse()
