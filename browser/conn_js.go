@@ -10,6 +10,7 @@ import (
 	"slices"
 	"sync"
 	"syscall/js"
+	"time"
 	"unicode/utf8"
 
 	"github.com/picatz/websocket"
@@ -70,6 +71,9 @@ type Conn struct {
 
 	// readMu serializes readers so that each message has one recipient.
 	readMu sync.Mutex
+	// writeMu serializes writers, so that messages keep their order while
+	// waiting for the host's send buffer to drain.
+	writeMu sync.Mutex
 
 	// mu guards the fields below. It is never held across a call into the
 	// host, which may dispatch events, and so re-enter Conn, synchronously.
@@ -314,11 +318,39 @@ func (c *Conn) ReadMessageContext(ctx context.Context) (messageType websocket.Op
 	}
 }
 
+// writeHighWaterMark is how many bytes the host may hold unsent before a
+// write waits. The host offers no event when its buffer drains, so a waiting
+// writer polls bufferedAmount, starting at writePollMin and backing off to
+// writePollMax.
+//
+// https://websockets.spec.whatwg.org/#dom-websocket-bufferedamount
+var writeHighWaterMark = 1 << 20
+
+const (
+	writePollMin = time.Millisecond
+	writePollMax = 50 * time.Millisecond
+)
+
 // WriteMessage sends a text or binary message. Text must be valid UTF-8. It
-// returns once the host has queued the message; it does not wait for the
-// network. It returns io.ErrClosedPipe once the connection is closing or
-// closed, where the host would silently discard the message.
+// is WriteMessageContext without a deadline.
 func (c *Conn) WriteMessage(messageType websocket.Opcode, data []byte) error {
+	return c.WriteMessageContext(context.Background(), messageType, data)
+}
+
+// WriteMessageContext sends a text or binary message. Text must be valid
+// UTF-8.
+//
+// The host queues outgoing messages without limit, so for backpressure the
+// write first waits while more than 1 MiB is already queued and unsent. Then
+// it hands the message to the host and returns; it does not wait for the
+// network. If ctx ends while waiting, it returns an error wrapping
+// context.Cause(ctx). Nothing has been sent at that point, so unlike
+// websocket.Conn.WriteMessageContext the connection stays open. Writes are
+// serialized, so concurrent writers keep their order and share the wait.
+//
+// It returns io.ErrClosedPipe once the connection is closing or closed, where
+// the host would silently discard the message.
+func (c *Conn) WriteMessageContext(ctx context.Context, messageType websocket.Opcode, data []byte) error {
 	var payload any
 	switch messageType {
 	case websocket.TextMessage:
@@ -335,14 +367,44 @@ func (c *Conn) WriteMessage(messageType websocket.Opcode, data []byte) error {
 		return websocket.ErrInvalidOpcode
 	}
 
-	c.mu.Lock()
-	ended := c.closed || c.err != nil
-	c.mu.Unlock()
-	if ended || c.ws.Get("readyState").Int() != stateOpen {
-		return io.ErrClosedPipe
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	if err := c.waitForBuffer(ctx); err != nil {
+		return err
 	}
 	c.ws.Call("send", payload)
 	return nil
+}
+
+// waitForBuffer waits until the host's unsent bytes are at or below
+// writeHighWaterMark and the connection is still open. c.writeMu is held.
+func (c *Conn) waitForBuffer(ctx context.Context) error {
+	var timer *time.Timer
+	poll := writePollMin
+	for {
+		c.mu.Lock()
+		ended := c.closed || c.err != nil
+		c.mu.Unlock()
+		if ended || c.ws.Get("readyState").Int() != stateOpen {
+			return io.ErrClosedPipe
+		}
+		if c.ws.Get("bufferedAmount").Int() <= writeHighWaterMark {
+			return nil
+		}
+		if timer == nil {
+			timer = time.NewTimer(poll)
+			defer timer.Stop()
+		} else {
+			timer.Reset(poll)
+		}
+		select {
+		case <-timer.C:
+		case <-c.done:
+		case <-ctx.Done():
+			return fmt.Errorf("browser: write: %w", context.Cause(ctx))
+		}
+		poll = min(2*poll, writePollMax)
+	}
 }
 
 // Subprotocol returns the subprotocol the server selected, or "" if none.

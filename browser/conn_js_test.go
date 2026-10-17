@@ -209,6 +209,7 @@ type conn interface {
 	ReadMessage() (websocket.Opcode, []byte, error)
 	ReadMessageContext(context.Context) (websocket.Opcode, []byte, error)
 	WriteMessage(websocket.Opcode, []byte) error
+	WriteMessageContext(context.Context, websocket.Opcode, []byte) error
 	Close() error
 	CloseWithStatus(websocket.StatusCode, string) error
 }
@@ -217,3 +218,31 @@ var (
 	_ conn = (*browser.Conn)(nil)
 	_ conn = (*websocket.Conn)(nil)
 )
+
+func TestWriteBackpressure(t *testing.T) {
+	const mark = 64 << 10
+	defer browser.SetWriteHighWaterMark(mark)()
+	conn := dial(t, "/stall")
+
+	// The server never reads, so once the TCP buffers fill the host's send
+	// queue grows past the mark and the next write must wait.
+	chunk := make([]byte, 256<<10)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	var err error
+	for range 1000 {
+		if err = conn.WriteMessageContext(ctx, websocket.BinaryMessage, chunk); err != nil {
+			break
+		}
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want context.DeadlineExceeded once the send queue is full", err)
+	}
+	if n := browser.BufferedAmount(conn); n <= mark {
+		t.Fatalf("BufferedAmount = %d, want more than the %d byte mark", n, mark)
+	}
+	// Nothing was sent by the timed-out write, so the connection stays open.
+	if err := conn.Close(); err != nil {
+		t.Fatalf("Close after timed-out write: %v", err)
+	}
+}
