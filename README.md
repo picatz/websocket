@@ -45,18 +45,8 @@ func echoHandler(w http.ResponseWriter, r *http.Request) {
 	// Upgrade the HTTP connection to a WebSocket connection
 	conn, err := websocket.Upgrade(w, r, websocket.WithUpgradeMaxMessageSize(1<<20))
 	if err != nil {
+		// Upgrade has already written the HTTP error response.
 		log.Printf("Upgrade failed: %v", err)
-		switch {
-		case errors.Is(err, websocket.ErrOriginNotAllowed):
-			http.Error(w, "WebSocket origin not allowed", http.StatusForbidden)
-		case errors.Is(err, websocket.ErrUnsupportedVersion):
-			w.Header().Set("Sec-WebSocket-Version", "13")
-			http.Error(w, "Unsupported WebSocket version", http.StatusUpgradeRequired)
-		case errors.Is(err, websocket.ErrNotHijacker):
-			http.Error(w, "WebSocket upgrade unavailable", http.StatusInternalServerError)
-		case !errors.Is(err, websocket.ErrHandshakeFailed):
-			http.Error(w, "Invalid WebSocket handshake", http.StatusBadRequest)
-		}
 		return
 	}
 	defer conn.Close()
@@ -481,10 +471,15 @@ Comma rejection is an intentional single-origin policy, including commas in a
 reg-name. There is no DNS resolution or IDNA conversion.
 
 On rejection, `Upgrade` returns `ErrOriginNotAllowed` before extension negotiation
-or hijacking. It does not write HTTP 403: the caller owns the response, as in the
-server example. Other pre-hijack errors likewise leave the writer untouched.
-After `ErrHandshakeFailed`, the transport may have been hijacked; do not try to
-write another HTTP response.
+or hijacking, and writes HTTP 403.
+
+When `Upgrade` fails before taking over the connection, it writes the HTTP error
+response itself, so the handler only logs and returns: 403 for a rejected
+Origin, 426 with `Sec-WebSocket-Version: 13` for an unsupported version, 500
+when hijacking is unavailable or the server's own options are invalid, and 400
+for any other malformed handshake. `UpgradeErrorStatus(err)` reports the status
+it chose. After `ErrHandshakeFailed` the transport may have been hijacked, so
+nothing is written.
 
 ## Protocol limitations
 

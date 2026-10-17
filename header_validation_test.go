@@ -66,8 +66,8 @@ func TestUpgradeRejectsCustomHeadersBeforeHijack(t *testing.T) {
 			if conn != nil || !errors.Is(err, ErrInvalidHandshakeHeader) {
 				t.Fatalf("Upgrade = %v, %v", conn, err)
 			}
-			if w.calls != 0 || w.Body.Len() != 0 {
-				t.Fatalf("invalid fields hijacked %d times or wrote %q", w.calls, w.Body.String())
+			if w.calls != 0 || w.Code != http.StatusInternalServerError {
+				t.Fatalf("invalid fields hijacked %d times or wrote %d %q", w.calls, w.Code, w.Body.String())
 			}
 			if !reflect.DeepEqual(headers, before) {
 				t.Fatal("mutated caller headers")

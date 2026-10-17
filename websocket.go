@@ -1868,13 +1868,25 @@ func WithUpgradeOriginCheck(check func(r *http.Request, origin string) bool) Upg
 // observed through r.TLS. Forwarded headers and r.URL.Scheme are not trusted.
 // Origin is not authentication: callers still own authentication, authorization,
 // and authoritative Host validation. WithUpgradeOriginCheck replaces the policy.
-// Origin rejection returns ErrOriginNotAllowed without writing an HTTP response;
-// the caller may send HTTP 403. Other pre-hijack errors also leave w untouched.
+//
+// When Upgrade fails before taking over the connection, it writes the HTTP
+// error response itself and returns the error; the handler should just return.
+// See UpgradeErrorStatus for the status codes. After ErrHandshakeFailed the
+// transport may already be hijacked, so nothing is written.
+//
 // It requires an HTTP/1.1 connection with hijacking support. Middleware may
 // implement http.Hijacker directly or expose the underlying http.ResponseWriter
 // through an Unwrap() http.ResponseWriter method, as used by http.ResponseController.
 // A writer's own Hijack method takes precedence over Unwrap. HTTP/2 is not supported.
 func Upgrade(w http.ResponseWriter, r *http.Request, options ...UpgradeOption) (*Conn, error) {
+	conn, err := upgrade(w, r, options)
+	if err != nil {
+		writeUpgradeError(w, err)
+	}
+	return conn, err
+}
+
+func upgrade(w http.ResponseWriter, r *http.Request, options []UpgradeOption) (*Conn, error) {
 	opts := &upgradeOptions{maxBytes: DefaultMaxMessageSize}
 	opts.apply(options)
 

@@ -164,11 +164,43 @@ conn.CloseWithStatus(websocket.StatusGoingAway, "")
 
 ## HTTP error ownership
 
-`Upgrade` returns `ErrOriginNotAllowed` without writing, negotiating extensions,
-or hijacking. The caller should map it to HTTP 403. Other pre-hijack handshake
-errors also leave the response untouched. Use the executable examples for a
-minimal 403/426/400 mapping (and 500 for missing hijacking support); after `ErrHandshakeFailed`, a failed hijack or 101 write
-may already own the transport, so do not write another HTTP response.
+`Upgrade` used to return pre-hijack errors without writing anything, and each
+handler mapped them to an HTTP status. It now writes the response itself:
+
+| Error | Response |
+|---|---|
+| `ErrOriginNotAllowed` | 403 |
+| `ErrUnsupportedVersion` | 426, with `Sec-WebSocket-Version: 13` |
+| `ErrNotHijacker`, `ErrInvalidHandshakeHeader` (the server's own options) | 500 |
+| `ErrHandshakeFailed` | nothing: the transport may already be hijacked |
+| any other malformed handshake | 400 |
+
+Delete the handler's own error mapping and just return. A handler that still
+calls `http.Error` after `Upgrade` fails now sends a second, ignored status
+(`net/http` logs "superfluous response.WriteHeader") and appends its text to
+the body. `UpgradeErrorStatus(err)` returns the status that was written, for
+logging or metrics.
+
+```go
+// Before
+conn, err := websocket.Upgrade(w, r)
+if err != nil {
+	if errors.Is(err, websocket.ErrOriginNotAllowed) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+	}
+	return
+}
+
+// After
+conn, err := websocket.Upgrade(w, r)
+if err != nil {
+	log.Printf("upgrade: %v (HTTP %d)", err, websocket.UpgradeErrorStatus(err))
+	return
+}
+```
+
+`github.com/picatz/openai` returns without writing after a failed `Upgrade` and
+needs no change.
 
 ## Compression negotiation and composition
 

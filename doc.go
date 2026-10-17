@@ -10,8 +10,9 @@
 // actual connection's TLS scheme. Forwarded headers are not trusted. Use
 // WithUpgradeOriginCheck to replace that decision, for example with an exact
 // public-origin allowlist behind a TLS-terminating proxy. Malformed/multiple
-// fields are rejected before a callback. ErrOriginNotAllowed leaves the response
-// writer untouched; the caller may send HTTP 403. Authentication, authorization,
+// fields are rejected before a callback. When Upgrade fails before hijacking, it
+// writes the HTTP error response itself (403 for ErrOriginNotAllowed; see
+// UpgradeErrorStatus) and the handler should just return. Authentication, authorization,
 // and authoritative Host validation remain application responsibilities. Origin
 // is not authentication and non-browser clients can omit or forge it.
 //
