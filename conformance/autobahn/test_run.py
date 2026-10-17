@@ -426,7 +426,7 @@ class ShardTests(unittest.TestCase):
 
     def test_cli_rejects_partial_diagnostic_with_sharding(self):
         for args in (["--role", "server", "--profile", "compression", "--case", "12.1.9"],
-                     ["--role", "client", "--profile", "compression"],
+                     ["--role", "client", "--profile", "limits"],
                      ["--role", "server", "--profile", "core"]):
             result = subprocess.run(["python3", str(HERE / "run.py")] + args +
                                     ["--shard-size", "1", "--output", "/unused"],
