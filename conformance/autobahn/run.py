@@ -295,7 +295,7 @@ def write_aggregate(output, inventory, plan, shards, agent, stopping_cause=None)
     write_json(reports / "index.json", linked)
     text = "\n".join([
         "# Autobahn baseline: " + agent, "",
-        "Informational protocol baseline, not a certification or all-pass gate.", "",
+        "Protocol baseline, not a certification. gate.py accepts only OK and INFORMATIONAL outcomes.", "",
         "- Available: {available}; selected: {selected}; reported: {reported}; excluded: {excluded}".format(**result),
         "- Complete infrastructure and coverage: " + str(result["complete"]),
         "- Shards: {completed_shards} complete / {started_shards} started / {planned_shards} planned".format(**result),
@@ -488,7 +488,7 @@ def main():
                                metadata, deadline)
     if errors:
         raise SystemExit("; ".join(errors))
-    # Protocol failures are evidence, not an all-pass gate during baseline work.
+    # Protocol failures are evidence here; gate.py turns them into a verdict.
     run(sys.executable, str(HERE / "summarize.py"), str(reports), "--agent", agent)
 
 

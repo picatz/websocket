@@ -1,6 +1,6 @@
 # Autobahn conformance evidence
 
-This is a repeatable **informational baseline**, not a claim of complete RFC
+This is a repeatable **regression gate**, not a claim of complete RFC
 6455 compliance. The driver exercises this module's public `Dial`, `Upgrade`,
 `ReadMessage`, `WriteMessage`, and `Close` entry points. It does not repair
 frames, supply protocol-error close codes, or bypass production validation.
@@ -159,17 +159,23 @@ The summary records `behavior` and `behaviorClose` **independently**, including
 every non-OK row. `FAILED` and `UNCLEAN` are failures; `UNIMPLEMENTED` is skipped.
 `NON-STRICT`, `WRONG CODE`, `FAILED BY CLIENT`, and `INFORMATIONAL` stay visible
 as their own categories. Treating every non-OK value as a protocol failure would
-misrepresent upstream's classifications. A green informational job means the
-run/report was complete; it does **not** mean every selected case passed.
+misrepresent upstream's classifications.
+
+[`gate.py`](gate.py) then judges the complete summary: every selected case must
+have `OK` or `INFORMATIONAL` for both behavior and close behavior.
+`INFORMATIONAL` cases have no verdict in the suite. Any other outcome fails the
+job, warnings and `UNIMPLEMENTED` included, so a new warning is reviewed instead
+of hidden in a green check. A green job therefore means the run was complete
+and every selected case was accepted. The gate runs after the artifact upload,
+so a rejected run still keeps its evidence.
 
 Missing, unexpected, empty, malformed, or unknown-status reports fail the job,
 as do container failures, timeouts, and Docker/cgroup OOM-kill evidence even if
 the container otherwise exits zero. A PyPy `MemoryError` is a resource failure;
-inspect the raw logs when classifying a new baseline. Known protocol failures are
-reported without failing all of main. There is no badge or allowed-failure
-list. Establish a reviewed baseline before proposing a stricter regression
-gate. The summarizer has independent synthetic tests for both result dimensions,
-missing/unexpected cases, warnings, skips, and unknown outcomes.
+inspect the raw logs when classifying a new baseline. There is no
+allowed-failure list: a case that regresses is fixed, not excluded. The
+summarizer and the gate have independent synthetic tests for both result
+dimensions, missing/unexpected cases, warnings, skips, and unknown outcomes.
 
 Autobahn is one source of evidence. Its opening-handshake coverage is incomplete;
 keep the repository's targeted handshake/security tests. This run is not a real
