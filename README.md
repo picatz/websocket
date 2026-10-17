@@ -151,6 +151,27 @@ conn.SetPongHandler(func(appData string) error {
 })
 ```
 
+### Browser and WebAssembly clients
+
+Programs compiled with `GOOS=js GOARCH=wasm` cannot open TCP connections, so
+`Dial` is not available to them. The [`browser`](browser) subpackage drives the
+host's own `WebSocket` object instead, with the same `ReadMessage`,
+`WriteMessage` and `Close` methods and the same `Opcode` values:
+
+```go
+conn, err := browser.Dial(ctx, "wss://example.com/socket", browser.WithSubprotocols("chat"))
+if err != nil {
+	return err
+}
+defer conn.Close()
+```
+
+The browser handles the handshake, framing, Ping/Pong and compression, so
+headers, TLS, proxies and control frames are out of the program's hands, and
+dial failures carry no detail. See the package documentation for the full list.
+Its tests run in Node.js 22 or later against a native Go server as part of
+`go test ./...`, and are skipped when Node is not installed.
+
 ## Limits and connection lifetime
 
 `Dial` and `Upgrade` default to `DefaultMaxMessageSize`, 1 MiB (1,048,576 bytes).
