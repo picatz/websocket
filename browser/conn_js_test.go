@@ -28,11 +28,11 @@ func serverURL(t *testing.T, path string) string {
 	return base + path
 }
 
-func dial(t *testing.T, path string, opts ...browser.DialOption) *browser.Conn {
+func dial(t *testing.T, path string, d *browser.Dialer) *browser.Conn {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	conn, err := browser.Dial(ctx, serverURL(t, path), opts...)
+	conn, err := d.Dial(ctx, serverURL(t, path))
 	if err != nil {
 		t.Fatalf("Dial %s: %v", path, err)
 	}
@@ -41,7 +41,7 @@ func dial(t *testing.T, path string, opts ...browser.DialOption) *browser.Conn {
 }
 
 func TestEcho(t *testing.T) {
-	conn := dial(t, "/echo")
+	conn := dial(t, "/echo", nil)
 	binary := []byte{0, 1, 2, 0xff}
 	for _, tc := range []struct {
 		opcode websocket.MessageType
@@ -63,7 +63,7 @@ func TestEcho(t *testing.T) {
 }
 
 func TestWriteValidation(t *testing.T) {
-	conn := dial(t, "/echo")
+	conn := dial(t, "/echo", nil)
 	if err := conn.WriteMessage(websocket.TextMessage, []byte{0xff}); !errors.Is(err, websocket.ErrInvalidFrame) {
 		t.Fatalf("invalid UTF-8 text: err = %v, want ErrInvalidFrame", err)
 	}
@@ -73,17 +73,17 @@ func TestWriteValidation(t *testing.T) {
 }
 
 func TestSubprotocol(t *testing.T) {
-	conn := dial(t, "/subprotocol", browser.WithSubprotocols("superchat", "chat"))
+	conn := dial(t, "/subprotocol", &browser.Dialer{Subprotocols: []string{"superchat", "chat"}})
 	if got := conn.Subprotocol(); got != "chat" {
 		t.Fatalf("Subprotocol = %q, want chat", got)
 	}
-	if got := dial(t, "/echo").Subprotocol(); got != "" {
+	if got := dial(t, "/echo", nil).Subprotocol(); got != "" {
 		t.Fatalf("Subprotocol without offer = %q, want empty", got)
 	}
 }
 
 func TestPeerClose(t *testing.T) {
-	conn := dial(t, "/goodbye")
+	conn := dial(t, "/goodbye", nil)
 	// Messages that arrived before the close are still delivered.
 	for _, want := range []string{"one", "two"} {
 		if _, data, err := conn.ReadMessage(); err != nil || string(data) != want {
@@ -103,7 +103,7 @@ func TestPeerClose(t *testing.T) {
 }
 
 func TestClose(t *testing.T) {
-	conn := dial(t, "/echo")
+	conn := dial(t, "/echo", nil)
 	if err := conn.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -119,12 +119,21 @@ func TestClose(t *testing.T) {
 }
 
 func TestMaxMessageSize(t *testing.T) {
-	conn := dial(t, "/echo", browser.WithMaxMessageSize(4))
+	conn := dial(t, "/echo", &browser.Dialer{MaxMessageSize: 4})
 	if err := conn.WriteMessage(websocket.BinaryMessage, []byte("12345")); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := conn.ReadMessage(); !errors.Is(err, websocket.ErrPayloadTooLarge) {
 		t.Fatalf("err = %v, want ErrPayloadTooLarge", err)
+	}
+
+	// A negative limit means none.
+	conn = dial(t, "/echo", &browser.Dialer{MaxMessageSize: -1})
+	if err := conn.WriteMessage(websocket.BinaryMessage, []byte("12345")); err != nil {
+		t.Fatal(err)
+	}
+	if _, data, err := conn.ReadMessage(); err != nil || string(data) != "12345" {
+		t.Fatalf("unlimited: ReadMessage = %q, %v", data, err)
 	}
 }
 
@@ -140,7 +149,7 @@ func TestDialFailure(t *testing.T) {
 }
 
 func TestReadContext(t *testing.T) {
-	conn := dial(t, "/silent")
+	conn := dial(t, "/silent", nil)
 	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()
 	if _, _, err := conn.ReadMessageContext(ctx); !errors.Is(err, context.DeadlineExceeded) {
@@ -153,7 +162,7 @@ func TestReadContext(t *testing.T) {
 }
 
 func TestCloseWithStatus(t *testing.T) {
-	conn := dial(t, "/echo")
+	conn := dial(t, "/echo", nil)
 	for _, tc := range []struct {
 		code   websocket.StatusCode
 		reason string
@@ -185,7 +194,7 @@ func TestCloseWithStatus(t *testing.T) {
 }
 
 func TestCloseWithStatusReachesPeer(t *testing.T) {
-	conn := dial(t, "/closestatus")
+	conn := dial(t, "/closestatus", nil)
 	if err := conn.CloseWithStatus(4321, "done"); err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +233,7 @@ var (
 func TestWriteBackpressure(t *testing.T) {
 	const mark = 64 << 10
 	defer browser.SetWriteHighWaterMark(mark)()
-	conn := dial(t, "/stall")
+	conn := dial(t, "/stall", nil)
 
 	// The server never reads, so once the TCP buffers fill the host's send
 	// queue grows past the mark and the next write must wait.

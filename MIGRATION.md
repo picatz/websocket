@@ -272,6 +272,24 @@ Behavior that changes with the move:
 `github.com/picatz/openai` moves its one `Dial` call to a `Dialer` in a
 companion change.
 
+### Package browser
+
+`browser.Dial` follows the same shape. `WithSubprotocols` and
+`WithMaxMessageSize` become `browser.Dialer` fields, and `browser.Dial(ctx, url)`
+dials with a zero `Dialer`:
+
+```go
+// Before
+conn, err := browser.Dial(ctx, url, browser.WithSubprotocols("chat"), browser.WithMaxMessageSize(0))
+
+// After
+conn, err := (&browser.Dialer{Subprotocols: []string{"chat"}, MaxMessageSize: -1}).Dial(ctx, url)
+```
+
+As in the root package, a zero `MaxMessageSize` now means
+`websocket.DefaultMaxMessageSize` and a negative one means unlimited.
+`WithMaxMessageSize(0)` used to mean unlimited.
+
 ## Compression negotiation and composition
 
 `permessage-deflate` now sends with context takeover, fragments large compressed

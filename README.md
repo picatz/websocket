@@ -194,7 +194,7 @@ host's own `WebSocket` object instead. Its methods are a subset of
 to work under `GOOS=js`:
 
 ```go
-conn, err := browser.Dial(ctx, "wss://example.com/socket", browser.WithSubprotocols("chat"))
+conn, err := (&browser.Dialer{Subprotocols: []string{"chat"}}).Dial(ctx, "wss://example.com/socket")
 if err != nil {
 	return err
 }
