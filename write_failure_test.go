@@ -73,7 +73,7 @@ func (e *failedWriteExtension) ProcessOutgoingFrame(f *wireFrame) error {
 func requireWriteCause(t *testing.T, err, errorCause error) {
 	t.Helper()
 	var concrete *failedWriteError
-	if !errors.Is(err, ErrWriteFailed) || !errors.Is(err, errorCause) || !errors.As(err, &concrete) || concrete != errorCause {
+	if !errors.Is(err, errWriteFailed) || !errors.Is(err, errorCause) || !errors.As(err, &concrete) || concrete != errorCause {
 		t.Fatalf("lost transport error identity: %v", err)
 	}
 }
@@ -114,7 +114,7 @@ func TestWriteFailureWritePoisonPreventsWireReuse(t *testing.T) {
 					} {
 						retryErr := write()
 						requireWriteCause(t, retryErr, cause)
-						if want := fmt.Sprintf("%v: failed to write frame header: %v", ErrWriteFailed, cause); retryErr.Error() != want {
+						if want := fmt.Sprintf("%v: failed to write frame header: %v", errWriteFailed, cause); retryErr.Error() != want {
 							t.Fatalf("retry error=%q, want %q", retryErr, want)
 						}
 					}
@@ -140,7 +140,7 @@ func TestWriteFailureWritePoisonPreventsWireReuse(t *testing.T) {
 					if err := c.WriteMessage(BinaryMessage, nil); !errors.Is(err, net.ErrClosed) {
 						t.Fatal(err)
 					}
-					if err := c.Close(); err != ErrAlreadyClosed {
+					if err := c.Close(); err != errAlreadyClosed {
 						t.Fatal(err)
 					}
 				})
@@ -163,7 +163,7 @@ func TestWriteFailureWritePreflightRemainsUsable(t *testing.T) {
 			func() error { return c.writeControlFrame(opClose, []byte{3, 237}) },
 			func() error { return c.writeControlFrame(opClose, []byte{3, 232, 255}) },
 		} {
-			if err := write(); err == nil || errors.Is(err, ErrWriteFailed) {
+			if err := write(); err == nil || errors.Is(err, errWriteFailed) {
 				t.Fatal(err)
 			}
 		}
@@ -175,7 +175,7 @@ func TestWriteFailureWritePreflightRemainsUsable(t *testing.T) {
 		err := c.WriteMessage(BinaryMessage, nil)
 		// Outgoing extension errors wrap the extension's error, like incoming
 		// ones, without looking like a transport failure.
-		if err == nil || !errors.Is(err, cause) || errors.Is(err, ErrWriteFailed) || !strings.Contains(err.Error(), cause.Error()) {
+		if err == nil || !errors.Is(err, cause) || errors.Is(err, errWriteFailed) || !strings.Contains(err.Error(), cause.Error()) {
 			t.Fatalf("extension error identity changed: %v", err)
 		}
 		if raw.calls != 0 || raw.closes != 0 || c.writeErr != nil || c.closed.Load() {
@@ -230,7 +230,7 @@ func failedWritePair(t *testing.T) (*Conn, *failedWritePipe, net.Conn) {
 func failedWriteTimeout(t *testing.T, err error) {
 	t.Helper()
 	var ne net.Error
-	if !errors.Is(err, ErrWriteFailed) || !errors.Is(err, os.ErrDeadlineExceeded) || !errors.As(err, &ne) || !ne.Timeout() {
+	if !errors.Is(err, errWriteFailed) || !errors.Is(err, os.ErrDeadlineExceeded) || !errors.As(err, &ne) || !ne.Timeout() {
 		t.Fatal(err)
 	}
 }
@@ -338,7 +338,7 @@ func TestWriteFailureShortTransportWriteBecomesSticky(t *testing.T) {
 		c := newTestConn(raw, ConnConfig{Server: true})
 		for range 3 {
 			err := c.WriteMessage(BinaryMessage, []byte("payload"))
-			if !errors.Is(err, ErrWriteFailed) || !errors.Is(err, io.ErrShortWrite) {
+			if !errors.Is(err, errWriteFailed) || !errors.Is(err, io.ErrShortWrite) {
 				t.Fatal(err)
 			}
 		}
@@ -543,7 +543,7 @@ func TestWriteFailureExtensionCanCloseDuringFirstWrite(t *testing.T) {
 	c.extensions = []frameExtension{ext}
 	write := make(chan error, 1)
 	go func() { write <- c.WriteMessage(BinaryMessage, nil) }()
-	if err := failedWriteAwait(t, write); !errors.Is(err, ErrWriteFailed) || !errors.Is(err, io.ErrClosedPipe) {
+	if err := failedWriteAwait(t, write); !errors.Is(err, errWriteFailed) || !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatal(err)
 	}
 	if err := failedWriteAwait(t, read); !errors.Is(err, io.ErrClosedPipe) {

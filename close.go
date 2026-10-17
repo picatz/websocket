@@ -160,8 +160,8 @@ func closePayload(code StatusCode, reason string) ([]byte, error) {
 // CloseWithStatus is Close with an explicit status code and reason. It
 // validates both before any I/O: an invalid status returns an error matching
 // ErrInvalidCloseStatus and leaves the connection open. Otherwise it behaves
-// exactly like Close, including the one-second best-effort notification and
-// ErrAlreadyClosed on repeated calls.
+// exactly like Close, including the one-second best-effort notification and the
+// net.ErrClosed match on repeated calls.
 //
 // https://datatracker.ietf.org/doc/html/rfc6455#section-7.1.2
 func (c *Conn) CloseWithStatus(code StatusCode, reason string) error {
@@ -225,8 +225,8 @@ func (c *Conn) CloseWrite(code StatusCode, reason string) error {
 // and returns an error, matching ctx's cause in the first case; a ctx that is
 // already done closes it at once. An invalid status returns an error matching
 // ErrInvalidCloseStatus before any I/O and leaves the connection open, as for
-// CloseWithStatus. On a connection that is already closed, Shutdown returns
-// ErrAlreadyClosed.
+// CloseWithStatus. On a connection that is already closed, Shutdown returns an
+// error matching net.ErrClosed.
 //
 // https://www.rfc-editor.org/rfc/rfc6455#section-7.1.2
 func (c *Conn) Shutdown(ctx context.Context, code StatusCode, reason string) error {
@@ -235,7 +235,7 @@ func (c *Conn) Shutdown(ctx context.Context, code StatusCode, reason string) err
 		return err
 	}
 	if c.closed.Load() {
-		return ErrAlreadyClosed
+		return errAlreadyClosed
 	}
 	if err := ctx.Err(); err != nil {
 		c.cancelIO()
@@ -247,11 +247,11 @@ func (c *Conn) Shutdown(ctx context.Context, code StatusCode, reason string) err
 	c.shuttingDown.Store(true)
 	if err := c.writeControlFrame(opClose, payload); err != nil {
 		switch {
-		case ctx.Err() != nil, errors.Is(err, ErrWriteFailed), !errors.Is(err, net.ErrClosed):
+		case ctx.Err() != nil, errors.Is(err, errWriteFailed), !errors.Is(err, net.ErrClosed):
 			c.cancelIO()
 			return c.shutdownError(ctx, err)
 		case c.closed.Load():
-			return ErrAlreadyClosed
+			return errAlreadyClosed
 		}
 		// An earlier writeControlFrame already sent a Close frame, so the
 		// handshake is under way: wait for the peer's answer.

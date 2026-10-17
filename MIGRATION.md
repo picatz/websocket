@@ -453,6 +453,34 @@ valid UTF-8 before sending anything, but with a plain error rather than
 match `ErrProtocol`. A control frame from the peer with more than 125 bytes of
 payload is a protocol error, no longer `ErrPayloadTooLarge`.
 
+## Handshake and write errors
+
+The exported error set is now the errors a caller can act on. The handshake
+details are unexported; each still names the problem in its text and matches
+the umbrella that says whose fault it was:
+
+- `Dial` wraps every failure after the server answered with `ErrBadHandshake`,
+  so one check covers a bad status, a bad `Sec-WebSocket-Accept`, and an
+  extension or subprotocol the client did not offer.
+- `NewConn` wraps every configuration failure with `ErrInvalidConfig`.
+- `ErrNotHijacker` now matches `ErrInvalidConfig` too.
+
+```go
+// Before
+if errors.Is(err, websocket.ErrProxy) || errors.Is(err, websocket.ErrInvalidSecAccept) { ... }
+// After
+if errors.Is(err, websocket.ErrBadHandshake) { ... }
+```
+
+| Before | After |
+| --- | --- |
+| `ErrProxy`, `ErrResponseHeaderTooLarge`, `ErrInvalidSecAccept`, `ErrFailedToGenerateKey`, `ErrHandshakeFailed` | `ErrBadHandshake` |
+| `ErrInvalidMethod`, `ErrInvalidUpgradeHeader`, `ErrInvalidConnectionHeader`, `ErrMissingSecKey`, `ErrInvalidSecKey` (from `Upgrade`) | `ErrBadHandshake` (Upgrade has already replied 400 or 405) |
+| `ErrInvalidExtension`, `ErrInvalidSubprotocol` | `ErrBadHandshake` from `Dial` and `Upgrade`, `ErrInvalidConfig` from `NewConn` |
+| `ErrInvalidHandshakeHeader` | `ErrInvalidConfig` |
+| `ErrAlreadyClosed` | `net.ErrClosed`, which it already matched |
+| `ErrWriteFailed` | the transport's error, which it already wrapped, such as `os.ErrDeadlineExceeded`; any write error is terminal |
+
 ## Verification scope
 
 Default-policy tests exercise omitted options separately from configured protocol

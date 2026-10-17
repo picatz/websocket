@@ -3,6 +3,7 @@ package websocket_test
 import (
 	"bufio"
 	"context"
+	"crypto/sha1"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
@@ -205,7 +206,7 @@ func TestDialHTTPSProxyVerifiesCertificate(t *testing.T) {
 	proxy := newConnectProxy(t, &tls.Config{Certificates: target.TLS.Certificates}, nil)
 	// No roots for the self-signed proxy certificate: verification must fail.
 	_, _, err := (&websocket.Dialer{Proxy: fixedProxy(proxy.url("https", nil))}).Dial(t.Context(), target.wsURL())
-	if !errors.Is(err, websocket.ErrBadHandshake) || !errors.Is(err, websocket.ErrProxy) {
+	if !errors.Is(err, websocket.ErrBadHandshake) || !errors.Is(err, websocket.ErrProxyForTest) {
 		t.Fatalf("err = %v, want ErrBadHandshake and ErrProxy", err)
 	}
 	var unknown x509.UnknownAuthorityError
@@ -224,7 +225,7 @@ func TestDialProxyRejection(t *testing.T) {
 	if c != nil || resp != nil {
 		t.Fatal("rejected tunnel returned a connection or target response")
 	}
-	if !errors.Is(err, websocket.ErrBadHandshake) || !errors.Is(err, websocket.ErrProxy) || !strings.Contains(err.Error(), "407") {
+	if !errors.Is(err, websocket.ErrBadHandshake) || !errors.Is(err, websocket.ErrProxyForTest) || !strings.Contains(err.Error(), "407") {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -236,7 +237,7 @@ func TestDialProxyEarlyDataRejected(t *testing.T) {
 		return false
 	})
 	_, _, err := (&websocket.Dialer{Proxy: fixedProxy(proxy.url("http", nil))}).Dial(t.Context(), target.wsURL())
-	if !errors.Is(err, websocket.ErrProxy) {
+	if !errors.Is(err, websocket.ErrProxyForTest) {
 		t.Fatalf("err = %v, want ErrProxy", err)
 	}
 }
@@ -248,7 +249,7 @@ func TestDialProxyResponseHeadBudget(t *testing.T) {
 		return false
 	})
 	_, _, err := (&websocket.Dialer{MaxResponseHeaderBytes: 64, Proxy: fixedProxy(proxy.url("http", nil))}).Dial(t.Context(), target.wsURL())
-	if !errors.Is(err, websocket.ErrProxy) || !errors.Is(err, websocket.ErrResponseHeaderTooLarge) {
+	if !errors.Is(err, websocket.ErrProxyForTest) || !errors.Is(err, websocket.ErrResponseHeaderTooLargeForTest) {
 		t.Fatalf("err = %v, want ErrProxy and ErrResponseHeaderTooLarge", err)
 	}
 }
@@ -320,9 +321,9 @@ func TestDialProxyErrors(t *testing.T) {
 		want  error
 	}{
 		"selection error":  {func(*http.Request) (*url.URL, error) { return nil, selectErr }, selectErr},
-		"socks scheme":     {fixedProxy(&url.URL{Scheme: "socks5", Host: "127.0.0.1:1080", User: url.UserPassword("u", "hunter2")}), websocket.ErrProxy},
-		"missing host":     {fixedProxy(&url.URL{Scheme: "http"}), websocket.ErrProxy},
-		"unreachable host": {fixedProxy(&url.URL{Scheme: "http", Host: "127.0.0.1:1"}), websocket.ErrProxy},
+		"socks scheme":     {fixedProxy(&url.URL{Scheme: "socks5", Host: "127.0.0.1:1080", User: url.UserPassword("u", "hunter2")}), websocket.ErrProxyForTest},
+		"missing host":     {fixedProxy(&url.URL{Scheme: "http"}), websocket.ErrProxyForTest},
+		"unreachable host": {fixedProxy(&url.URL{Scheme: "http", Host: "127.0.0.1:1"}), websocket.ErrProxyForTest},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, _, err := (&websocket.Dialer{Proxy: tc.proxy}).Dial(t.Context(), target.wsURL())
@@ -371,5 +372,45 @@ func TestDialWithNetDialContext(t *testing.T) {
 	}}).Dial(t.Context(), target.wsURL())
 	if !errors.Is(err, websocket.ErrBadHandshake) {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// Every failure after the server answered matches ErrBadHandshake, whatever
+// was wrong with the answer, and Dial returns the response.
+func TestDialBadAnswerMatchesErrBadHandshake(t *testing.T) {
+	for name, extra := range map[string]string{
+		"bad accept":            "Sec-WebSocket-Accept: AAAAAAAAAAAAAAAAAAAAAAAAAAA=\r\n",
+		"unoffered subprotocol": "Sec-WebSocket-Protocol: chat\r\n",
+		"unoffered extension":   "Sec-WebSocket-Extensions: x-unknown\r\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ln.Close()
+			go func() {
+				conn, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				defer conn.Close()
+				req, err := http.ReadRequest(bufio.NewReader(conn))
+				if err != nil {
+					return
+				}
+				sum := sha1.Sum([]byte(req.Header.Get("Sec-WebSocket-Key") + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
+				accept := "Sec-WebSocket-Accept: " + base64.StdEncoding.EncodeToString(sum[:]) + "\r\n"
+				if strings.HasPrefix(extra, "Sec-WebSocket-Accept") {
+					accept = ""
+				}
+				io.WriteString(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"+accept+extra+"\r\n")
+				io.Copy(io.Discard, conn)
+			}()
+			c, resp, err := websocket.Dial(t.Context(), "ws://"+ln.Addr().String())
+			if c != nil || resp == nil || !errors.Is(err, websocket.ErrBadHandshake) {
+				t.Fatalf("Dial = %v, %v, %v; want a response and ErrBadHandshake", c, resp, err)
+			}
+		})
 	}
 }

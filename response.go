@@ -30,7 +30,7 @@ func (r *responseHeadReader) Read(p []byte) (int, error) {
 			return 0, r.readErr
 		}
 		r.exceeded = true
-		return 0, ErrResponseHeaderTooLarge
+		return 0, errResponseHeaderTooLarge
 	}
 	if r.remaining > 0 && int64(len(p)) > r.remaining {
 		p = p[:r.remaining]
@@ -54,7 +54,7 @@ func readHandshakeResponse(src io.Reader, maxBytes int64) (*http.Response, *bufi
 	// including when the budget splits CR/LF. Merely reaching zero is fine:
 	// reject only when parsing actually tried to read beyond the budget.
 	if r.exceeded {
-		return nil, br, ErrResponseHeaderTooLarge
+		return nil, br, errResponseHeaderTooLarge
 	}
 	if err != nil {
 		if r.readErr != nil && !errors.Is(err, r.readErr) {

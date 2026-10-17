@@ -19,8 +19,8 @@ func TestCloseSendsCloseFrame(t *testing.T) {
 	if !bytes.Equal(raw.written.Bytes(), []byte{0x88, 2, 0x03, 0xe8}) {
 		t.Fatalf("Close wrote %x, want normal close frame", raw.written.Bytes())
 	}
-	if !errors.Is(conn.Close(), ErrAlreadyClosed) {
-		t.Fatal("repeated Close must report ErrAlreadyClosed")
+	if !errors.Is(conn.Close(), errAlreadyClosed) {
+		t.Fatal("repeated Close must report errAlreadyClosed")
 	}
 }
 

@@ -141,14 +141,14 @@ func TestUpgradeRejectsInvalidKey(t *testing.T) {
 			r := upgradeRequest()
 			r.Header.Set("Sec-WebSocket-Key", key)
 			_, err := Upgrade(httptest.NewRecorder(), r)
-			if !errors.Is(err, ErrInvalidSecKey) {
+			if !errors.Is(err, errInvalidSecKey) {
 				t.Fatalf("error = %v, want invalid key", err)
 			}
 		})
 	}
 	r := upgradeRequest()
 	r.Header.Add("Sec-WebSocket-Key", r.Header.Get("Sec-WebSocket-Key"))
-	if _, err := Upgrade(httptest.NewRecorder(), r); !errors.Is(err, ErrInvalidSecKey) {
+	if _, err := Upgrade(httptest.NewRecorder(), r); !errors.Is(err, errInvalidSecKey) {
 		t.Fatalf("duplicate key error = %v", err)
 	}
 }

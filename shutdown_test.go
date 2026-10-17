@@ -59,8 +59,8 @@ func TestShutdownCompletesHandshake(t *testing.T) {
 	if err := c.WriteMessage(websocket.TextMessage, []byte("late")); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("write after Shutdown: err = %v, want net.ErrClosed", err)
 	}
-	if err := c.Shutdown(shutdownContext(t), websocket.StatusNormalClosure, ""); !errors.Is(err, websocket.ErrAlreadyClosed) {
-		t.Fatalf("second Shutdown: err = %v, want ErrAlreadyClosed", err)
+	if err := c.Shutdown(shutdownContext(t), websocket.StatusNormalClosure, ""); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("second Shutdown: err = %v, want net.ErrClosed", err)
 	}
 }
 
@@ -239,15 +239,15 @@ func ExampleConn_Shutdown() {
 
 // A Close frame that cannot be written ends Shutdown with the write error and
 // leaves the connection fully closed, so a later Close reports
-// ErrAlreadyClosed instead of writing again.
+// an error matching net.ErrClosed instead of writing again.
 func TestShutdownFailedWriteClosesConn(t *testing.T) {
 	a, b := net.Pipe()
 	b.Close()
 	c := mustNewConn(a, websocket.ConnConfig{})
-	if err := c.Shutdown(shutdownContext(t), websocket.StatusNormalClosure, ""); !errors.Is(err, websocket.ErrWriteFailed) {
+	if err := c.Shutdown(shutdownContext(t), websocket.StatusNormalClosure, ""); !errors.Is(err, websocket.ErrWriteFailedForTest) {
 		t.Fatalf("Shutdown: err = %v, want ErrWriteFailed", err)
 	}
-	if err := c.Close(); !errors.Is(err, websocket.ErrAlreadyClosed) {
-		t.Fatalf("Close after failed Shutdown: err = %v, want ErrAlreadyClosed", err)
+	if err := c.Close(); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("Close after failed Shutdown: err = %v, want net.ErrClosed", err)
 	}
 }

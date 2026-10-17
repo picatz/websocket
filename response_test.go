@@ -58,7 +58,7 @@ func TestResponseHeadBoundaries(t *testing.T) {
 						t.Fatalf("read %d bytes with budget %d", src.n, limit)
 					}
 					if offset < 0 {
-						if resp != nil || !errors.Is(err, ErrResponseHeaderTooLarge) {
+						if resp != nil || !errors.Is(err, errResponseHeaderTooLarge) {
 							t.Fatalf("response=%v error=%v", resp, err)
 						}
 						return
@@ -88,14 +88,14 @@ func TestResponseHeadEveryCut(t *testing.T) {
 		for n := 1; n < len(head); n++ {
 			src := &responseCountReader{r: strings.NewReader(head), oneByte: oneByte}
 			resp, _, err := readHandshakeResponse(src, int64(n))
-			if resp != nil || !errors.Is(err, ErrResponseHeaderTooLarge) || src.n != int64(n) {
+			if resp != nil || !errors.Is(err, errResponseHeaderTooLarge) || src.n != int64(n) {
 				t.Fatalf("one_byte=%v cut=%d read=%d response=%v error=%v", oneByte, n, src.n, resp, err)
 			}
 		}
 	}
 	for _, bad := range []string{"HTTP/1.1 bad\r\n\r\n", "HTTP/1.1 101 x\r\nBad\r\n\r\n"} {
 		_, _, err := readHandshakeResponse(strings.NewReader(bad), int64(len(bad)))
-		if err == nil || errors.Is(err, ErrResponseHeaderTooLarge) {
+		if err == nil || errors.Is(err, errResponseHeaderTooLarge) {
 			t.Fatalf("complete malformed input mislabeled: %v", err)
 		}
 	}
@@ -124,7 +124,7 @@ func TestResponseHeadNeedsNoExtraPeerByte(t *testing.T) {
 	} {
 		src := &responseFailBeyondPrefix{t, []byte(prefix)}
 		resp, _, err := readHandshakeResponse(src, int64(len(prefix)))
-		if resp != nil || !errors.Is(err, ErrResponseHeaderTooLarge) || len(src.remaining) != 0 {
+		if resp != nil || !errors.Is(err, errResponseHeaderTooLarge) || len(src.remaining) != 0 {
 			t.Fatalf("response=%v error=%v remaining=%d", resp, err, len(src.remaining))
 		}
 	}
@@ -192,7 +192,7 @@ func TestResponseHeadPartialReadErrors(t *testing.T) {
 				src := &responseFinalErrorReader{[]byte(head[:cut]), cause}
 				resp, br, err := readHandshakeResponse(src, limit)
 				if cut < len(head) {
-					if resp != nil || !errors.Is(err, cause) || errors.Is(err, ErrResponseHeaderTooLarge) {
+					if resp != nil || !errors.Is(err, cause) || errors.Is(err, errResponseHeaderTooLarge) {
 						t.Fatalf("cut=%d extra=%d cause=%v response=%v error=%v", cut, extra, cause, resp, err)
 					}
 				} else {
@@ -220,7 +220,7 @@ func TestResponseHeadUnlimitedAndReaderEdges(t *testing.T) {
 	if n, err := r.Read(nil); n != 0 || err != nil || r.exceeded {
 		t.Fatalf("empty read=%d %v", n, err)
 	}
-	if n, err := r.Read(make([]byte, 1)); n != 0 || err != ErrResponseHeaderTooLarge || !r.exceeded {
+	if n, err := r.Read(make([]byte, 1)); n != 0 || err != errResponseHeaderTooLarge || !r.exceeded {
 		t.Fatalf("exhausted read=%d %v", n, err)
 	}
 }

@@ -44,7 +44,7 @@ func parseExtensions(values []string) ([]extensionOffer, error) {
 			}
 			name, rest := consumeExtensionToken(s)
 			if name == "" {
-				return nil, fmt.Errorf("%w: expected extension token", ErrInvalidExtension)
+				return nil, fmt.Errorf("%w: expected extension token", errInvalidExtension)
 			}
 			ext := extensionOffer{name: name}
 			s = strings.TrimLeft(rest, " \t")
@@ -52,7 +52,7 @@ func parseExtensions(values []string) ([]extensionOffer, error) {
 				s = strings.TrimLeft(s[1:], " \t")
 				name, rest = consumeExtensionToken(s)
 				if name == "" {
-					return nil, fmt.Errorf("%w: expected parameter token", ErrInvalidExtension)
+					return nil, fmt.Errorf("%w: expected parameter token", errInvalidExtension)
 				}
 				param := extensionParameter{name: name}
 				s = strings.TrimLeft(rest, " \t")
@@ -63,12 +63,12 @@ func parseExtensions(values []string) ([]extensionOffer, error) {
 						var ok bool
 						param.value, s, ok = consumeExtensionQuotedToken(s)
 						if !ok {
-							return nil, fmt.Errorf("%w: invalid quoted parameter token", ErrInvalidExtension)
+							return nil, fmt.Errorf("%w: invalid quoted parameter token", errInvalidExtension)
 						}
 					} else {
 						param.value, s = consumeExtensionToken(s)
 						if param.value == "" {
-							return nil, fmt.Errorf("%w: expected parameter value", ErrInvalidExtension)
+							return nil, fmt.Errorf("%w: expected parameter value", errInvalidExtension)
 						}
 					}
 					s = strings.TrimLeft(s, " \t")
@@ -76,13 +76,13 @@ func parseExtensions(values []string) ([]extensionOffer, error) {
 				ext.params = append(ext.params, param)
 			}
 			if s != "" && s[0] != ',' {
-				return nil, fmt.Errorf("%w: expected extension separator", ErrInvalidExtension)
+				return nil, fmt.Errorf("%w: expected extension separator", errInvalidExtension)
 			}
 			extensions = append(extensions, ext)
 		}
 	}
 	if len(values) != 0 && len(extensions) == 0 {
-		return nil, fmt.Errorf("%w: empty extension list", ErrInvalidExtension)
+		return nil, fmt.Errorf("%w: empty extension list", errInvalidExtension)
 	}
 	return extensions, nil
 }
@@ -127,11 +127,11 @@ func validateExtensionSelection(selected, offered []extensionOffer) error {
 	selectedPMD := false
 	for _, ext := range selected {
 		if !names[ext.name] {
-			return fmt.Errorf("%w: unoffered extension %q", ErrInvalidExtension, ext.name)
+			return fmt.Errorf("%w: unoffered extension %q", errInvalidExtension, ext.name)
 		}
 		if ext.name == "permessage-deflate" {
 			if selectedPMD {
-				return fmt.Errorf("%w: repeated permessage-deflate selection", ErrInvalidExtension)
+				return fmt.Errorf("%w: repeated permessage-deflate selection", errInvalidExtension)
 			}
 			selectedPMD = true
 		}
@@ -143,7 +143,7 @@ func extensionOffers(extensions []frameExtension) (string, []extensionOffer, err
 	var values []string
 	for _, ext := range extensions {
 		if ext == nil {
-			return "", nil, fmt.Errorf("%w: nil extension", ErrInvalidExtension)
+			return "", nil, fmt.Errorf("%w: nil extension", errInvalidExtension)
 		}
 		values = append(values, ext.Offer())
 	}

@@ -119,7 +119,7 @@ func TestDialRejectsInvalidSubprotocolOption(t *testing.T) {
 				return nil, errors.New("unexpected dial")
 			}
 			conn, resp, err := d.Dial(t.Context(), "ws://example.test/")
-			if conn != nil || resp != nil || !errors.Is(err, ErrInvalidHandshakeHeader) || !errors.Is(err, ErrInvalidSubprotocol) {
+			if conn != nil || resp != nil || !errors.Is(err, errInvalidHandshakeHeader) || !errors.Is(err, errInvalidSubprotocol) {
 				t.Fatalf("Dial = %v, %v, %v", conn, resp, err)
 			}
 			if dialed {
@@ -141,7 +141,7 @@ func TestUpgradeRejectsInvalidSubprotocolOption(t *testing.T) {
 			r.Header.Set("Sec-WebSocket-Protocol", "chat")
 			w := &countingHijacker{ResponseRecorder: httptest.NewRecorder()}
 			conn, err := u.Upgrade(w, r)
-			if conn != nil || !errors.Is(err, ErrInvalidHandshakeHeader) || !errors.Is(err, ErrInvalidSubprotocol) {
+			if conn != nil || !errors.Is(err, errInvalidHandshakeHeader) || !errors.Is(err, errInvalidSubprotocol) {
 				t.Fatalf("Upgrade = %v, %v", conn, err)
 			}
 			if w.calls != 0 {

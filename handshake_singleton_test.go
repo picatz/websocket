@@ -42,7 +42,7 @@ func TestUpgradeRequiresSingleVersion(t *testing.T) {
 				t.Fatal("unexpected connection from failing hijacker")
 			}
 			if tc.valid {
-				if w.calls != 1 || !errors.Is(err, ErrHandshakeFailed) {
+				if w.calls != 1 || !errors.Is(err, errHandshakeFailed) {
 					t.Fatalf("valid version: error = %v, hijacks = %d", err, w.calls)
 				}
 			} else if !errors.Is(err, ErrUnsupportedVersion) || w.calls != 0 || w.Code != http.StatusUpgradeRequired || w.Header().Get("Sec-WebSocket-Version") != "13" {
@@ -120,7 +120,7 @@ func TestDialRequiresSingleAccept(t *testing.T) {
 					t.Fatalf("buffered message = (%v, %q, %v)", opcode, payload, err)
 				}
 				conn.conn.Close()
-			} else if conn != nil || !errors.Is(err, ErrInvalidSecAccept) {
+			} else if conn != nil || !errors.Is(err, errInvalidSecAccept) {
 				t.Fatalf("invalid accept: connection = %v, error = %v", conn, err)
 			}
 			if err := <-peerClosed; !errors.Is(err, io.EOF) {

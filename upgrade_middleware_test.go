@@ -212,7 +212,7 @@ func TestUpgradeMiddlewareHandshakeWriteFailure(t *testing.T) {
 			base := &hijackResponse{httptest.NewRecorder(), raw, rw}
 			outer := &middlewareResponseWriter{ResponseWriter: base}
 			conn, err := Upgrade(outer, upgradeRequest())
-			if conn != nil || !errors.Is(err, ErrHandshakeFailed) || !strings.Contains(err.Error(), "failed to "+tc.operation+" handshake response") {
+			if conn != nil || !errors.Is(err, errHandshakeFailed) || !strings.Contains(err.Error(), "failed to "+tc.operation+" handshake response") {
 				t.Fatalf("Upgrade = %v, %v", conn, err)
 			}
 			if raw.closes != 1 || raw.written.Len() != 0 || outer.writes != 0 || outer.status != 0 || base.Body.Len() != 0 {
@@ -246,8 +246,8 @@ func TestUpgradeMiddlewareHijackErrors(t *testing.T) {
 						t.Fatalf("error = %v, status %d; want ErrNotHijacker and 500", err, recorder.Code)
 					}
 					return
-				} else if !errors.Is(err, ErrHandshakeFailed) || err.Error() != ErrHandshakeFailed.Error()+": "+cause.Error() {
-					t.Fatalf("error = %v; want original ErrHandshakeFailed contract", err)
+				} else if !errors.Is(err, errHandshakeFailed) || err.Error() != errHandshakeFailed.Error()+": "+cause.Error() {
+					t.Fatalf("error = %v; want original errHandshakeFailed contract", err)
 				}
 				if writer.calls != 1 || writer.unwraps != 0 || writer.status != 0 || writer.writes != 0 || recorder.Body.Len() != 0 || len(recorder.Header()) != 0 {
 					t.Fatalf("failure wrote a response or bypassed Hijack: %+v", writer)
@@ -264,14 +264,14 @@ func TestUpgradeMiddlewareValidatesBeforeUnwrap(t *testing.T) {
 		u      *Upgrader
 		want   error
 	}{
-		{"connection", func(r *http.Request) { r.Header.Del("Connection") }, nil, ErrInvalidConnectionHeader},
-		{"upgrade", func(r *http.Request) { r.Header.Del("Upgrade") }, nil, ErrInvalidUpgradeHeader},
-		{"method", func(r *http.Request) { r.Method = http.MethodPost }, nil, ErrInvalidMethod},
+		{"connection", func(r *http.Request) { r.Header.Del("Connection") }, nil, errInvalidConnectionHeader},
+		{"upgrade", func(r *http.Request) { r.Header.Del("Upgrade") }, nil, errInvalidUpgradeHeader},
+		{"method", func(r *http.Request) { r.Method = http.MethodPost }, nil, errInvalidMethod},
 		{"version", func(r *http.Request) { r.Header.Add("Sec-WebSocket-Version", "13") }, nil, ErrUnsupportedVersion},
-		{"key", func(r *http.Request) { r.Header.Set("Sec-WebSocket-Key", "invalid") }, nil, ErrInvalidSecKey},
-		{"protocol", func(r *http.Request) { r.Header.Set("Sec-WebSocket-Protocol", "bad token") }, nil, ErrInvalidSubprotocol},
-		{"extensions", func(r *http.Request) { r.Header.Set("Sec-WebSocket-Extensions", "invalid;") }, nil, ErrInvalidExtension},
-		{"custom response", nil, &Upgrader{Header: http.Header{"X-Test": {"bad\r\nheader"}}}, ErrInvalidHandshakeHeader},
+		{"key", func(r *http.Request) { r.Header.Set("Sec-WebSocket-Key", "invalid") }, nil, errInvalidSecKey},
+		{"protocol", func(r *http.Request) { r.Header.Set("Sec-WebSocket-Protocol", "bad token") }, nil, errInvalidSubprotocol},
+		{"extensions", func(r *http.Request) { r.Header.Set("Sec-WebSocket-Extensions", "invalid;") }, nil, errInvalidExtension},
+		{"custom response", nil, &Upgrader{Header: http.Header{"X-Test": {"bad\r\nheader"}}}, errInvalidHandshakeHeader},
 	} {
 		status := upgradeErrorStatus(tc.want)
 		t.Run(tc.name, func(t *testing.T) {

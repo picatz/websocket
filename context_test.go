@@ -46,8 +46,8 @@ func requireContextTerminal(t *testing.T, c *websocket.Conn) {
 	if err := c.WriteMessage(websocket.TextMessage, []byte("late")); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("write after cancellation = %v, want net.ErrClosed", err)
 	}
-	if err := c.Close(); !errors.Is(err, websocket.ErrAlreadyClosed) {
-		t.Fatalf("Close after cancellation = %v, want ErrAlreadyClosed", err)
+	if err := c.Close(); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("Close after cancellation = %v, want net.ErrClosed", err)
 	}
 }
 

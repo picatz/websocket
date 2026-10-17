@@ -59,7 +59,7 @@ func TestParseExtensions(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := parseExtensions(tc.values)
-			if (err == nil) != tc.valid || err != nil && !errors.Is(err, ErrInvalidExtension) {
+			if (err == nil) != tc.valid || err != nil && !errors.Is(err, errInvalidExtension) {
 				t.Fatalf("parseExtensions(%q) = %v, valid = %v", tc.values, err, tc.valid)
 			}
 			if !tc.valid {
@@ -67,7 +67,7 @@ func TestParseExtensions(t *testing.T) {
 				r.Header["Sec-WebSocket-Extensions"] = tc.values
 				w := &countingHijacker{ResponseRecorder: httptest.NewRecorder()}
 				conn, err := Upgrade(w, r) // Validate even without installed extensions.
-				if conn != nil || !errors.Is(err, ErrInvalidExtension) || w.calls != 0 || w.Code != http.StatusBadRequest {
+				if conn != nil || !errors.Is(err, errInvalidExtension) || w.calls != 0 || w.Code != http.StatusBadRequest {
 					t.Fatalf("Upgrade = %v, %v; hijacks = %d, body = %q", conn, err, w.calls, w.Body.String())
 				}
 			}
@@ -193,7 +193,7 @@ func TestDialExtensionSelection(t *testing.T) {
 					t.Fatalf("buffered message = %v, %q, %v", opcode, data, err)
 				}
 				conn.conn.Close()
-			} else if conn != nil || !errors.Is(err, ErrInvalidExtension) {
+			} else if conn != nil || !errors.Is(err, errInvalidExtension) {
 				t.Fatalf("invalid selection = %v, %v", conn, err)
 			}
 			if tc.callback != nil && !errors.Is(err, tc.callback) {
@@ -241,7 +241,7 @@ func TestDialRejectsInvalidExtensionOfferBeforeConnect(t *testing.T) {
 	for _, offer := range []string{"", "example;", "example\r\nInjected: true", `example; option="a,b"`} {
 		ext := &negotiationExtension{name: "example", offer: offer}
 		conn, resp, err := dialExtensions(t.Context(), &Dialer{}, "ws://"+listener.Addr().String(), []frameExtension{ext})
-		if conn != nil || resp != nil || !errors.Is(err, ErrInvalidExtension) || !errors.Is(err, ErrInvalidHandshakeHeader) || connects.Load() != 0 || ext.calls != 0 {
+		if conn != nil || resp != nil || !errors.Is(err, errInvalidExtension) || !errors.Is(err, errInvalidHandshakeHeader) || connects.Load() != 0 || ext.calls != 0 {
 			t.Fatalf("offer %q: Dial = %v, %v, %v; connects = %d, callbacks = %d", offer, conn, resp, err, connects.Load(), ext.calls)
 		}
 	}
@@ -319,7 +319,7 @@ func TestUpgradeExtensionSelection(t *testing.T) {
 				if err != nil || resp.Header.Get("Sec-WebSocket-Extensions") != tc.selection {
 					t.Fatalf("response = %v, %v", resp, err)
 				}
-			} else if conn != nil || !errors.Is(err, ErrInvalidExtension) || raw.written.Len() != 0 || w.calls != 0 {
+			} else if conn != nil || !errors.Is(err, errInvalidExtension) || raw.written.Len() != 0 || w.calls != 0 {
 				t.Fatalf("invalid selection = %v, %v; response = %q", conn, err, raw.written.String())
 			}
 			if tc.callback != nil && !errors.Is(err, tc.callback) {

@@ -120,7 +120,7 @@ func TestReadFailureStatusAndTerminalState(t *testing.T) {
 							t.Fatal(e)
 						}
 					}
-					if e := c.Close(); e != ErrAlreadyClosed {
+					if e := c.Close(); e != errAlreadyClosed {
 						t.Fatal(e)
 					}
 				}
@@ -325,7 +325,7 @@ func TestConcurrentCloseCancelsFailureNotification(t *testing.T) {
 			t.Fatal(err)
 		}
 		start := time.Now()
-		if err := c.Close(); err != ErrAlreadyClosed {
+		if err := c.Close(); err != errAlreadyClosed {
 			t.Fatal(err)
 		}
 		if err := failureAwait(t, done); err != errInvalidFrame {
@@ -367,7 +367,7 @@ func TestReadFailureAbortsStalledDataWriter(t *testing.T) {
 		if err != errInvalidFrame || time.Since(start) > 500*time.Millisecond {
 			t.Fatalf("failure=%v", err)
 		}
-		if err := failureAwait(t, done); !errors.Is(err, ErrWriteFailed) || !errors.Is(err, io.ErrClosedPipe) {
+		if err := failureAwait(t, done); !errors.Is(err, errWriteFailed) || !errors.Is(err, io.ErrClosedPipe) {
 			t.Fatalf("write error=%v", err)
 		}
 		rest, e := io.ReadAll(peer)
@@ -404,7 +404,7 @@ func TestReadFailureNeverRetriesPoisonedWriter(t *testing.T) {
 					raw := &failureFaultConn{failureMemoryConn: failureMemoryConn{memoryConn: memoryConn{Reader: bytes.NewReader([]byte{0x81, 1, 255})}}, n: n, cause: cause}
 					c := newTestConn(raw, ConnConfig{})
 					err := c.WriteMessage(BinaryMessage, bytes.Repeat([]byte{'a'}, size))
-					if !errors.Is(err, ErrWriteFailed) || (cause != nil && !errors.Is(err, cause)) {
+					if !errors.Is(err, errWriteFailed) || (cause != nil && !errors.Is(err, cause)) {
 						t.Fatalf("write error=%v", err)
 					}
 					before := bytes.Clone(raw.written.Bytes())
@@ -424,7 +424,7 @@ func TestReadFailureNeverRetriesPoisonedWriter(t *testing.T) {
 	raw := &failureFaultConn{failureMemoryConn: failureMemoryConn{memoryConn: memoryConn{Reader: bytes.NewReader(nil)}}, cause: io.ErrClosedPipe}
 	c := newTestConn(raw, ConnConfig{Server: true})
 	c.WriteMessage(BinaryMessage, bytes.Repeat([]byte{'a'}, 32))
-	if err := c.WriteMessage(BinaryMessage, nil); !errors.Is(err, ErrWriteFailed) || !errors.Is(err, io.ErrClosedPipe) || !strings.Contains(err.Error(), "header") {
+	if err := c.WriteMessage(BinaryMessage, nil); !errors.Is(err, errWriteFailed) || !errors.Is(err, io.ErrClosedPipe) || !strings.Contains(err.Error(), "header") {
 		t.Fatal(err)
 	}
 }
@@ -568,7 +568,7 @@ func TestReadFailurePartialNotificationIsNeverRetried(t *testing.T) {
 				t.Fatal(err)
 			}
 			before := bytes.Clone(raw.written.Bytes())
-			if err := c.Close(); err != ErrAlreadyClosed {
+			if err := c.Close(); err != errAlreadyClosed {
 				t.Fatal(err)
 			}
 			if err := c.writeControlFrame(opClose, nil); !errors.Is(err, net.ErrClosed) {

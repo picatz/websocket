@@ -440,8 +440,8 @@ func (c *Conn) Subprotocol() string {
 
 // Close starts the closing handshake with status 1000 (Normal Closure). Unlike
 // websocket.Conn.Close it does not wait or block; the host completes the
-// handshake. Messages already received stay readable. Repeated calls return
-// websocket.ErrAlreadyClosed.
+// handshake. Messages already received stay readable. Repeated calls return an
+// error matching net.ErrClosed.
 func (c *Conn) Close() error {
 	return c.close(websocket.StatusNormalClosure, "")
 }
@@ -476,7 +476,7 @@ func (c *Conn) close(code websocket.StatusCode, reason string) error {
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
-		return websocket.ErrAlreadyClosed
+		return errClosed
 	}
 	c.closed = true
 	open := c.err == nil

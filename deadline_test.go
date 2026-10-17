@@ -349,7 +349,7 @@ func TestDeadlineWriteFailureRequiresClose(t *testing.T) {
 	deadlineSet(t, c.SetWriteDeadline, time.Now().Add(-time.Second))
 	err := deadlineWait(t, write, "payload write timeout")
 	deadlineTimeout(t, err)
-	if !errors.Is(err, websocket.ErrWriteFailed) {
+	if !errors.Is(err, websocket.ErrWriteFailedForTest) {
 		t.Fatalf("write error = %v; want ErrWriteFailed", err)
 	}
 	select {
@@ -411,7 +411,7 @@ func TestDeadlineAutomaticPong(t *testing.T) {
 			if kind != "close" {
 				deadlineTimeout(t, err)
 			}
-			if got, want := errors.Is(err, websocket.ErrWriteFailed), kind != "read"; got != want {
+			if got, want := errors.Is(err, websocket.ErrWriteFailedForTest), kind != "read"; got != want {
 				t.Fatalf("error = %v; ErrWriteFailed = %v, want %v", err, got, want)
 			}
 			deadlineWait(t, raw.closed, "Pong failure abort")
@@ -453,7 +453,7 @@ func TestDeadlineConcurrentSettersAndClose(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		if err := deadlineWait(t, write, "closed writer"); !errors.Is(err, websocket.ErrWriteFailed) {
+		if err := deadlineWait(t, write, "closed writer"); !errors.Is(err, websocket.ErrWriteFailedForTest) {
 			t.Fatalf("write after concurrent Close = %v", err)
 		}
 		if result := deadlineWait(t, read, "closed reader"); result.err == nil {

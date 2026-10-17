@@ -282,17 +282,17 @@ func TestNewConnRejectsInvalidAgreement(t *testing.T) {
 		cfg  ConnConfig
 		want error
 	}{
-		"unknown extension":   {ConnConfig{Extensions: "x-webkit-deflate-frame"}, ErrInvalidExtension},
-		"two extensions":      {ConnConfig{Extensions: "permessage-deflate, permessage-deflate"}, ErrInvalidExtension},
-		"syntax":              {ConnConfig{Extensions: "permessage-deflate;"}, ErrInvalidExtension},
-		"bare window":         {ConnConfig{Extensions: "permessage-deflate; client_max_window_bits"}, ErrInvalidExtension},
-		"window out of range": {ConnConfig{Extensions: "permessage-deflate; server_max_window_bits=16"}, ErrInvalidExtension},
-		"unknown parameter":   {ConnConfig{Extensions: "permessage-deflate; x=1"}, ErrInvalidExtension},
+		"unknown extension":   {ConnConfig{Extensions: "x-webkit-deflate-frame"}, errInvalidExtension},
+		"two extensions":      {ConnConfig{Extensions: "permessage-deflate, permessage-deflate"}, errInvalidExtension},
+		"syntax":              {ConnConfig{Extensions: "permessage-deflate;"}, errInvalidExtension},
+		"bare window":         {ConnConfig{Extensions: "permessage-deflate; client_max_window_bits"}, errInvalidExtension},
+		"window out of range": {ConnConfig{Extensions: "permessage-deflate; server_max_window_bits=16"}, errInvalidExtension},
+		"unknown parameter":   {ConnConfig{Extensions: "permessage-deflate; x=1"}, errInvalidExtension},
 		"invalid compression": {ConnConfig{Extensions: "permessage-deflate", Compression: &Compression{Level: 11}}, ErrInvalidConfig},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if c, err := NewConn(&memoryConn{}, tc.cfg); c != nil || !errors.Is(err, tc.want) {
-				t.Fatalf("NewConn = %v, %v; want %v", c, err, tc.want)
+			if c, err := NewConn(&memoryConn{}, tc.cfg); c != nil || !errors.Is(err, tc.want) || !errors.Is(err, ErrInvalidConfig) {
+				t.Fatalf("NewConn = %v, %v; want %v and ErrInvalidConfig", c, err, tc.want)
 			}
 		})
 	}

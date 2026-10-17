@@ -107,8 +107,8 @@ func TestClose(t *testing.T) {
 	if err := conn.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	if err := conn.Close(); !errors.Is(err, websocket.ErrAlreadyClosed) {
-		t.Fatalf("second Close: err = %v, want ErrAlreadyClosed", err)
+	if err := conn.Close(); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("second Close: err = %v, want net.ErrClosed", err)
 	}
 	if err := conn.WriteMessage(websocket.TextMessage, []byte("x")); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("write after Close: err = %v, want net.ErrClosed", err)
@@ -188,8 +188,8 @@ func TestCloseWithStatus(t *testing.T) {
 	if err := conn.CloseWithStatus(4000, strings.Repeat("x", 123)); err != nil {
 		t.Fatalf("CloseWithStatus: %v", err)
 	}
-	if err := conn.CloseWithStatus(4000, ""); !errors.Is(err, websocket.ErrAlreadyClosed) {
-		t.Fatalf("second close: err = %v, want ErrAlreadyClosed", err)
+	if err := conn.CloseWithStatus(4000, ""); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("second close: err = %v, want net.ErrClosed", err)
 	}
 }
 

@@ -63,7 +63,7 @@ func TestUpgradeRejectsCustomHeadersBeforeHijack(t *testing.T) {
 			before := headers.Clone()
 			w := &countingHijacker{ResponseRecorder: httptest.NewRecorder()}
 			conn, err := (&Upgrader{Header: headers}).Upgrade(w, upgradeRequest())
-			if conn != nil || !errors.Is(err, ErrInvalidHandshakeHeader) {
+			if conn != nil || !errors.Is(err, errInvalidHandshakeHeader) {
 				t.Fatalf("Upgrade = %v, %v", conn, err)
 			}
 			if w.calls != 0 || w.Code != http.StatusInternalServerError {
@@ -103,7 +103,7 @@ func TestDialRejectsCustomHeadersBeforeConnect(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 			defer cancel()
 			conn, resp, err := (&Dialer{Header: headers}).Dial(ctx, "ws://"+listener.Addr().String())
-			if conn != nil || resp != nil || !errors.Is(err, ErrInvalidHandshakeHeader) {
+			if conn != nil || resp != nil || !errors.Is(err, errInvalidHandshakeHeader) {
 				t.Fatalf("Dial = %v, %v, %v", conn, resp, err)
 			}
 			if connects.Load() != 0 {
@@ -120,7 +120,7 @@ func TestCustomHeaderErrorsDoNotExposeValues(t *testing.T) {
 	const secret = "secret-cookie\nvalue"
 	for _, response := range []bool{false, true} {
 		err := validateHandshakeHeaders(http.Header{"Cookie": {secret}}, response)
-		if !errors.Is(err, ErrInvalidHandshakeHeader) || strings.Contains(err.Error(), secret) {
+		if !errors.Is(err, errInvalidHandshakeHeader) || strings.Contains(err.Error(), secret) {
 			t.Fatalf("error = %v", err)
 		}
 	}

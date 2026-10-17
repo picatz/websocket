@@ -53,7 +53,7 @@ func (c *Conn) WriteMessageContext(ctx context.Context, messageType MessageType,
 
 // cancelIO aborts the connection on behalf of an ended context. Like a read
 // failure, it publishes terminal state first, so a later Close reports
-// ErrAlreadyClosed and concurrent operations observe a closed connection.
+// net.ErrClosed and concurrent operations observe a closed connection.
 func (c *Conn) cancelIO() {
 	c.closeMu.Lock()
 	c.closed.Store(true)

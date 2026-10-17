@@ -50,7 +50,7 @@ func TestCloseControlCompletesHandshakeOnce(t *testing.T) {
 				if _, _, err := c.ReadMessage(); !errors.Is(err, net.ErrClosed) {
 					t.Fatalf("read after close: %v", err)
 				}
-				if err := c.Close(); !errors.Is(err, ErrAlreadyClosed) {
+				if err := c.Close(); !errors.Is(err, errAlreadyClosed) {
 					t.Fatal(err)
 				}
 			} else if err := c.Close(); err != nil {
@@ -59,7 +59,7 @@ func TestCloseControlCompletesHandshakeOnce(t *testing.T) {
 			if !bytes.Equal(before, raw.written.Bytes()) {
 				t.Fatalf("duplicate wire close: %x", raw.written.Bytes())
 			}
-			if err := c.Close(); !errors.Is(err, ErrAlreadyClosed) {
+			if err := c.Close(); !errors.Is(err, errAlreadyClosed) {
 				t.Fatal(err)
 			}
 		}
@@ -128,7 +128,7 @@ func TestFailedCloseControlPreservesTransportError(t *testing.T) {
 			func() error { return c.WriteMessage(TextMessage, []byte("late")) },
 			func() error { return c.writeControlFrame(opClose, nil) },
 		} {
-			if err := write(); !errors.Is(err, ErrWriteFailed) || !errors.Is(err, io.ErrClosedPipe) {
+			if err := write(); !errors.Is(err, errWriteFailed) || !errors.Is(err, io.ErrClosedPipe) {
 				t.Fatalf("partial=%v: %v", partial, err)
 			}
 		}

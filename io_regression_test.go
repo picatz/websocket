@@ -55,8 +55,8 @@ func TestWriteMessagePreservesTimeoutCause(t *testing.T) {
 				t.Fatal(err)
 			}
 			err := newTestConn(raw, ConnConfig{Server: true}).WriteMessage(BinaryMessage, bytes.Repeat([]byte{'x'}, size))
-			if !errors.Is(err, ErrWriteFailed) {
-				t.Fatalf("error = %v, want ErrWriteFailed", err)
+			if !errors.Is(err, errWriteFailed) {
+				t.Fatalf("error = %v, want errWriteFailed", err)
 			}
 			if !errors.Is(err, os.ErrDeadlineExceeded) {
 				t.Errorf("error = %v, want deadline cause", err)
@@ -82,14 +82,14 @@ func TestWriteErrorsPreserveClosedPipeCause(t *testing.T) {
 			} else {
 				err = conn.WriteMessage(BinaryMessage, nil)
 			}
-			if !errors.Is(err, ErrWriteFailed) || !errors.Is(err, io.ErrClosedPipe) {
-				t.Fatalf("error = %v, want ErrWriteFailed and closed pipe", err)
+			if !errors.Is(err, errWriteFailed) || !errors.Is(err, io.ErrClosedPipe) {
+				t.Fatalf("error = %v, want errWriteFailed and closed pipe", err)
 			}
 			// bufio retains the transport failure; the next call fails while writing
 			// its header rather than attempting to send another frame.
 			err = conn.WriteMessage(BinaryMessage, nil)
-			if !errors.Is(err, ErrWriteFailed) || !errors.Is(err, io.ErrClosedPipe) {
-				t.Fatalf("subsequent error = %v, want ErrWriteFailed and closed pipe", err)
+			if !errors.Is(err, errWriteFailed) || !errors.Is(err, io.ErrClosedPipe) {
+				t.Fatalf("subsequent error = %v, want errWriteFailed and closed pipe", err)
 			}
 		})
 	}

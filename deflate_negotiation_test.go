@@ -136,7 +136,7 @@ func TestPMDDialDirectionalWindows(t *testing.T) {
 			if c != nil {
 				c.conn.Close()
 			}
-			if (err == nil) != tc.valid || response == nil || err != nil && !errors.Is(err, ErrInvalidExtension) {
+			if (err == nil) != tc.valid || response == nil || err != nil && !errors.Is(err, errInvalidExtension) {
 				t.Fatalf("Dial = %v, %v, %v", c, response, err)
 			}
 			if pmd.IsEnabled() != (tc.valid && tc.selection != "") || pmd.configured != configured || pmd.offered != offered {
@@ -211,7 +211,7 @@ func TestPMDOfferAndResponseState(t *testing.T) {
 	offer := p.Offer()
 	// A future option mutation must not change the already-sent constraint.
 	p.configured.serverMaxWindowBits = 15
-	if err := p.Negotiate("permessage-deflate; server_max_window_bits=15"); !errors.Is(err, ErrInvalidExtension) || p.IsEnabled() {
+	if err := p.Negotiate("permessage-deflate; server_max_window_bits=15"); !errors.Is(err, errInvalidExtension) || p.IsEnabled() {
 		t.Fatalf("lost actual offer %q: %v", offer, err)
 	}
 	if err := p.Negotiate("permessage-deflate; server_max_window_bits=8"); err != nil {
@@ -257,7 +257,7 @@ func TestPMDMalformedParametersInBothRoles(t *testing.T) {
 		for _, value := range []string{"0", "7", "16", "09", "+9", "9.0", "99999999999999999999999999"} {
 			header := "permessage-deflate; " + name + "=" + value
 			p := newPerMessageDeflate(withClientMaxWindowBits(15))
-			if err := p.Negotiate(header); !errors.Is(err, ErrInvalidExtension) || p.IsEnabled() {
+			if err := p.Negotiate(header); !errors.Is(err, errInvalidExtension) || p.IsEnabled() {
 				t.Fatalf("invalid client selection %q: %v", header, err)
 			}
 			checkPMDUpgrade(t, header, "")
