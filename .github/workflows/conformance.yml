@@ -6,22 +6,18 @@ on:
     paths:
       - 'conformance/autobahn/**'
       - '.github/workflows/conformance.yml'
-      - 'websocket.go'
-      - 'response.go'
-      - 'origin.go'
-      - 'extensions.go'
-      - 'deflate*.go'
+      - '*.go'
+      - '!*_test.go'
+      - 'internal/**'
       - 'go.mod'
   workflow_dispatch:
   pull_request:
     paths:
       - 'conformance/autobahn/**'
       - '.github/workflows/conformance.yml'
-      - 'websocket.go'
-      - 'response.go'
-      - 'origin.go'
-      - 'extensions.go'
-      - 'deflate*.go'
+      - '*.go'
+      - '!*_test.go'
+      - 'internal/**'
       - 'go.mod'
 
 permissions:
