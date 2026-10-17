@@ -314,12 +314,15 @@ if websocket.CloseStatus(err) == websocket.StatusGoingAway {
 }
 ```
 
-`WriteControlFrame(CloseMessage, payload)` starts a closing handshake without
-closing the transport. After a successful close frame, data writes and duplicate
-close frames return `io.ErrClosedPipe`; reads and ping/pong remain available.
-Receiving the peer's close or calling `Close` closes the transport without
-sending another close frame. Call `Close` if the peer does not respond; there is
-no automatic handshake timeout. Close the connection after any write error.
+`CloseWrite(code, reason)` starts the closing handshake without closing the
+transport, like `net.TCPConn.CloseWrite`: it sends the Close frame and ends the
+write side, while `ReadMessage` keeps delivering what the peer sent before it
+answered, then returns the peer's `*CloseError`. Later writes, Pings and Close
+frames return errors matching `net.ErrClosed`. It does not wait, so bound the
+drain with `ReadMessageContext` or a read deadline, and call `Close` if the peer
+never answers. `Shutdown(ctx, code, reason)` instead discards the peer's
+remaining messages and waits for its answer. Close the connection after any
+write error.
 
 ## Subprotocols
 

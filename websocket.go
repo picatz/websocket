@@ -327,8 +327,8 @@ func newPerMessageDeflate(options ...pmdOption) frameExtension {
 // One goroutine may read at a time; concurrent reads are serialized and
 // interleave messages unpredictably, so use a single read loop. Any number of
 // goroutines may write: each WriteMessage sends its whole message before the
-// next starts. Close, CloseWithStatus, Ping and the deadline setters may be
-// called concurrently with reads and writes. Deadlines are shared transport
+// next starts. Close, CloseWithStatus, CloseWrite, Shutdown, Ping and the
+// deadline setters may be called concurrently with reads and writes. Deadlines are shared transport
 // state, so goroutines that set them must coordinate.
 type Conn struct {
 	conn     net.Conn      // Underlying network connection
@@ -879,10 +879,11 @@ func (c *Conn) WriteMessage(messageType Opcode, data []byte) error {
 }
 
 // WriteControlFrame writes a control frame to the connection. A successful Close
-// frame starts the closing handshake: subsequent data and Close frames return
-// an error matching net.ErrClosed. Reads and ping/pong frames remain available until the peer
-// closes or Close is called. Call Close to release the transport if the peer
-// does not respond; this method does not impose a handshake timeout.
+// frame starts the closing handshake, as CloseWrite does: subsequent data,
+// Ping and Close frames return an error matching net.ErrClosed, while reads
+// and Pongs remain available until the peer closes or Close is called. Call
+// Close to release the transport if the peer does not respond; this method
+// does not impose a handshake timeout.
 //
 // Transport errors match ErrWriteFailed and wrap the underlying error for
 // errors.Is and errors.As. Close after a transport error; the transport is not
@@ -908,7 +909,9 @@ func (c *Conn) WriteControlFrame(opcode Opcode, data []byte) error {
 	}
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	if c.closed.Load() || (opcode == CloseMessage && c.closeSent) {
+	// After a Close frame only Pongs, which answer the peer's Pings while
+	// the connection drains, may follow it.
+	if c.closed.Load() || (opcode != PongMessage && c.closeSent) {
 		return errClosed
 	}
 

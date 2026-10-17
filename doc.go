@@ -61,8 +61,10 @@
 // waiting for the peer's reply. Conn.CloseWithStatus sends another code and an
 // optional reason. Conn.Shutdown performs the full closing handshake: it sends
 // the Close frame and waits, bounded by a context, for the peer's, so a peer
-// that is still sending is not cut off with a connection reset. When the
-// peer closes, ReadMessage returns a *CloseError, which matches io.EOF with
+// that is still sending is not cut off with a connection reset; it discards
+// the peer's remaining messages. Conn.CloseWrite sends the Close frame and
+// keeps reading, so the read loop receives everything the peer sent before it
+// answered, like net.TCPConn.CloseWrite. When the peer closes, ReadMessage returns a *CloseError, which matches io.EOF with
 // errors.Is; CloseStatus extracts its code from any error. After either side
 // closes, operations return errors matching net.ErrClosed.
 //
