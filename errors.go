@@ -65,10 +65,12 @@ var (
 // accepted. The connection is terminal after either; when it is safe, the
 // peer is sent the matching close status first.
 var (
-	// ErrProtocol reports a peer that violated RFC 6455 or RFC 7692: a
-	// malformed, masked or unmasked, fragmented control or reserved frame, an
-	// unexpected continuation, text that is not valid UTF-8, or compressed
-	// data that does not inflate. The error's text names the violation.
+	// ErrProtocol reports a message the connection refused: one from a peer
+	// that violated RFC 6455 or RFC 7692 (a malformed, masked or unmasked,
+	// fragmented control or reserved frame, an unexpected continuation, text
+	// that is not valid UTF-8, or compressed data that does not inflate), or
+	// one larger than MaxMessageSize (ErrMessageTooLarge). The error's text
+	// names the reason.
 	ErrProtocol = errors.New("websocket: protocol error")
 	// ErrMessageTooLarge reports an incoming frame or message larger than the
 	// connection's MaxMessageSize, for which the peer is sent
