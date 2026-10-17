@@ -28,11 +28,6 @@ compression extension of [RFC 7692], and passes every graded case of the
 - **Beyond the core.** [`wsjson`](wsjson) for JSON messages and
   [`browser`](browser) for Go compiled to WebAssembly.
 
-> [!NOTE]
-> This package is young. Autobahn is a test baseline, not a certification,
-> and [`github.com/coder/websocket`](https://pkg.go.dev/github.com/coder/websocket)
-> has a longer production track record.
-
 [WebSocket]: https://en.wikipedia.org/wiki/WebSocket
 [RFC 6455]: https://www.rfc-editor.org/rfc/rfc6455.html
 [RFC 7692]: https://www.rfc-editor.org/rfc/rfc7692.html
