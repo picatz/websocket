@@ -78,6 +78,8 @@
 // competing updates to the shared transport deadlines. WriteMessage does not
 // modify the caller's payload. Ping and pong
 // handlers run synchronously from ReadMessage and must not call it recursively.
+// Conn.Ping waits for the matching Pong, which only a concurrent ReadMessage
+// loop can deliver.
 // An extension instance must not be shared between connections.
 //
 // # Extension negotiation
@@ -106,6 +108,38 @@
 // and on receive each frame passes through them before it is decompressed.
 // Built-in compression owns RSV1; changing it, or enabling a second built-in
 // instance, fails with ErrUnsupportedExtensionComposition.
+//
+// # Common patterns
+//
+// Read each connection from one goroutine, calling Conn.ReadMessage in a loop
+// until it returns an error. When the peer closes, the error is a *CloseError,
+// which matches errors.Is(err, io.EOF); CloseStatus(err) gives its status
+// code. Control frames are handled inside that loop: ReadMessage answers Pings
+// and delivers Pongs, so a connection nobody reads cannot answer a keepalive
+// and Conn.Ping cannot complete.
+//
+// Writes may run on another goroutine, concurrently with the read loop. When
+// several goroutines produce messages for one connection, as in a chat room or
+// a pub/sub broker, give the connection a bounded queue drained by a single
+// writer goroutine, and disconnect a peer whose queue is full instead of
+// blocking every other sender on it. Bound each write with
+// Conn.WriteMessageContext and a timeout, so a stalled peer cannot hold the
+// writer forever.
+//
+// To detect dead peers, call Conn.Ping on a ticker with a context timeout, and
+// close the connection when it fails. Ping waits for the matching Pong, which
+// the read loop delivers; a timeout leaves the connection open, so the decision
+// to close stays with the caller.
+//
+// Conn.Close may be called from any goroutine, for example a writer that hit
+// an error, and interrupts a blocked ReadMessage. Return from the read loop on
+// any error: the connection is unusable after one.
+//
+// The examples directory has a runnable, tested program for each pattern:
+// [github.com/picatz/websocket/examples/keepalive] for pings and dead peer
+// detection, [github.com/picatz/websocket/examples/chat] for broadcast to every
+// client, and [github.com/picatz/websocket/examples/pubsub] for topic
+// subscriptions.
 //
 // # Limitations
 //

@@ -360,6 +360,15 @@ type Conn struct {
 
 	// Reusable buffers for compressed messages. Protected by writeMu.
 	writeBuf, writeScratch []byte
+
+	// Ping bookkeeping. done is created lazily and closed, under closeMu, once
+	// the connection becomes terminal; pings maps outstanding Ping payloads to
+	// the channel their matching Pong closes.
+	done    chan struct{}
+	doneSet bool
+	pingSeq atomic.Uint64
+	pingMu  sync.Mutex
+	pings   map[string]chan struct{}
 }
 
 type ConnOption func(*Conn)
@@ -480,7 +489,9 @@ func (c *Conn) Close() error {
 func (c *Conn) closeWithPayload(payload []byte) error {
 	c.closeMu.Lock()
 	c.closeCompression()
-	if c.closed.Swap(true) {
+	alreadyClosed := c.closed.Swap(true)
+	c.markDoneLocked()
+	if alreadyClosed {
 		failed := c.failed
 		c.closeMu.Unlock()
 		if failed {
@@ -550,6 +561,7 @@ func (c *Conn) failRead(err error) error {
 	c.closeMu.Lock()
 	c.closeCompression()
 	alreadyClosed := c.closed.Swap(true)
+	c.markDoneLocked()
 	c.failed = true
 	c.closeMu.Unlock()
 	if alreadyClosed || code == 0 || !c.failureCloseSafe() || !c.writeMu.TryLock() {

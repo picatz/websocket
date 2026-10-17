@@ -602,6 +602,7 @@ func (c *Conn) handleControl(frame *Frame) (peerClosed bool, err error) {
 		}
 		return false, c.WriteControlFrame(PongMessage, frame.Payload)
 	case PongMessage:
+		c.completePing(frame.Payload)
 		c.handlerMu.RLock()
 		handler := c.pongHandler
 		c.handlerMu.RUnlock()
