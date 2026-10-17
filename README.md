@@ -65,8 +65,8 @@ func echoHandler(w http.ResponseWriter, r *http.Request) {
 	for {
 		messageType, message, err := conn.ReadMessage()
 		if err != nil {
-			if err == io.EOF {
-				log.Println("Connection closed by peer")
+			if errors.Is(err, io.EOF) {
+				log.Printf("Connection closed by peer (status %v)", websocket.CloseStatus(err))
 			} else {
 				log.Printf("ReadMessage failed: %v", err)
 			}
@@ -241,6 +241,22 @@ not a strict bound on graceful `Close`. Read-failure cleanup instead preserves
 caller deadlines. `Close` does not wait for the peer's closing handshake.
 A second call returns `ErrAlreadyClosed`.
 
+`CloseWithStatus(code, reason)` is `Close` with a chosen status code and a
+reason of at most 123 bytes of UTF-8. It rejects codes that may not be sent,
+such as 1005, 1006 and 1015, with `ErrInvalidCloseStatus` before any I/O.
+When the peer closes, `ReadMessage` returns a `*CloseError` with the peer's
+`Code` and `Reason`; `CloseStatus(err)` extracts the code, or returns -1. A
+`CloseError` still matches `io.EOF` with `errors.Is`.
+
+```go
+conn.CloseWithStatus(websocket.StatusPolicyViolation, "quota exceeded")
+
+_, _, err := conn.ReadMessage()
+if websocket.CloseStatus(err) == websocket.StatusGoingAway {
+	// The peer is shutting down; reconnect elsewhere.
+}
+```
+
 `WriteControlFrame(CloseMessage, payload)` starts a closing handshake without
 closing the transport. After a successful close frame, data writes and duplicate
 close frames return `io.ErrClosedPipe`; reads and ping/pong remain available.
@@ -367,8 +383,10 @@ The package provides detailed error types to help you handle different error sce
 
 ```go
 if err != nil {
-	if errors.Is(err, io.EOF) {
-		// Connection closed
+	if code := websocket.CloseStatus(err); code != -1 {
+		// The peer closed; code and the reason are in *websocket.CloseError.
+	} else if errors.Is(err, io.EOF) {
+		// Transport ended before a message began
 	} else if errors.Is(err, websocket.ErrInvalidFrame) {
 		// Handle invalid frame
 	} else {

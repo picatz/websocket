@@ -121,6 +121,27 @@ consumers retain their explicit budgets and need their separate policy
 integration reviewed before pinning this change. This library change does not
 update downstream dependencies or automatically migrate application policies.
 
+## Peer close errors
+
+`ReadMessage` and `ReadMessageContext` used to return the bare `io.EOF` value
+when the peer sent a close frame. They now return a `*CloseError` carrying the
+peer's status code and reason. It matches `io.EOF` with `errors.Is`, so code
+using `errors.Is(err, io.EOF)` is unaffected, but a direct `err == io.EOF`
+comparison no longer matches a peer close. EOF on the transport before a
+message begins is still the bare `io.EOF`.
+
+```go
+// Before
+if err == io.EOF { /* peer closed */ }
+
+// After
+if errors.Is(err, io.EOF) { /* peer closed, or transport EOF */ }
+if code := websocket.CloseStatus(err); code != -1 { /* peer sent code */ }
+```
+
+`Close` still sends `StatusNormalClosure`; use `CloseWithStatus` for another
+code or a reason. `github.com/picatz/openai` uses `errors.Is` and needs no change.
+
 ## HTTP error ownership
 
 `Upgrade` returns `ErrOriginNotAllowed` without writing, negotiating extensions,

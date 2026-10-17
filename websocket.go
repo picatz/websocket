@@ -301,6 +301,7 @@ type Conn struct {
 	closed    atomic.Bool // Indicates if the connection is closed
 	failed    bool        // Protected by closeMu; failure permits concurrent abort
 	closeSent bool        // Protected by writeMu; forbids later data frames
+	peerClose *CloseError // Protected by readMu; the peer's close frame, once received
 	writeErr  error       // Protected by writeMu; first transport write failure
 	abortConn net.Conn    // Raw transport for abnormal shutdown (never protocol I/O)
 	abortOnce sync.Once   // Independent of normal, potentially graceful TLS Close
@@ -427,15 +428,15 @@ const (
 	StatusTLSHandshake            = 1015
 )
 
-// Close closes the transport, making a best-effort normal close notification
+// Close closes the transport, making a best-effort StatusNormalClosure notification
 // with a one-second write deadline when no other writer is active, replacing
 // any write deadline set by the caller. It does not wait for the peer's closing
 // handshake. Repeated calls return ErrAlreadyClosed. Custom transport Close
 // implementations can still block.
+//
+// Use CloseWithStatus to send another status code or a reason.
 func (c *Conn) Close() error {
-	closePayload := make([]byte, 2)
-	binary.BigEndian.PutUint16(closePayload, StatusNormalClosure)
-	return c.closeWithPayload(closePayload)
+	return c.CloseWithStatus(StatusNormalClosure, "")
 }
 
 func (c *Conn) closeWithPayload(payload []byte) error {
@@ -573,7 +574,8 @@ func (c *Conn) SetPongHandler(handler func(appData string) error) {
 
 // ReadMessage reads the next complete WebSocket message. EOF before a message
 // begins is reported as io.EOF; a truncated frame or fragmented message returns
-// an error matching io.ErrUnexpectedEOF. A peer close frame also returns io.EOF.
+// an error matching io.ErrUnexpectedEOF. A peer close frame returns a *CloseError
+// carrying the peer's status code and reason; it also matches io.EOF.
 // A header that already proves a protocol or size violation is rejected without
 // waiting for its payload, even when that payload is absent or truncated.
 // Without registered extensions, invalid text is rejected as its payload arrives.
@@ -624,7 +626,7 @@ func (c *Conn) ReadMessage() (messageType Opcode, data []byte, err error) {
 			}
 			data, err = pmd.decodeMessage(&deflateMessageInput{source: source, peerClosed: &peerClosed}, c.maxBytes, frame.Opcode == TextMessage)
 			if peerClosed {
-				return 0, nil, io.EOF
+				return 0, nil, c.peerClose
 			}
 			if err != nil {
 				return 0, nil, err
@@ -714,7 +716,7 @@ func (c *Conn) ReadMessage() (messageType Opcode, data []byte, err error) {
 				return 0, nil, err
 			}
 			if peerClosed {
-				return 0, nil, io.EOF
+				return 0, nil, c.peerClose
 			}
 
 		default:

@@ -54,7 +54,10 @@
 // Close sends a best-effort notification and closes the transport without
 // waiting for the peer. When no writer is active, that notification replaces
 // any caller write deadline with a one-second deadline. Read-failure cleanup
-// instead preserves caller deadlines.
+// instead preserves caller deadlines. Conn.CloseWithStatus sends a chosen status
+// code and reason instead of StatusNormalClosure. When the peer closes,
+// ReadMessage returns a *CloseError with its code and reason; CloseStatus
+// extracts the code from any error, and a CloseError matches io.EOF.
 //
 // # Message limits and concurrency
 //
