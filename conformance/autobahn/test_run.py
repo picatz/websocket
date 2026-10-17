@@ -293,7 +293,7 @@ class ShardTests(unittest.TestCase):
 
     def test_every_container_uses_original_bounds_and_one_binary(self):
         command = container_command(Path("/run/shards/0001"), Path("/run/testee"), "test", self.metadata())
-        for flag, value in (("--network", "none"), ("--memory", "1g"), ("--memory-swap", "1g"),
+        for flag, value in (("--network", "none"), ("--memory", "2g"), ("--memory-swap", "2g"),
                             ("--cpus", "2"), ("--pids-limit", "128")):
             self.assertEqual(command[command.index(flag) + 1], value)
         self.assertIn("type=bind,src=/run/testee,dst=/testee,readonly", command)

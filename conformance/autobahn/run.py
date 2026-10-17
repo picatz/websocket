@@ -19,6 +19,11 @@ SOURCE = "6ed6f439dc7ed0d7432fe2cf7481b110905ecc5c"
 # Bound the legacy suite's GC-managed heap below the shared container limit.
 # This is not a total-RSS limit and does not configure the Go testee's runtime.
 PYPY_GC_MAX = "512MB"
+# The suite's fuzzingserver alone peaks near 1.3 GiB RSS during compression
+# cases 12.1.9-12.1.16, while the Go testee stays under 16 MiB, so a 1 GiB cap
+# OOM-killed the suite intermittently. 2 GiB leaves headroom and still bounds
+# the container; the limit is recorded in metadata.json.
+CONTAINER_MEMORY = "2g"
 RUN_TIMEOUT = 1200
 COMPRESSION_CASE_COUNT = 216
 HERE = Path(__file__).resolve().parent
@@ -113,7 +118,7 @@ def container_command(output, binary, name, metadata, inventory_only=False):
         "docker", "run", "--name", name, "--platform", "linux/amd64",
         "--network", "none", "--read-only", "--cap-drop", "ALL",
         "--security-opt", "no-new-privileges", "--pids-limit", "128",
-        "--memory", "1g", "--memory-swap", "1g", "--cpus", "2",
+        "--memory", CONTAINER_MEMORY, "--memory-swap", CONTAINER_MEMORY, "--cpus", "2",
         "--user", str(os.getuid()) + ":" + str(os.getgid()),
         "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m",
         "--env", "PYTHONDONTWRITEBYTECODE=1", "--env", "PYTHONUNBUFFERED=1", "--env", "HOME=/tmp",
@@ -475,6 +480,7 @@ def main():
         "diagnostic_case": args.case or None, "profile_selection": PROFILES[args.profile],
         "max_message_bytes": 64 << 20, "case_timeout_seconds": case_timeout,
         "run_timeout_seconds": RUN_TIMEOUT, "shard_size": args.shard_size, "network": "none (container loopback only)",
+        "container_memory": CONTAINER_MEMORY,
         "suite_environment": {"PYPY_GC_MAX": PYPY_GC_MAX,
                               "PYTHONDONTWRITEBYTECODE": "1", "PYTHONUNBUFFERED": "1"},
         "spec": spec,
