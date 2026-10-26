@@ -218,9 +218,21 @@ type deflateFrameReader struct {
 	frameExts  []frameExtension // Enabled custom extensions; frames are buffered.
 	buf        []byte           // Remaining extension-processed payload.
 	first      bool             // The current frame starts the message.
+	// limit, when positive, bounds the message's total wire payload. Each
+	// frame is checked against it from its header, before its masking key
+	// or payload is read, so an oversized message fails with
+	// StatusMessageTooBig even when the frame is cut short after the header.
+	limit uint64
+	total uint64 // Payload bytes declared by the message's frames so far.
 }
 
 func (r *deflateFrameReader) start(frame *wireFrame, n uint64) error {
+	if r.limit > 0 {
+		if n > r.limit-r.total {
+			return failWith(StatusMessageTooBig, ErrMessageTooLarge)
+		}
+		r.total += n
+	}
 	r.frame, r.remaining, r.phase = *frame, n, 0
 	if len(r.frameExts) > 0 {
 		return r.startBuffered(&r.frame, n)

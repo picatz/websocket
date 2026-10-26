@@ -202,6 +202,9 @@ func FuzzNextReaderMatchesReadMessage(f *testing.F) {
 		f.Add(wire, false)
 	}
 	f.Add([]byte{0x82, 0x81, 1, 2, 3, 4, 'x' ^ 1}, true)
+	// A continuation that overflows the limit, cut off before its masking
+	// key: both readers must answer 1009 from the header alone.
+	f.Add([]byte("\x01\x85000000000\x00\x85"), true)
 	f.Fuzz(func(t *testing.T, wire []byte, server bool) {
 		const limit = 6
 		wantRaw := &memoryConn{Reader: bytes.NewReader(wire)}

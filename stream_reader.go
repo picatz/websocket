@@ -122,6 +122,9 @@ func (c *Conn) nextReader() (opcode, *messageReader, error) {
 				mr.decoded = bytes.NewReader(data)
 			} else {
 				mr.src = deflateFrameReader{c: c, peerClosed: &mr.peerClosed}
+				if c.maxBytes > 0 {
+					mr.src.limit = uint64(c.maxBytes)
+				}
 				if err := mr.src.start(&frame, n); err != nil {
 					return 0, nil, c.failRead(err)
 				}
@@ -155,7 +158,6 @@ type messageReader struct {
 	decoded    *bytes.Reader // Non-nil for a compressed message.
 	text       bool
 	utf8       utf8Stream
-	read       uint64 // Payload bytes returned so far.
 	peerClosed bool
 	err        error // Sticky once the message ends or fails.
 
@@ -215,16 +217,10 @@ func (r *messageReader) readLocked(p []byte) (int, error) {
 	if err := r.src.advance(); err != nil {
 		return 0, r.stop(err)
 	}
-	if limit := r.c.maxBytes; limit > 0 && r.src.phase == 0 && r.read+r.src.remaining > uint64(limit) {
-		// A frame just began. Its header proves whether the message fits
-		// before any of its payload is returned.
-		return 0, r.fail(failWith(StatusMessageTooBig, ErrMessageTooLarge))
-	}
 	n, err := r.src.Read(p)
 	if r.text && !r.utf8.check(p[:n]) {
 		return 0, r.fail(failWith(StatusInvalidFramePayloadData, errInvalidFrame))
 	}
-	r.read += uint64(n)
 	if err != nil {
 		return 0, r.fail(err)
 	}
